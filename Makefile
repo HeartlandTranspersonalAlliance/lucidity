@@ -2,7 +2,7 @@ SHELL := /usr/bin/env bash
 
 IMAGE ?= localhost/coolify-bootc-worker:dev
 
-.PHONY: build build-worker lint test validate image-worker ami-worker validate-disk-worker clean
+.PHONY: build build-worker lint test validate image-worker ami-worker validate-disk-worker vm-init-worker vm-start-worker vm-validate-worker vm-stop-worker vm-clean-worker clean
 
 build: build-worker
 
@@ -28,6 +28,23 @@ ami-worker: build-worker
 
 validate-disk-worker:
 	./scripts/validate-disk.sh image-output/worker/coolify-worker-qcow2.qcow2
+
+vm-init-worker:
+	./scripts/vm-init.sh worker
+
+vm-start-worker:
+	./scripts/vm-start.sh
+
+vm-validate-worker:
+	./scripts/vm-validate.sh
+
+vm-stop-worker:
+	./scripts/vm-stop.sh
+
+vm-clean-worker: vm-stop-worker
+	@if test -d image-output/vm; then \
+		find image-output/vm -mindepth 1 -maxdepth 1 -type f -delete; \
+	fi
 
 clean:
 	@echo "Images and image-output/ artifacts are retained intentionally; remove explicit targets with your container tooling when desired."

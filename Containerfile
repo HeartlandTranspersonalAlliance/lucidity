@@ -45,6 +45,7 @@ RUN systemctl enable \
         cloud-final.service \
         cloud-init-local.service \
         cloud-init.service \
+        bootc-fetch-apply-updates.timer \
         docker.service \
         sshd.service
 

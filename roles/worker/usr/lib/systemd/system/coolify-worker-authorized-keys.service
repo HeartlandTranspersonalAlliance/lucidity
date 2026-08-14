@@ -11,4 +11,4 @@ ExecStart=/usr/libexec/coolify-aws/bootstrap-worker --authorized-key-file /etc/c
 RemainAfterExit=yes
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=cloud-init.target

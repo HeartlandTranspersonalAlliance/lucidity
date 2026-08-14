@@ -41,11 +41,13 @@ Implemented:
 - idempotent runtime installation of a Coolify public key;
 - cloud-init and lightweight repository/image checks;
 - pinned unified image-builder workflow for local QCOW2 and AWS disk artifacts;
+- containerized KVM/QEMU lifecycle validation with disposable NoCloud credentials;
+- bootc-native unattended OS updates scheduled from 11:00 UTC daily;
 - pull-request validation that builds and runs `bootc container lint`.
 
 The upstream base currently makes `bootc` and `rpm-ostree` depend on Podman, so Podman remains installed. It is a bootc host dependency/tool, not the production application runtime; Coolify workloads use Docker Engine.
 
-Next milestones are VM lifecycle tests, the persistent controller bootstrap, Terraform/ECR/OIDC, and EC2 AMI registration. No untested AWS deployment code is presented as complete.
+Next milestones are bootc update/rollback testing through a reachable registry, the persistent controller bootstrap, Terraform/ECR/OIDC, and EC2 AMI registration. No untested AWS deployment code is presented as complete.
 
 ## Why bootc
 
@@ -120,6 +122,26 @@ make ami-worker
 
 Artifacts are placed under `image-output/` and ignored by Git. An `.ami` artifact is not an EC2 AMI: it still requires controlled S3 upload and EC2 VM Import/Export registration. This command does neither and receives no AWS credentials. See [image/README.md](image/README.md) for the boundary.
 
+## Boot and test the worker locally
+
+The pinned image-builder container also supplies QEMU and OVMF, so the host only needs Podman, KVM access, `qemu-img`, `xorriso`, and OpenSSH. The VM uses an overlay over the generated worker QCOW2 and a NoCloud seed containing two disposable public keys.
+
+```bash
+make vm-init-worker
+make vm-start-worker
+make vm-validate-worker
+```
+
+Validation checks cloud-init, separate administrator and Coolify SSH authentication, Docker, Compose, bootc, enforcing SELinux, the unattended-update timer, and a Docker volume marker across a real guest reboot. The VM remains running on `127.0.0.1:2222` afterward for inspection:
+
+```bash
+ssh -p 2222 -i image-output/vm/admin root@127.0.0.1
+make vm-stop-worker
+make vm-clean-worker
+```
+
+`vm-clean-worker` deletes only generated files under `image-output/vm/`. Exact results and current limitations are recorded in [docs/local-vm-validation.md](docs/local-vm-validation.md).
+
 ## Worker SSH provisioning
 
 Coolify requires root SSH access to a remote Docker host. Password authentication is disabled. The selected first-boot mechanism is cloud-init user data containing only Coolify's **public** key. The image's oneshot service validates and appends it without replacing existing administrator keys.
@@ -150,6 +172,20 @@ This establishes the intended persistence boundary, but a successful image build
 4. roll back and reboot;
 5. verify the same data and enforcing SELinux state again.
 
+## Unattended OS updates
+
+`bootc-fetch-apply-updates.timer` is enabled in the image. It is due daily at 11:00 UTC with up to 30 minutes of randomized delay and is persistent across downtime. Its upstream service runs `bootc upgrade --apply --quiet`: if the tracked image changed, bootc stages it and reboots into the new deployment. Coolify's containers are not upgraded by this timer and retain their separate application lifecycle.
+
+The local QCOW2 tracks `localhost/coolify-bootc-worker:dev`, which is intentionally not reachable as a registry from inside the guest. Local update/rollback validation therefore requires a test registry, and production requires switching the host to a published, authenticated ECR reference. Do not treat the enabled timer alone as proof that registry authentication or rollback works.
+
+Inspect the schedule and update state with:
+
+```bash
+systemctl list-timers bootc-fetch-apply-updates.timer
+systemctl status bootc-fetch-apply-updates.service
+bootc status
+```
+
 ## Operations
 
 Useful first-line diagnostics are:
@@ -164,7 +200,7 @@ df -h /var/lib/docker
 getenforce
 ```
 
-Automatic OS reboots are intentionally not enabled. The planned operating flow is build, test, publish a candidate, deliberately stage it with the current supported bootc command, validate, and reboot during an operator-selected window. Exact upgrade and rollback runbooks will be added after lifecycle testing rather than guessed in advance.
+Automatic OS reboots are enabled for changed bootc images in the daily update window. Release promotion must still build, test, and publish a candidate before moving the tracked production reference. Exact recovery and rollback runbooks will be added after a two-version lifecycle test rather than guessed in advance.
 
 ## AWS direction
 

@@ -8,11 +8,16 @@ required_files=(
     Containerfile
     roles/common/etc/docker/daemon.json
     roles/common/etc/ssh/sshd_config.d/40-coolify-aws.conf
+    roles/common/usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-coolify-aws.conf
     roles/worker/usr/lib/systemd/system/coolify-worker-authorized-keys.service
     scripts/build.sh
     scripts/build-disk.sh
     scripts/validate-disk.sh
     scripts/validate-image.sh
+    scripts/vm-init.sh
+    scripts/vm-start.sh
+    scripts/vm-validate.sh
+    scripts/vm-stop.sh
     image/image-builder.env
 )
 
@@ -26,6 +31,9 @@ grep -Fq 'quay.io/almalinuxorg/almalinux-bootc:10' Containerfile
 grep -Fq 'bootc container lint' Containerfile
 grep -Fq 'PermitRootLogin prohibit-password' roles/common/etc/ssh/sshd_config.d/40-coolify-aws.conf
 grep -Fq 'PasswordAuthentication no' roles/common/etc/ssh/sshd_config.d/40-coolify-aws.conf
+grep -Fq 'WantedBy=cloud-init.target' roles/worker/usr/lib/systemd/system/coolify-worker-authorized-keys.service
+grep -Fq 'enable bootc-fetch-apply-updates.timer' roles/common/usr/lib/systemd/system-preset/80-coolify-aws.preset
+grep -Fq 'OnCalendar=*-*-* 11:00:00 UTC' roles/common/usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-coolify-aws.conf
 grep -Eq '^IMAGE_BUILDER_IMAGE=.+@sha256:[0-9a-f]{64}$' image/image-builder.env
 if grep -Eq '^IMAGE_BUILDER_IMAGE=.+:(latest|main)$' image/image-builder.env; then
     echo "image-builder must be pinned by digest" >&2
