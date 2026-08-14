@@ -337,6 +337,7 @@ The OS image should provide:
 * filesystem layout
 * persistent `/data/coolify`
 * required utilities
+* a controller-only native `/nix` mountpoint bind-mounted from persistent `/var/lib/nix`, ready for a future Determinate Nix installation
 
 Do NOT bake the actual mutable Coolify database, generated secrets, SSH private keys, or current Coolify containers into the bootc image.
 
@@ -373,6 +374,8 @@ The bootstrap process must be idempotent.
 A reboot must not reinstall or reset Coolify.
 
 An OS rollback must not reset Coolify.
+
+The worker must not receive the controller's `/nix` mount. Keep SELinux enforcing; when Determinate Nix is installed later, use its OSTree-aware planner and SELinux policy support rather than disabling policy enforcement. Validate that the Nix store survives controller reboot, bootc update, and rollback.
 
 ---
 
@@ -1299,6 +1302,8 @@ Implement idempotent first-boot initialization.
 
 Validate:
 
+* `/nix` is a writable bind mount backed by persistent `/var/lib/nix`,
+* the worker image does not contain the controller-only Nix mount,
 * Coolify initializes once,
 * secrets survive reboot,
 * Coolify containers restart after reboot,

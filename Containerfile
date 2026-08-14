@@ -49,12 +49,35 @@ RUN systemctl enable \
         docker.service \
         sshd.service
 
+FROM common AS controller
+
+ARG IMAGE_VERSION=dev
+
+COPY roles/controller/usr/ /usr/
+
+RUN install -d -m 0755 /nix /usr/lib/coolify-aws && \
+    printf '%s\n' "${IMAGE_VERSION}" > /usr/lib/coolify-aws/image-version && \
+    systemctl enable nix.mount && \
+    bootc container lint
+
+LABEL org.opencontainers.image.title="Coolify bootc controller foundation" \
+      org.opencontainers.image.description="AlmaLinux bootc host foundation for the Coolify controller" \
+      org.opencontainers.image.source="https://github.com/HeartlandTranspersonalAlliance/lucidity" \
+      org.opencontainers.image.licenses="AGPL-3.0-only" \
+      io.coolify-aws.role="controller" \
+      io.coolify-aws.image-version="${IMAGE_VERSION}" \
+      io.coolify-aws.nix-persistence="/var/lib/nix"
+
 FROM common AS worker
+
+ARG IMAGE_VERSION=dev
 
 COPY scripts/bootstrap-worker.sh /usr/libexec/coolify-aws/bootstrap-worker
 COPY roles/worker/usr/ /usr/
 
-RUN chmod 0755 /usr/libexec/coolify-aws/bootstrap-worker && \
+RUN install -d -m 0755 /usr/lib/coolify-aws && \
+    printf '%s\n' "${IMAGE_VERSION}" > /usr/lib/coolify-aws/image-version && \
+    chmod 0755 /usr/libexec/coolify-aws/bootstrap-worker && \
     systemctl enable coolify-worker-authorized-keys.service && \
     bootc container lint
 
@@ -62,4 +85,5 @@ LABEL org.opencontainers.image.title="Coolify bootc worker" \
       org.opencontainers.image.description="AlmaLinux bootc host for Coolify-managed Docker workloads" \
       org.opencontainers.image.source="https://github.com/HeartlandTranspersonalAlliance/lucidity" \
       org.opencontainers.image.licenses="AGPL-3.0-only" \
-      io.coolify-aws.role="worker"
+      io.coolify-aws.role="worker" \
+      io.coolify-aws.image-version="${IMAGE_VERSION}"

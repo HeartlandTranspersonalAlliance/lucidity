@@ -15,7 +15,10 @@ else
 fi
 
 role=$("${engine}" image inspect --format '{{ index .Config.Labels "io.coolify-aws.role" }}' "${image}")
-[[ ${role} == worker ]] || { echo "unexpected image role: ${role:-<unset>}" >&2; exit 1; }
+case "${role}" in
+    controller|worker) ;;
+    *) echo "unexpected image role: ${role:-<unset>}" >&2; exit 1 ;;
+esac
 
 "${engine}" run --rm "${image}" bootc container lint
 "${engine}" run --rm --entrypoint /bin/bash "${image}" -Eeuo pipefail -c '
@@ -26,5 +29,15 @@ role=$("${engine}" image inspect --format '{{ index .Config.Labels "io.coolify-a
     ssh-keygen -A
     sshd -t
 '
+
+if [[ ${role} == controller ]]; then
+    "${engine}" run --rm --entrypoint /bin/bash "${image}" -Eeuo pipefail -c '
+        systemctl is-enabled --quiet nix.mount
+        test -d /nix
+        grep -Fq "What=/var/lib/nix" /usr/lib/systemd/system/nix.mount
+        grep -Fq "Where=/nix" /usr/lib/systemd/system/nix.mount
+        grep -Fq "Before=nix.mount" /usr/lib/systemd/system/nix-storage.service
+    '
+fi
 
 echo "image validation passed: ${image}"

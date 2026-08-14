@@ -15,6 +15,8 @@ The generated AlmaLinux 10.2 worker QCOW2 booted successfully with UEFI. The aut
 - no failed systemd units remained after first boot or reboot;
 - a marker written into a named Docker volume under `/var/lib/docker` survived a real guest reboot.
 
+The GitHub-hosted lifecycle also validates a registry-backed bootc switch to v1, an update to a visibly different v2 image, and rollback to v1. The same Docker volume marker survives both additional reboots and SELinux remains enforcing.
+
 The test discovered and fixed a systemd ordering cycle in the runtime Coolify-key service. It now runs after `cloud-final.service` as a dependency of `cloud-init.target`. Cloud-init root filesystem resizing is disabled because bootc's grow service owns that operation for composefs-backed deployments.
 
 ## Reproduce
@@ -25,17 +27,20 @@ make validate-disk-worker
 make vm-init-worker
 make vm-start-worker
 make vm-validate-worker
+make vm-registry-start-worker
+make vm-update-rollback-worker
 ```
 
 Stop or discard the disposable VM with:
 
 ```bash
+make vm-registry-stop-worker
 make vm-stop-worker
 make vm-clean-worker
 ```
 
-## Not yet proven
+## Remaining AWS validation
 
-This test proves reboot persistence, not a bootc image update or rollback. The local disk tracks a `localhost` registry reference that the guest cannot fetch. The next lifecycle test must publish visibly different v1 and v2 images to a registry reachable by the guest, switch to that reference, apply the update, roll back, and confirm the same Docker volume marker after each reboot.
+The local registry is deliberately unauthenticated and permits HTTP only on the disposable QEMU host gateway. It proves bootc lifecycle mechanics, not ECR authentication. The EC2 lifecycle must repeat the test using a published, authenticated ECR reference.
 
 ARM64/Graviton boot behavior and EC2-specific cloud-init, IMDS, ENA, NVMe, and EBS growth also remain untested.

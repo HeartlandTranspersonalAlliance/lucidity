@@ -15,6 +15,7 @@ vm_disk=${vm_dir}/coolify-worker-test.qcow2
 output_root=$(dirname "${vm_dir}")
 container_engine=${CONTAINER_ENGINE:-}
 tool_image=${VM_TOOL_IMAGE:-${IMAGE_BUILDER_IMAGE}}
+registry_host=${VM_REGISTRY_HOST:-10.0.2.2:5000}
 
 command -v ssh-keygen >/dev/null 2>&1 || { echo "ssh-keygen is required" >&2; exit 1; }
 if ! command -v qemu-img >/dev/null 2>&1 || ! command -v xorriso >/dev/null 2>&1; then
@@ -22,6 +23,7 @@ if ! command -v qemu-img >/dev/null 2>&1 || ! command -v xorriso >/dev/null 2>&1
     command -v "${container_engine}" >/dev/null 2>&1 || { echo "${container_engine} is required" >&2; exit 1; }
 fi
 [[ -f ${base_disk} ]] || { echo "base disk not found: ${base_disk}" >&2; exit 1; }
+[[ ${registry_host} =~ ^[[:alnum:].:-]+$ ]] || { echo "VM_REGISTRY_HOST contains invalid characters" >&2; exit 2; }
 [[ ! -e ${vm_disk} ]] || {
     echo "test VM already exists: ${vm_disk}; run make vm-clean-worker first" >&2
     exit 1
@@ -57,6 +59,15 @@ users:
     ssh_authorized_keys:
       - ${admin_key}
 write_files:
+  # This insecure registry is reachable only from the disposable QEMU guest.
+  # Production hosts use authenticated HTTPS ECR references instead.
+  - path: /etc/containers/registries.conf.d/99-coolify-lifecycle-test.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [[registry]]
+      location = "${registry_host}"
+      insecure = true
   - path: /etc/coolify-worker/authorized_keys
     owner: root:root
     permissions: '0600'

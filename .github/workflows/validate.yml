@@ -15,7 +15,9 @@ permissions:
   contents: read
 
 env:
-  IMAGE: localhost/coolify-bootc-worker:ci
+  IMAGE: localhost/coolify-bootc-worker:lifecycle-v1
+  UPDATE_IMAGE: localhost/coolify-bootc-worker:lifecycle-v2
+  CONTROLLER_IMAGE: localhost/coolify-bootc-controller:ci
   CI_TOOLS_IMAGE: localhost/coolify-aws-ci-tools:ci
 
 jobs:
@@ -33,11 +35,28 @@ jobs:
           docker run --rm \
             --volume "${GITHUB_WORKSPACE}:/repo" \
             --workdir /repo \
-            "${ACTIONLINT_IMAGE}" -color
+          "${ACTIONLINT_IMAGE}" -color
+
+  controller-image:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Build controller foundation
+        env:
+          CONTAINER_ENGINE: docker
+          IMAGE_NAME: ${{ env.CONTROLLER_IMAGE }}
+          IMAGE_VERSION: controller-ci
+        run: ./scripts/build.sh controller
+
+      - name: Validate controller bootc image and persistent Nix mount
+        env:
+          CONTAINER_ENGINE: docker
+        run: ./scripts/validate-image.sh "${CONTROLLER_IMAGE}"
 
   worker-lifecycle:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -63,6 +82,7 @@ jobs:
       - name: Build worker bootc image
         env:
           CONTAINER_ENGINE: docker
+          IMAGE_VERSION: lifecycle-v1
         run: make build-worker
 
       - name: Validate worker bootc image
@@ -79,7 +99,16 @@ jobs:
           ./scripts/build-disk.sh worker qcow2
           make validate-disk-worker
 
-      - name: Boot worker and validate reboot persistence
+      - name: Build update image and publish lifecycle images locally
+        env:
+          CONTAINER_ENGINE: docker
+          IMAGE_NAME: ${{ env.UPDATE_IMAGE }}
+          IMAGE_VERSION: lifecycle-v2
+        run: |
+          ./scripts/build.sh worker
+          make vm-registry-start-worker
+
+      - name: Boot worker and validate reboot, update, and rollback persistence
         env:
           CONTAINER_ENGINE: docker
           VM_TOOL_IMAGE: ${{ env.CI_TOOLS_IMAGE }}
@@ -91,9 +120,11 @@ jobs:
               docker logs coolify-worker-vm || true
             fi
             make vm-stop-worker || true
+            make vm-registry-stop-worker || true
             exit "${status}"
           }
           trap cleanup EXIT
           make vm-init-worker
           make vm-start-worker
           make vm-validate-worker
+          make vm-update-rollback-worker
