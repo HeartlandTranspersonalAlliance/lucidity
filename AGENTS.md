@@ -18,8 +18,14 @@
 
 ## Secret Safety
 
-- MUST load the `aws-secrets-manager` skill first for any secret,
-  credential, API key, token, or password task. MUST NOT call
+- MUST use the AWS MCP `search_documentation` tool first for any secret,
+  credential, API key, token, or password task, with `agent_skills` as the
+  topic and a Secrets Manager-specific search phrase. Copy the best matching
+  result's opaque `skill_name` exactly into `retrieve_skill`; do not guess a
+  registry ID or assume the local filesystem skill list is exhaustive.
+- If the AWS MCP skill registry is unavailable, state that explicitly before
+  proceeding and continue to enforce every remaining secret-safety rule here.
+- MUST NOT call
   `secretsmanager get-secret-value` or `batch-get-secret-value`, and MUST
   NOT hit the Secrets Manager Agent daemon directly. MUST use
   `{{resolve:secretsmanager:secret-id:SecretString:json-key}}` with

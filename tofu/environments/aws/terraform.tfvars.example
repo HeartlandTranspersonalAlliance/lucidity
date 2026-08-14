@@ -1,0 +1,12 @@
+# This file contains identifiers and configuration only. Do not add credentials.
+aws_region = "us-east-2"
+
+github_repository     = "HeartlandTranspersonalAlliance/lucidity"
+github_publish_branch = "main"
+
+# Set this when the AWS account already has the account-level GitHub provider.
+# github_oidc_provider_arn = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
+
+tags = {
+  Environment = "production"
+}
