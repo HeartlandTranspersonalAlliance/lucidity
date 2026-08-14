@@ -75,10 +75,26 @@ scripts/bootstrap-worker.sh   idempotent public-key provisioning
 scripts/validate-image.sh     bootc and package validation
 scripts/build-disk.sh         privileged qcow2/AMI artifact generation
 image/                        pinned upstream image-builder configuration
+ci/                           pinned, sudo-free hosted CI tooling
 tests/                        lightweight behavior and policy assertions
 .github/workflows/            pull-request validation
+AGENTS.md                     AWS Agent Toolkit project guidance
 proposal.md                   full implementation plan and milestones
 ```
+
+## Remote-first validation
+
+GitHub Actions is the primary build and test environment. Every pull request and push to `main` runs:
+
+1. ShellCheck, static behavior tests, and actionlint;
+2. an amd64 worker OCI build plus `bootc container lint`;
+3. a privileged QCOW2 conversion inside the pinned CI tooling container;
+4. QCOW2 consistency checks;
+5. a UEFI guest boot, cloud-init and SSH checks, and Docker-volume persistence across reboot.
+
+The workflow installs nothing onto the hosted runner and does not use host `sudo`. If `/dev/kvm` is available it uses KVM; otherwise it falls back to QEMU TCG. GitHub documents nested virtualization on hosted runners as experimental, so the TCG path is the portable fallback. Build artifacts stay within the ephemeral job and are not uploaded, avoiding persistent storage cost and accidental publication of disposable SSH identities.
+
+Local commands remain available for development and diagnosis, but a successful local run is not a substitute for the required GitHub checks.
 
 ## Build and validate locally
 

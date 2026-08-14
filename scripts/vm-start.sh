@@ -7,50 +7,85 @@ readonly repo_root
 source "${repo_root}/image/image-builder.env"
 
 vm_dir=${VM_DIR:-${repo_root}/image-output/vm}
-output_root=$(dirname "${vm_dir}")
+output_root=$(realpath "$(dirname "${vm_dir}")")
+vm_dir=$(realpath "${vm_dir}")
+vm_subdir=$(realpath --relative-to="${output_root}" "${vm_dir}")
 vm_name=${VM_NAME:-coolify-worker-vm}
 ssh_port=${VM_SSH_PORT:-2222}
 cpus=${VM_CPUS:-2}
 memory_mb=${VM_MEMORY_MB:-4096}
+container_engine=${CONTAINER_ENGINE:-podman}
+tool_image=${VM_TOOL_IMAGE:-${IMAGE_BUILDER_IMAGE}}
 
-command -v podman >/dev/null 2>&1 || { echo "podman is required" >&2; exit 1; }
-[[ -e /dev/kvm ]] || { echo "/dev/kvm is required" >&2; exit 1; }
+command -v "${container_engine}" >/dev/null 2>&1 || { echo "${container_engine} is required" >&2; exit 1; }
 [[ -f ${vm_dir}/coolify-worker-test.qcow2 ]] || { echo "run make vm-init-worker first" >&2; exit 1; }
 [[ -f ${vm_dir}/seed.iso ]] || { echo "cloud-init seed is missing" >&2; exit 1; }
 [[ ${ssh_port} =~ ^[0-9]+$ ]] || { echo "VM_SSH_PORT must be numeric" >&2; exit 2; }
+[[ ${vm_subdir} != ../* ]] || { echo "VM_DIR must be inside ${output_root}" >&2; exit 2; }
 
-if podman container exists "${vm_name}"; then
+if "${container_engine}" container inspect "${vm_name}" >/dev/null 2>&1; then
     echo "VM container already exists: ${vm_name}" >&2
     exit 1
 fi
 
-podman run --detach --rm \
-    --name "${vm_name}" \
-    --network host \
-    --device /dev/kvm \
-    --security-opt label=disable \
-    --volume "${output_root}:/images" \
+run_options=(
+    --detach
+    --rm
+    --name "${vm_name}"
+    --network host
+    --volume "${output_root}:/images"
+)
+
+accel=${VM_ACCEL:-auto}
+if [[ ${accel} == auto ]]; then
+    if [[ -r /dev/kvm && -w /dev/kvm ]]; then
+        accel=kvm
+    else
+        accel=tcg
+    fi
+fi
+case "${accel}" in
+    kvm)
+        [[ -r /dev/kvm && -w /dev/kvm ]] || { echo "/dev/kvm is not accessible" >&2; exit 1; }
+        run_options+=(--device /dev/kvm)
+        cpu_model=host
+        ;;
+    tcg) cpu_model=max ;;
+    *) echo "VM_ACCEL must be auto, kvm, or tcg" >&2; exit 2 ;;
+esac
+
+if command -v getenforce >/dev/null 2>&1 && [[ $(getenforce) != Disabled ]]; then
+    run_options+=(--security-opt label=disable)
+fi
+
+# The quoted script expands the explicitly passed VM environment inside the tooling container.
+# shellcheck disable=SC2016
+"${container_engine}" run "${run_options[@]}" \
     --env "VM_SSH_PORT=${ssh_port}" \
     --env "VM_CPUS=${cpus}" \
     --env "VM_MEMORY_MB=${memory_mb}" \
+    --env "VM_ACCEL=${accel}" \
+    --env "VM_CPU_MODEL=${cpu_model}" \
+    --env "VM_SUBDIR=${vm_subdir}" \
     --entrypoint /bin/bash \
-    "${IMAGE_BUILDER_IMAGE}" \
+    "${tool_image}" \
     -Eeuo pipefail -c '
-        vars=/images/vm/OVMF_VARS.fd
+        vm_root=/images/${VM_SUBDIR}
+        vars=${vm_root}/OVMF_VARS.fd
         if [[ ! -f ${vars} ]]; then
             cp /usr/share/edk2/ovmf/OVMF_VARS.fd "${vars}"
         fi
         exec qemu-system-x86_64 \
             -name coolify-worker-test \
-            -machine q35,accel=kvm \
-            -cpu host \
+            -machine q35,accel="${VM_ACCEL}" \
+            -cpu "${VM_CPU_MODEL}" \
             -smp "${VM_CPUS}" \
             -m "${VM_MEMORY_MB}" \
             -nodefaults \
             -drive if=pflash,format=raw,readonly=on,file=/usr/share/edk2/ovmf/OVMF_CODE.fd \
             -drive if=pflash,format=raw,file="${vars}" \
-            -drive if=virtio,format=qcow2,file=/images/vm/coolify-worker-test.qcow2 \
-            -drive if=virtio,media=cdrom,readonly=on,file=/images/vm/seed.iso \
+            -drive if=virtio,format=qcow2,file="${vm_root}/coolify-worker-test.qcow2" \
+            -drive if=virtio,media=cdrom,readonly=on,file="${vm_root}/seed.iso" \
             -device virtio-net-pci,netdev=net0 \
             -netdev user,id=net0,hostfwd=tcp:127.0.0.1:"${VM_SSH_PORT}"-:22 \
             -device virtio-rng-pci \
@@ -59,5 +94,5 @@ podman run --detach --rm \
             -serial stdio
     '
 
-echo "VM started as ${vm_name}; SSH will become available on 127.0.0.1:${ssh_port}"
-echo "Console: podman logs -f ${vm_name}"
+echo "VM started as ${vm_name} with ${accel}; SSH will become available on 127.0.0.1:${ssh_port}"
+echo "Console: ${container_engine} logs -f ${vm_name}"
