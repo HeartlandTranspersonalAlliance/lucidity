@@ -1,0 +1,33 @@
+# Local secrets and credentials
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Terraform state and local overrides
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+.terraform/
+.terraform.lock.hcl
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Image-builder and AMI artifacts
+image-output/
+*.ami
+*.qcow2
+*.raw
+*.vmdk
+
+# Editors and operating systems
+.idea/
+.vscode/
+*.swp
+.DS_Store

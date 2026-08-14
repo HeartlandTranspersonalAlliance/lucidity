@@ -1,0 +1,35 @@
+name: Validate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  shell-and-static:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install validation tools
+        run: sudo apt-get update && sudo apt-get install --yes shellcheck
+      - name: Lint and test repository logic
+        run: make lint test
+
+  build-worker:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build worker bootc image
+        env:
+          CONTAINER_ENGINE: docker
+          IMAGE: localhost/coolify-bootc-worker:ci
+        run: make build-worker
+      - name: Validate worker bootc image
+        env:
+          CONTAINER_ENGINE: docker
+          IMAGE: localhost/coolify-bootc-worker:ci
+        run: ./scripts/validate-image.sh "${IMAGE}"
