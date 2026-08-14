@@ -53,26 +53,6 @@ resource "aws_secretsmanager_secret" "controller_runtime" {
   tags = merge(local.common_tags, { Name = "${local.resource_prefix}-controller-runtime" })
 }
 
-data "aws_iam_policy_document" "controller_assume_role" {
-  statement {
-    effect  = "Allow"
-    actions = ["sts:AssumeRole"]
-
-    principals {
-      type        = "Service"
-      identifiers = ["ec2.amazonaws.com"]
-    }
-  }
-}
-
-resource "aws_iam_role" "controller" {
-  name               = "${local.resource_prefix}-controller-role"
-  assume_role_policy = data.aws_iam_policy_document.controller_assume_role.json
-  description        = "Runtime identity for the ${var.project_name} ${var.environment} controller"
-
-  tags = local.common_tags
-}
-
 data "aws_iam_policy_document" "controller_secrets" {
   statement {
     sid    = "ReadControllerRuntimeSecret"
@@ -107,15 +87,10 @@ data "aws_iam_policy_document" "controller_secrets" {
   }
 }
 
-resource "aws_iam_role_policy" "controller_secrets" {
-  name   = "${local.resource_prefix}-controller-secrets"
-  role   = aws_iam_role.controller.id
-  policy = data.aws_iam_policy_document.controller_secrets.json
-}
-
-resource "aws_iam_instance_profile" "controller" {
-  name = "${local.resource_prefix}-controller-profile"
-  role = aws_iam_role.controller.name
+resource "aws_iam_policy" "controller_secrets" {
+  name        = "${local.resource_prefix}-controller-secrets"
+  description = "Read-only access to the ${var.project_name} ${var.environment} controller runtime secret"
+  policy      = data.aws_iam_policy_document.controller_secrets.json
 
   tags = local.common_tags
 }

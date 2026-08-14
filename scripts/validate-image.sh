@@ -24,20 +24,14 @@ esac
 "${engine}" run --rm --entrypoint /bin/bash "${image}" -Eeuo pipefail -c '
     docker --version
     docker compose version
-    rpm -q bootc rpm-ostree openssh-server container-selinux cloud-init NetworkManager
+    rpm -q amazon-ssm-agent bootc rpm-ostree openssh-server container-selinux cloud-init NetworkManager policycoreutils selinux-policy-targeted
+    systemctl is-enabled --quiet amazon-ssm-agent.service
+    grep -Eq "^SELINUX=enforcing$" /etc/selinux/config
+    grep -Eq "^SELINUXTYPE=targeted$" /etc/selinux/config
+    test -d /nix
     jq -e '\''.["data-root"] == "/var/lib/docker"'\'' /etc/docker/daemon.json >/dev/null
     ssh-keygen -A
     sshd -t
 '
-
-if [[ ${role} == controller ]]; then
-    "${engine}" run --rm --entrypoint /bin/bash "${image}" -Eeuo pipefail -c '
-        systemctl is-enabled --quiet nix.mount
-        test -d /nix
-        grep -Fq "What=/var/lib/nix" /usr/lib/systemd/system/nix.mount
-        grep -Fq "Where=/nix" /usr/lib/systemd/system/nix.mount
-        grep -Fq "Before=nix.mount" /usr/lib/systemd/system/nix-storage.service
-    '
-fi
 
 echo "image validation passed: ${image}"

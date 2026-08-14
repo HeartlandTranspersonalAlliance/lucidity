@@ -17,6 +17,12 @@ mock_provider "aws" {
     }
   }
 
+  mock_resource "aws_iam_policy" {
+    defaults = {
+      arn = "arn:aws:iam::123456789012:policy/lucidity-production-controller-secrets"
+    }
+  }
+
   mock_resource "aws_kms_key" {
     defaults = {
       arn    = "arn:aws:kms:us-east-2:123456789012:key/11111111-2222-3333-4444-555555555555"
@@ -110,6 +116,15 @@ run "default_registry_and_oidc_contract" {
 
 
   assert {
+    condition = (
+      output.controller_instance_profile_name == null &&
+      output.worker_instance_profile_name == null
+    )
+    error_message = "The initial image-pipeline bootstrap must not create EC2 instance profiles."
+  }
+
+
+  assert {
     condition     = output.ami_import_bucket_name == "lucidity-ami-import-123456789012-us-east-2"
     error_message = "AMI validation must use the deterministic account- and region-scoped import bucket."
   }
@@ -129,8 +144,9 @@ run "ec2_foundation_contract" {
   command = plan
 
   variables {
-    enable_network         = true
-    enable_runtime_secrets = true
+    enable_instance_management = true
+    enable_network             = true
+    enable_runtime_secrets     = true
   }
 
   assert {
@@ -154,7 +170,12 @@ run "ec2_foundation_contract" {
 
   assert {
     condition     = output.controller_instance_profile_name == "lucidity-production-controller-profile"
-    error_message = "The future controller must receive the least-privilege runtime instance profile."
+    error_message = "The future controller must receive the SSM-enabled instance profile."
+  }
+
+  assert {
+    condition     = output.worker_instance_profile_name == "lucidity-production-worker-profile"
+    error_message = "The future worker must receive the SSM-enabled instance profile."
   }
 
   assert {
@@ -176,17 +197,16 @@ run "existing_oidc_provider" {
   }
 }
 
-run "two_az_network_and_restricted_access" {
+run "two_az_network_and_restricted_egress" {
   command = plan
 
   variables {
-    availability_zone_count    = 2
-    allowed_web_cidrs          = ["203.0.113.0/24"]
-    controller_bootstrap_cidrs = ["198.51.100.10/32"]
-    enable_nat_gateways        = true
-    enable_network             = true
-    enable_ssh_access          = true
-    ssh_allowed_cidrs          = ["198.51.100.10/32"]
+    application_outbound_tcp_ports = [443]
+    availability_zone_count        = 2
+    allowed_web_cidrs              = ["203.0.113.0/24"]
+    controller_outbound_tcp_ports  = [443]
+    enable_nat_gateways            = true
+    enable_network                 = true
   }
 
   assert {
@@ -199,7 +219,7 @@ run "two_az_network_and_restricted_access" {
   }
 
   assert {
-    condition     = contains(keys(output.security_group_ids), "ssh")
-    error_message = "Enabling restricted SSH must expose the SSH security group output."
+    condition     = length(output.security_group_ids) == 4 && !contains(keys(output.security_group_ids), "ssh")
+    error_message = "The VPC must never expose a public administrator SSH security group."
   }
 }

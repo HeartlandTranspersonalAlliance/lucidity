@@ -9,17 +9,16 @@ module "network" {
   count  = var.enable_network ? 1 : 0
   source = "../../modules/network"
 
-  availability_zone_count    = var.availability_zone_count
-  allowed_web_cidrs          = var.allowed_web_cidrs
-  controller_bootstrap_cidrs = var.controller_bootstrap_cidrs
-  enable_nat_gateways        = var.enable_nat_gateways
-  enable_ssh_access          = var.enable_ssh_access
-  environment                = var.environment
-  flow_log_retention_days    = var.flow_log_retention_days
-  ssh_allowed_cidrs          = var.ssh_allowed_cidrs
-  tags                       = var.tags
-  vpc_cidr                   = var.vpc_cidr
-  vpc_name                   = var.vpc_name
+  application_outbound_tcp_ports = var.application_outbound_tcp_ports
+  availability_zone_count        = var.availability_zone_count
+  allowed_web_cidrs              = var.allowed_web_cidrs
+  controller_outbound_tcp_ports  = var.controller_outbound_tcp_ports
+  enable_nat_gateways            = var.enable_nat_gateways
+  environment                    = var.environment
+  flow_log_retention_days        = var.flow_log_retention_days
+  tags                           = var.tags
+  vpc_cidr                       = var.vpc_cidr
+  vpc_name                       = var.vpc_name
 }
 
 module "runtime_secrets" {
@@ -31,6 +30,18 @@ module "runtime_secrets" {
   project_name            = var.vpc_name
   recovery_window_in_days = var.secret_recovery_window_in_days
   tags                    = var.tags
+}
+
+module "instance_management" {
+  count  = var.enable_instance_management ? 1 : 0
+  source = "../../modules/instance-management"
+
+  controller_policy_arns = var.enable_runtime_secrets ? toset([
+    module.runtime_secrets[0].controller_policy_arn,
+  ]) : toset([])
+  environment  = var.environment
+  project_name = var.vpc_name
+  tags         = var.tags
 }
 
 module "registry" {

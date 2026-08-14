@@ -34,9 +34,18 @@ Logs so private placement can be enabled later. Controller-to-worker management 
 private VPC addresses even though both nodes have direct public ingress. NAT Gateways
 remain an explicit opt-in for future private-subnet workloads.
 
+There is no public administrator SSH rule. Both nodes use AWS Systems Manager Session
+Manager for external shell and bootstrap access over outbound HTTPS. TCP/22 exists
+only from the controller security group to itself and the worker security group over
+private VPC addresses because Coolify requires SSH management. Security-group egress
+is allowlisted rather than unrestricted: the controller initially needs HTTPS plus
+private SSH, while the worker needs HTTPS and, when Matrix federation requires it,
+TCP/8448.
+
 AWS-hosted controller secrets use one bundled AWS Secrets Manager secret encrypted
 with a dedicated rotating KMS key. OpenTofu creates only the empty secret container,
-KMS key, and least-privilege controller instance profile. Secret values are populated
+KMS key, and a least-privilege policy attached to the controller's shared EC2 instance
+profile. Secret values are populated
 out of band and resolved on the EC2 instance at runtime; they are never placed in an
 AMI, OpenTofu configuration, plan, or state. The EC2 bootstrap remains gated on an
 approved `asm-exec` package or source.
@@ -363,9 +372,17 @@ The OS image should provide:
 * filesystem layout
 * persistent `/data/coolify`
 * required utilities
-* a controller-only native `/nix` mountpoint bind-mounted from persistent `/var/lib/nix`, ready for a future Determinate Nix installation
+* a native `/nix` mountpoint on both roles, ready for a future Determinate Nix OSTree installation
 
 Do NOT bake the actual mutable Coolify database, generated secrets, SSH private keys, or current Coolify containers into the bootc image.
+
+Coolify's current production Compose file bind-mounts several `/data/coolify`
+directories without an SELinux relabel option. Before starting those containers,
+define a persistent `semanage fcontext` rule for the required tree using the
+`container_file_t` type and apply it with `restorecon`. Scope the rule to the smallest
+Coolify-owned tree; do not relabel unrelated host paths. Treat unexpected AVC denials
+as deployment failures and refine labels or policy instead of switching SELinux to
+permissive mode.
 
 Implement an idempotent first-boot bootstrap process.
 
@@ -401,7 +418,13 @@ A reboot must not reinstall or reset Coolify.
 
 An OS rollback must not reset Coolify.
 
-The worker must not receive the controller's `/nix` mount. Keep SELinux enforcing; when Determinate Nix is installed later, use its OSTree-aware planner and SELinux policy support rather than disabling policy enforcement. Validate that the Nix store survives controller reboot, bootc update, and rollback.
+Keep SELinux enforcing on both roles. The image creates `/nix`, but it must not ship a
+hand-written `nix.mount`: Determinate's OSTree planner owns the persistent bind mount,
+daemon units, and native SELinux policy action. After the AMD64 AMI path is proven,
+install Determinate Nix on both the controller and worker through a reviewed,
+version-pinned installer using an explicit persistent path such as `/var/lib/nix`.
+Validate that the daemon operates under enforcing SELinux and that the Nix store
+survives reboot, bootc update, rollback, and the intended instance-replacement path.
 
 ---
 
@@ -665,22 +688,18 @@ Expose only what Coolify actually requires.
 Expected potential ports include:
 
 ```text
-22/tcp
 80/tcp
 443/tcp
-8000/tcp
-6001/tcp
-6002/tcp
 ```
 
-Do not blindly expose all of these globally.
+Do not expose controller management ports globally. Access the temporary Coolify
+bootstrap UI on port 8000 through an SSM port-forwarding session.
 
 Where possible:
 
-* 22 should be restricted to an administrator CIDR and/or replaced operationally by SSM.
-* 8000 should be temporary/bootstrap-only or restricted.
 * public production access should primarily be through 80/443.
-* Coolify internal ports should be scoped based on actual requirements.
+* controller-to-worker TCP/22 must be security-group-to-security-group only.
+* Coolify internal ports must remain private unless a tested feature requires one.
 
 Document every inbound rule.
 
@@ -693,27 +712,21 @@ Expected public inbound:
 443/tcp
 ```
 
-SSH should preferably accept connections from:
-
-* the controller security group/private address,
-* an administrative CIDR,
-* or be managed through SSM.
-
-Avoid `0.0.0.0/0` SSH.
+SSH accepts only the controller security group/private address. Routine worker
+administration uses SSM and does not add a public or administrator-CIDR TCP/22 rule.
 
 ---
 
 # 17. AWS Systems Manager
 
-Investigate installing and enabling AWS Systems Manager Agent in both images.
-
-If supported cleanly on the selected bootc architecture, prefer SSM Session Manager for routine administrative access.
-
-This provides an escape hatch if SSH/firewall configuration breaks.
+Install and enable AWS Systems Manager Agent in both images. Use Session Manager as
+the sole external shell path and use its port-forwarding document for the temporary
+controller bootstrap UI. Do not create public TCP/22 or TCP/8000 ingress rules.
 
 Do not make the entire system depend on SSM if that would compromise portability outside AWS.
 
-Think of SSM as an AWS integration layer rather than a fundamental host dependency.
+Think of SSM as an AWS integration layer rather than a fundamental host dependency;
+local VM recovery remains available without AWS.
 
 ---
 
@@ -1348,13 +1361,33 @@ Implement idempotent first-boot initialization.
 
 Validate:
 
-* `/nix` is a writable bind mount backed by persistent `/var/lib/nix`,
-* the worker image does not contain the controller-only Nix mount,
+* both images contain a native `/nix` mountpoint without a hand-written Nix mount unit,
+* `/data/coolify` has the persistent SELinux file-context rule required by the official bind mounts,
 * Coolify initializes once,
 * secrets survive reboot,
 * Coolify containers restart after reboot,
 * OS rebuild does not regenerate secrets,
 * OS rollback does not destroy Coolify state.
+
+Commit.
+
+---
+
+## Milestone 4A — Determinate Nix on both bootc roles
+
+After local image lifecycle validation and disposable AMD64 AMI validation succeed,
+install Determinate Nix on both roles with a reviewed, version-pinned installer. Use
+the native OSTree planner, an explicit persistent path, and its native SELinux policy
+support. Do not disable or make SELinux permissive.
+
+Validate:
+
+* `nix-daemon` is active on controller and worker,
+* `getenforce` returns `Enforcing`,
+* `/nix` is backed by the selected persistent path,
+* a flake build succeeds on each role,
+* Nix store data survives reboot, bootc update, and rollback,
+* installer rollback/uninstall behavior is documented before production use.
 
 Commit.
 
@@ -1453,7 +1486,8 @@ public + private networking
 appropriate architecture
 ```
 
-Validate SSM/SSH.
+Validate Session Manager shell access with no public TCP/22, SSM port forwarding to
+the controller bootstrap UI, and private controller-to-worker SSH.
 
 Commit.
 
@@ -1528,10 +1562,12 @@ Coolify can SSH to localhost/controller if required
 Coolify can SSH to worker
 Coolify can start containers
 Traefik can bind 80/443
+Coolify bind mounts work without SELinux AVC denials
 persistent volumes survive reboot
 persistent volumes survive OS update
 persistent volumes survive rollback
 SELinux remains enforcing
+Determinate Nix uses its OSTree planner and works under enforcing SELinux on both roles
 ```
 
 Where full automation is impractical, provide repeatable manual verification steps.
@@ -1728,6 +1764,8 @@ The initial project is complete when all of the following are true:
 [ ] Docker Engine 24+ starts on boot.
 [ ] SSH starts on boot.
 [ ] SELinux remains enforcing.
+[ ] Determinate Nix works on both roles under enforcing SELinux.
+[ ] Nix store state survives bootc reboot, update, and rollback.
 [ ] Coolify persistent state survives reboot.
 [ ] Coolify persistent state survives bootc update.
 [ ] Coolify persistent state survives bootc rollback.
@@ -1740,6 +1778,7 @@ The initial project is complete when all of the following are true:
 [ ] AWS-compatible AMIs can be generated.
 [ ] OpenTofu can launch controller and worker EC2 instances.
 [ ] Security groups expose only required services.
+[ ] Session Manager provides shell access with no public TCP/22 rule.
 [ ] No long-lived AWS credentials are stored in GitHub.
 [ ] README explains initial deployment.
 [ ] README explains updates.

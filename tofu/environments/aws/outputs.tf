@@ -84,7 +84,7 @@ output "internet_gateway_id" {
 }
 
 output "security_group_ids" {
-  description = "Tiered security group IDs for controller, worker, database, web, and optional SSH access."
+  description = "Tiered security group IDs for controller, worker, database, and public web access."
   value       = var.enable_network ? module.network[0].security_group_ids : {}
 }
 
@@ -99,13 +99,23 @@ output "vpc_flow_log_group_name" {
 }
 
 output "controller_instance_profile_name" {
-  description = "Instance profile granting the future controller access to its runtime secret."
-  value       = var.enable_runtime_secrets ? module.runtime_secrets[0].controller_instance_profile_name : null
+  description = "SSM-enabled instance profile for the future controller."
+  value       = var.enable_instance_management ? module.instance_management[0].instance_profile_names.controller : null
 }
 
 output "controller_runtime_role_arn" {
-  description = "IAM role ARN used by the future controller EC2 instance."
-  value       = var.enable_runtime_secrets ? module.runtime_secrets[0].controller_role_arn : null
+  description = "SSM-enabled IAM role ARN used by the future controller EC2 instance."
+  value       = var.enable_instance_management ? module.instance_management[0].role_arns.controller : null
+}
+
+output "worker_instance_profile_name" {
+  description = "SSM-enabled instance profile for the future worker."
+  value       = var.enable_instance_management ? module.instance_management[0].instance_profile_names.worker : null
+}
+
+output "worker_runtime_role_arn" {
+  description = "SSM-enabled IAM role ARN used by the future worker EC2 instance."
+  value       = var.enable_instance_management ? module.instance_management[0].role_arns.worker : null
 }
 
 output "controller_runtime_secret_arn" {

@@ -4,6 +4,7 @@ aws_region = "us-east-2"
 # Apply only ECR, GitHub OIDC, and disposable AMI import validation initially.
 enable_network         = false
 enable_runtime_secrets = false
+enable_instance_management = false
 
 # A deleted controller runtime secret remains recoverable for 30 days.
 secret_recovery_window_in_days = 30

@@ -40,15 +40,12 @@ output "internet_gateway_id" {
 
 output "security_group_ids" {
   description = "Tiered security group IDs."
-  value = merge(
-    {
-      application = aws_security_group.application.id
-      controller  = aws_security_group.controller.id
-      database    = aws_security_group.database.id
-      web         = aws_security_group.web.id
-    },
-    var.enable_ssh_access ? { ssh = aws_security_group.ssh[0].id } : {},
-  )
+  value = {
+    application = aws_security_group.application.id
+    controller  = aws_security_group.controller.id
+    database    = aws_security_group.database.id
+    web         = aws_security_group.web.id
+  }
 }
 
 output "flow_log_id" {
