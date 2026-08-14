@@ -2,8 +2,9 @@ SHELL := /usr/bin/env bash
 
 IMAGE ?= localhost/coolify-bootc-worker:dev
 CONTROLLER_IMAGE ?= localhost/coolify-bootc-controller:dev
+TOFU_DIR ?= tofu/environments/aws
 
-.PHONY: build build-controller build-worker lint test validate validate-controller image-worker ami-worker validate-disk-worker vm-init-worker vm-start-worker vm-validate-worker vm-registry-start-worker vm-update-rollback-worker vm-registry-stop-worker vm-stop-worker vm-clean-worker clean
+.PHONY: build build-controller build-worker lint test validate validate-controller image-worker ami-worker validate-disk-worker vm-init-worker vm-start-worker vm-validate-worker vm-registry-start-worker vm-update-rollback-worker vm-registry-stop-worker vm-stop-worker vm-clean-worker tofu-fmt tofu-fmt-check tofu-init tofu-validate tofu-test tofu-check clean
 
 build: build-worker
 
@@ -61,6 +62,23 @@ vm-clean-worker: vm-stop-worker
 	@if test -d image-output/vm; then \
 		find image-output/vm -mindepth 1 -maxdepth 1 -type f -delete; \
 	fi
+
+tofu-fmt:
+	tofu fmt -recursive tofu
+
+tofu-fmt-check:
+	tofu fmt -check -recursive tofu
+
+tofu-init:
+	tofu -chdir=$(TOFU_DIR) init -backend=false
+
+tofu-validate: tofu-init
+	tofu -chdir=$(TOFU_DIR) validate
+
+tofu-test: tofu-init
+	tofu -chdir=$(TOFU_DIR) test
+
+tofu-check: tofu-fmt-check tofu-validate tofu-test
 
 clean:
 	@echo "Images and image-output/ artifacts are retained intentionally; remove explicit targets with your container tooling when desired."

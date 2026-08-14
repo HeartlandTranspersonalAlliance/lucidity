@@ -45,11 +45,12 @@ Implemented:
 - containerized KVM/QEMU lifecycle validation with disposable NoCloud credentials;
 - two-version registry-backed bootc update and rollback validation with Docker data preserved;
 - bootc-native unattended OS updates scheduled from 11:00 UTC daily;
-- pull-request validation that builds and runs `bootc container lint`.
+- pull-request validation that builds and runs `bootc container lint`;
+- Terraform-compatible OpenTofu modules for immutable ECR repositories and branch-restricted GitHub Actions OIDC publishing.
 
 The upstream base currently makes `bootc` and `rpm-ostree` depend on Podman, so Podman remains installed. It is a bootc host dependency/tool, not the production application runtime; Coolify workloads use Docker Engine.
 
-Next milestones are the persistent controller bootstrap, OpenTofu/ECR/OIDC, and EC2 AMI registration. No untested AWS deployment code is presented as complete.
+Next milestones are AWS networking, authenticated ECR image publication, persistent controller bootstrap, and EC2 AMI registration. No untested AWS deployment code is presented as complete.
 
 ## Why bootc
 
@@ -73,6 +74,7 @@ Containerfile                 shared and role-specific image stages
 roles/common/                 Docker, SSH, systemd, and filesystem policy
 roles/controller/             controller-only persistent Nix mount foundation
 roles/worker/                 worker-only systemd configuration
+tofu/                         ECR and GitHub OIDC OpenTofu bootstrap
 scripts/build.sh              local image build
 scripts/bootstrap-worker.sh   idempotent public-key provisioning
 scripts/validate-image.sh     bootc and package validation
@@ -87,17 +89,20 @@ proposal.md                   full implementation plan and milestones
 
 ## Remote-first validation
 
-GitHub Actions is the primary build and test environment. Every pull request and push to `main` runs:
+GitHub Actions is the primary build and test environment. Every pull request runs the lightweight and infrastructure checks below. Worker-impacting pull requests, every push to `main`, and every manual run execute the complete image lifecycle:
 
-1. ShellCheck, static behavior tests, and actionlint;
-2. separate amd64 controller and worker OCI builds plus `bootc container lint`;
-3. controller image assertions for the controller-only persistent Nix mount;
-4. a privileged worker QCOW2 conversion inside the pinned CI tooling container;
-5. QCOW2 consistency checks;
-6. a UEFI worker guest boot, cloud-init and SSH checks, and Docker-volume persistence across reboot;
-7. a two-version bootc update and rollback through a disposable guest-reachable registry, with the same Docker data verified after each reboot.
+1. OpenTofu formatting, validation, and mocked infrastructure tests in a pinned Nix environment;
+2. ShellCheck, static behavior tests, and actionlint;
+3. separate amd64 controller and worker OCI builds plus `bootc container lint`;
+4. controller image assertions for the controller-only persistent Nix mount;
+5. a privileged worker QCOW2 conversion inside the pinned CI tooling container;
+6. QCOW2 consistency checks;
+7. a UEFI worker guest boot, cloud-init and SSH checks, and Docker-volume persistence across reboot;
+8. a two-version bootc update and rollback through a disposable guest-reachable registry, with the same Docker data verified after each reboot.
 
-The workflow installs nothing onto the hosted runner and does not use host `sudo`. If `/dev/kvm` is available it uses KVM; otherwise it falls back to QEMU TCG. GitHub documents nested virtualization on hosted runners as experimental, so the TCG path is the portable fallback. Build artifacts stay within the ephemeral job and are not uploaded, avoiding persistent storage cost and accidental publication of disposable SSH identities.
+The OpenTofu job installs Determinate Nix through a commit-pinned action. Image jobs install no packages onto the hosted runner. The worker job uses host `sudo` only for GitHub's documented udev rule granting access to the runner's existing `/dev/kvm` device; a repository test rejects every other workflow use of `sudo`. KVM accelerates the complete VM lifecycle without removing any reboot, update, or rollback checks, while QEMU TCG remains the automatic fallback. Build artifacts stay within the ephemeral job and are not uploaded, avoiding persistent storage cost and accidental publication of disposable SSH identities.
+
+For pull requests, the worker lifecycle runs whenever a changed path may affect the worker image or its test harness. It is skipped only when all changes are limited to documentation, OpenTofu, Nix metadata used by OpenTofu, or controller-only role files. Pushes to `main` and manual runs always execute the full lifecycle, so an unknown or newly added path defaults to the safer full validation.
 
 Local commands remain available for development and diagnosis, but a successful local run is not a substitute for the required GitHub checks.
 
@@ -111,6 +116,7 @@ make test
 make build-controller
 make build-worker
 make validate
+nix develop --command make tofu-check
 ```
 
 The default image name is `localhost/coolify-bootc-worker:dev`. Override the engine, architecture, base, or image name without editing the build script:
@@ -253,6 +259,8 @@ The cost-sensitive baseline has:
 Those services can be added later only when a concrete operational requirement justifies their cost and complexity. External DNS is expected to point the Coolify hostname at the controller and application hostnames at the relevant worker.
 
 ARM64/Graviton is preferred when every required application image is multi-architecture. AMD64 remains available for maximum third-party image compatibility. Production x86 emulation on ARM is not enabled implicitly.
+
+The first AWS foundation is implemented under [`tofu/`](tofu/README.md). It creates immutable, scanned controller and worker ECR repositories plus a least-privilege publishing role whose OIDC trust is restricted to this repository's `main` branch. The stack deliberately does not deploy images or require AWS credentials during CI validation. An authorized operator must perform the initial bootstrap apply, then the resulting role ARN can be used by a later publishing workflow without storing AWS access keys in GitHub.
 
 See [proposal.md](proposal.md) for the complete staged implementation and acceptance criteria.
 
