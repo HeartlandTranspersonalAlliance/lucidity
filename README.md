@@ -1,6 +1,6 @@
 # Coolify bootc appliance for AWS
 
-This repository builds an image-mode Linux appliance for a small Coolify deployment on EC2. The first implemented milestone is the worker: an AlmaLinux 10 bootc host with Docker Engine, Compose, SSH, cloud-init, SELinux policy, and persistent Docker storage.
+This repository builds an image-mode Linux appliance for a small Coolify deployment on EC2. The implemented worker is an AlmaLinux 10 bootc host with Docker Engine, Compose, SSH, cloud-init, SELinux policy, and persistent Docker storage. A controller image foundation now exists, but its Coolify bootstrap is still planned.
 
 > [!WARNING]
 > AlmaLinux's bootc images are experimental upstream. Running Coolify on a custom bootc appliance is also not an officially documented Coolify deployment model. Treat the current repository as development work until boot, update, rollback, persistence, and Coolify integration have been exercised on real EC2 instances.
@@ -35,6 +35,7 @@ Coolify itself will remain containerized and retain its own update lifecycle. An
 Implemented:
 
 - shared AlmaLinux 10 bootc base using Docker's official RHEL repository;
+- controller-only persistent, writable `/nix` mount prepared for a future Determinate Nix installation;
 - worker image target for both arm64 and amd64 base manifests;
 - Docker data root fixed explicitly at `/var/lib/docker`;
 - key-only root SSH suitable for Coolify remote management;
@@ -42,12 +43,13 @@ Implemented:
 - cloud-init and lightweight repository/image checks;
 - pinned unified image-builder workflow for local QCOW2 and AWS disk artifacts;
 - containerized KVM/QEMU lifecycle validation with disposable NoCloud credentials;
+- two-version registry-backed bootc update and rollback validation with Docker data preserved;
 - bootc-native unattended OS updates scheduled from 11:00 UTC daily;
 - pull-request validation that builds and runs `bootc container lint`.
 
 The upstream base currently makes `bootc` and `rpm-ostree` depend on Podman, so Podman remains installed. It is a bootc host dependency/tool, not the production application runtime; Coolify workloads use Docker Engine.
 
-Next milestones are bootc update/rollback testing through a reachable registry, the persistent controller bootstrap, OpenTofu/ECR/OIDC, and EC2 AMI registration. No untested AWS deployment code is presented as complete.
+Next milestones are the persistent controller bootstrap, OpenTofu/ECR/OIDC, and EC2 AMI registration. No untested AWS deployment code is presented as complete.
 
 ## Why bootc
 
@@ -69,6 +71,7 @@ Do not use runtime `dnf install` as normal configuration management. Add require
 ```text
 Containerfile                 shared and role-specific image stages
 roles/common/                 Docker, SSH, systemd, and filesystem policy
+roles/controller/             controller-only persistent Nix mount foundation
 roles/worker/                 worker-only systemd configuration
 scripts/build.sh              local image build
 scripts/bootstrap-worker.sh   idempotent public-key provisioning
@@ -87,10 +90,12 @@ proposal.md                   full implementation plan and milestones
 GitHub Actions is the primary build and test environment. Every pull request and push to `main` runs:
 
 1. ShellCheck, static behavior tests, and actionlint;
-2. an amd64 worker OCI build plus `bootc container lint`;
-3. a privileged QCOW2 conversion inside the pinned CI tooling container;
-4. QCOW2 consistency checks;
-5. a UEFI guest boot, cloud-init and SSH checks, and Docker-volume persistence across reboot.
+2. separate amd64 controller and worker OCI builds plus `bootc container lint`;
+3. controller image assertions for the controller-only persistent Nix mount;
+4. a privileged worker QCOW2 conversion inside the pinned CI tooling container;
+5. QCOW2 consistency checks;
+6. a UEFI worker guest boot, cloud-init and SSH checks, and Docker-volume persistence across reboot;
+7. a two-version bootc update and rollback through a disposable guest-reachable registry, with the same Docker data verified after each reboot.
 
 The workflow installs nothing onto the hosted runner and does not use host `sudo`. If `/dev/kvm` is available it uses KVM; otherwise it falls back to QEMU TCG. GitHub documents nested virtualization on hosted runners as experimental, so the TCG path is the portable fallback. Build artifacts stay within the ephemeral job and are not uploaded, avoiding persistent storage cost and accidental publication of disposable SSH identities.
 
@@ -103,6 +108,7 @@ Requirements are a running Podman or Docker daemon, Bash, Make, jq, OpenSSH tool
 ```bash
 make lint
 make test
+make build-controller
 make build-worker
 make validate
 ```
@@ -118,6 +124,12 @@ IMAGE_NAME=example/coolify-bootc-worker:test \
 ```
 
 The `:10` base tag was verified as a multi-architecture index when this milestone was implemented. Because it is mutable, release builds should record and promote tested digests; production hosts must not blindly follow it or a `latest` application tag.
+
+## Controller Nix storage foundation
+
+Only the controller image contains an empty native `/nix` directory. At boot, `nix.mount` bind-mounts persistent `/var/lib/nix` at `/nix`; the worker image contains neither this mount nor Nix-specific state. This keeps the Nix store outside the bootc deployment without modifying the immutable root at runtime.
+
+Nix is not installed in the image. The current Determinate Nix Installer's [OSTree planner](https://github.com/DeterminateSystems/nix-installer/blob/main/src/planner/ostree.rs) supports an explicit persistence path and installs its SELinux policy while SELinux remains enforcing. A future booted-controller bootstrap should select that planner with `/var/lib/nix`; `install linux --init none` does not expose the persistence option and is not used here. The controller VM test must confirm that `/nix` is a writable mount, then confirm its contents survive reboot, bootc update, and rollback before the controller milestone is considered complete.
 
 ## Build a bootable disk artifact
 
@@ -146,12 +158,15 @@ The pinned image-builder container also supplies QEMU and OVMF, so the host only
 make vm-init-worker
 make vm-start-worker
 make vm-validate-worker
+make vm-registry-start-worker
+make vm-update-rollback-worker
 ```
 
 Validation checks cloud-init, separate administrator and Coolify SSH authentication, Docker, Compose, bootc, enforcing SELinux, the unattended-update timer, and a Docker volume marker across a real guest reboot. The VM remains running on `127.0.0.1:2222` afterward for inspection:
 
 ```bash
 ssh -p 2222 -i image-output/vm/admin root@127.0.0.1
+make vm-registry-stop-worker
 make vm-stop-worker
 make vm-clean-worker
 ```
@@ -180,19 +195,21 @@ The worker also accepts an EC2 administrator key provisioned independently by cl
 
 `/var/lib/docker` is conventional mutable host storage and remains outside bootc's immutable `/usr` deployment. Docker's data root is explicit in `daemon.json`, and the standard `container-selinux` policy is installed. SELinux is not disabled or made permissive.
 
-This establishes the intended persistence boundary, but a successful image build is not proof of upgrade safety. Before production use, a VM/EC2 lifecycle test must:
+The local lifecycle test establishes the intended persistence boundary by:
 
-1. write data into a Docker volume;
-2. stage a visibly different bootc deployment;
-3. reboot and verify the data;
-4. roll back and reboot;
-5. verify the same data and enforcing SELinux state again.
+1. writing data into a Docker volume;
+2. switching to a v1 image in a disposable local registry and staging a visibly different v2 bootc deployment;
+3. rebooting and verifying the data;
+4. rolling back and rebooting;
+5. verifying the same data and enforcing SELinux state again.
+
+The registry permits HTTP only on the QEMU host gateway for this disposable test. Production images do not contain that exception and must use authenticated HTTPS ECR references.
 
 ## Unattended OS updates
 
 `bootc-fetch-apply-updates.timer` is enabled in the image. It is due daily at 11:00 UTC with up to 30 minutes of randomized delay and is persistent across downtime. Its upstream service runs `bootc upgrade --apply --quiet`: if the tracked image changed, bootc stages it and reboots into the new deployment. Coolify's containers are not upgraded by this timer and retain their separate application lifecycle.
 
-The local QCOW2 tracks `localhost/coolify-bootc-worker:dev`, which is intentionally not reachable as a registry from inside the guest. Local update/rollback validation therefore requires a test registry, and production requires switching the host to a published, authenticated ECR reference. Do not treat the enabled timer alone as proof that registry authentication or rollback works.
+The local QCOW2 initially tracks a local container-storage reference. The lifecycle harness switches it to explicit `lifecycle-v1` and `lifecycle-v2` tags in a disposable registry reachable only through the QEMU host gateway, then performs a real rollback. Production still requires switching the host to a published, authenticated ECR reference and validating registry authentication on EC2.
 
 Inspect the schedule and update state with:
 

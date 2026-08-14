@@ -1,0 +1,12 @@
+[Unit]
+Description=Prepare persistent Nix storage for the Coolify controller
+ConditionPathExists=!/var/lib/nix
+DefaultDependencies=no
+Requires=local-fs-pre.target
+After=local-fs-pre.target
+Before=nix.mount
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/mkdir -p /var/lib/nix
+ExecStart=/usr/bin/chmod 0755 /var/lib/nix

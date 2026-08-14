@@ -3,9 +3,9 @@ set -Eeuo pipefail
 
 role=${1:-worker}
 case "${role}" in
-    worker) ;;
+    controller|worker) ;;
     *)
-        echo "unsupported role '${role}'; only the worker milestone is implemented" >&2
+        echo "unsupported role '${role}'; expected controller or worker" >&2
         exit 2
         ;;
 esac
@@ -29,12 +29,14 @@ esac
 
 base_image=${BASE_IMAGE:-quay.io/almalinuxorg/almalinux-bootc:10}
 image_name=${IMAGE_NAME:-localhost/coolify-bootc-${role}:dev}
+image_version=${IMAGE_VERSION:-dev}
 
 exec "${engine}" build \
     --pull \
     --platform "linux/${arch}" \
     --target "${role}" \
     --build-arg "BASE_IMAGE=${base_image}" \
+    --build-arg "IMAGE_VERSION=${image_version}" \
     --tag "${image_name}" \
     --file Containerfile \
     .
