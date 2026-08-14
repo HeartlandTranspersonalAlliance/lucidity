@@ -20,6 +20,32 @@ The target environment is AWS EC2.
 
 Do not create a Kubernetes, ECS, Fargate, or Elastic Beanstalk architecture. This is intentionally an EC2 + Docker design.
 
+## Current AWS implementation decisions
+
+The first AWS deployment targets AMD64 with `t3a.small` for the controller and
+`t3a.large` for the worker. ARM64 remains a supported future direction, but it is
+deferred until the AMD64 AMI, deployment, recovery, and application compatibility
+paths are proven end to end.
+
+The initial deployment uses public subnets and one Elastic IP per EC2 node. It does
+not use an ALB or NAT Gateway. The VPC still spans multiple Availability Zones and
+retains isolated private subnets, tiered security groups, DNS support, and VPC Flow
+Logs so private placement can be enabled later. Controller-to-worker management uses
+private VPC addresses even though both nodes have direct public ingress. NAT Gateways
+remain an explicit opt-in for future private-subnet workloads.
+
+AWS-hosted controller secrets use one bundled AWS Secrets Manager secret encrypted
+with a dedicated rotating KMS key. OpenTofu creates only the empty secret container,
+KMS key, and least-privilege controller instance profile. Secret values are populated
+out of band and resolved on the EC2 instance at runtime; they are never placed in an
+AMI, OpenTofu configuration, plan, or state. The EC2 bootstrap remains gated on an
+approved `asm-exec` package or source.
+
+OpenTofu is not a secret store and must not receive the runtime value. Self-hosted
+OpenBao remains a provider-neutral option, but operating it solely for this one small
+deployment would add another stateful service, recovery procedure, and availability
+dependency. The single Secrets Manager bundle is the selected initial tradeoff.
+
 ---
 
 # 1. Core design goals
@@ -528,20 +554,23 @@ us-east-2
 
 but do not make the project depend on it.
 
-Create:
+Create a production VPC across at least two Availability Zones:
 
 ```text
 VPC
-└── public subnet(s)
-    ├── Coolify controller EC2
-    └── Coolify worker EC2
+├── public subnets
+│   ├── Internet Gateway route
+│   ├── Coolify controller EC2 with Elastic IP
+│   └── Coolify worker EC2 with Elastic IP
+└── private subnets
+    └── isolated until private workload placement is justified
 ```
 
-Keep the architecture intentionally simple.
-
-Do NOT introduce a NAT Gateway.
-
-Both machines may initially have public addresses because paying for two public IPv4 addresses is preferable to introducing a NAT Gateway for this small deployment.
+Enable VPC DNS support, DNS hostnames, and VPC Flow Logs. Keep public ingress in
+separate security groups from controller-to-worker management traffic. NAT Gateways
+are optional and disabled by default; if private workloads later require outbound
+internet access, enable one Availability Zone-local NAT Gateway and route per selected
+Availability Zone.
 
 Internal controller-to-worker communication should use private VPC addressing whenever practical.
 
@@ -551,31 +580,33 @@ Internal controller-to-worker communication should use private VPC addressing wh
 
 Make instance types configurable.
 
-Initial ARM64 defaults:
+Initial AMD64 defaults:
 
 Controller:
 
 ```text
-t4g.small
+t3a.small
 2 GiB RAM
 ```
 
 Worker:
 
 ```text
-t4g.large
+t3a.large
 8 GiB RAM
 ```
 
 Allow overriding the worker to:
 
 ```text
-t4g.medium
+t3a.medium
 ```
 
 for smaller environments.
 
-Architecture should be parameterized so AMD64 instances/images can be used instead when a required Docker workload lacks ARM64 support.
+Architecture remains parameterized so ARM64/Graviton can be revisited after the
+initial AMD64 deployment and every required Docker workload has been verified as
+multi-architecture.
 
 ---
 
@@ -727,7 +758,7 @@ or a cleaner equivalent.
 
 Enable:
 
-* immutable or appropriately controlled tags,
+* immutable version tags with one narrowly excluded mutable `stable` channel,
 * vulnerability scanning if available and cost-effective,
 * lifecycle retention.
 
@@ -743,6 +774,10 @@ v1.0.0
 ```
 
 Do not rely exclusively on `latest`.
+
+Publish every build under an immutable version or commit tag. Move `stable` only
+after the candidate has passed image and boot validation. Production bootc hosts may
+track `stable`, while the immutable prior digest remains available for rollback.
 
 ---
 
@@ -819,13 +854,13 @@ for the selected architecture.
 Initially prioritize:
 
 ```text
-linux/arm64
+linux/amd64
 ```
 
-but design for:
+but retain a future path for:
 
 ```text
-linux/amd64
+linux/arm64
 ```
 
 as well.
@@ -1069,22 +1104,23 @@ Do not route application traffic through the controller.
 
 # 32. Architecture support
 
-ARM64 is the initial target because the intended AWS instances are Graviton/T4g.
-
-However, include a documented AMD64 build path.
+AMD64 is the initial AWS target using T3a instances. ARM64 remains a documented
+future build path after AMI creation, recovery, and application-image compatibility
+have been validated on AMD64.
 
 CI should eventually verify both.
 
 The README should explain:
 
 ```text
+AMD64
+  → initial deployment target
+  → maximum third-party container compatibility
+
+
 ARM64
   → cheaper Graviton instances
-  → preferred when application images are multi-arch
-
-
-AMD64
-  → maximum third-party container compatibility
+  → revisit when application images and the AMI pipeline are verified
 ```
 
 Do not transparently run x86 containers under emulation in production unless explicitly configured.
@@ -1189,6 +1225,15 @@ provider-neutral or self-hosted secrets in OpenBao. Commit secret references,
 never resolved secret values. Commit `.terraform.lock.hcl` so provider
 selections and checksums are reviewed and reproducible.
 
+For the AWS controller, OpenTofu provisions one empty Secrets Manager container,
+a dedicated rotating KMS key, and an EC2 instance profile restricted to that secret
+and key. It must not create an `aws_secretsmanager_secret_version` or accept secret
+values as variables. Populate the JSON value through an out-of-band operator workflow.
+At runtime, resolve individual keys using
+`{{resolve:secretsmanager:secret-id:SecretString:json-key}}` with `asm-exec`.
+Do not call Secrets Manager value-reading APIs from automation that can expose their
+responses in plans, logs, CI output, or agent context.
+
 ---
 
 # 37. README requirements
@@ -1221,7 +1266,8 @@ Explain:
 Explicitly mention:
 
 ```text
-No NAT Gateway
+Direct public EC2 with Elastic IPs for the initial two-node deployment
+NAT Gateways disabled by default
 No EKS
 No ECS
 No Fargate
@@ -1350,6 +1396,10 @@ Add:
 
 Do not deploy EC2 until the AMI pipeline is ready unless using a temporary conventional AMI for testing.
 
+For the initial apply, enable only ECR, GitHub OIDC, and disposable AMI import
+resources. Keep networking and runtime secrets feature-gated until AWS accepts the
+AMI artifact and the EC2 launch milestone begins.
+
 Commit.
 
 ---
@@ -1371,6 +1421,12 @@ Commit.
 Use the appropriate bootc image-building process to generate EC2-compatible images.
 
 Register AMIs.
+
+On pull requests, build and validate the raw AMD64 AMI artifact without AWS
+credentials. After the foundation is applied on `main`, manually dispatch the same
+workflow with AWS import enabled. It uploads to the lifecycle-controlled private S3
+bucket, runs VM Import/Export using the project-scoped service role, verifies the AMI
+metadata, then deletes the AMI, snapshots, and object.
 
 Validate actual EC2 boot.
 

@@ -1,6 +1,16 @@
 # This file contains identifiers and configuration only. Do not add credentials.
 aws_region = "us-east-2"
 
+# Apply only ECR, GitHub OIDC, and disposable AMI import validation initially.
+enable_network         = false
+enable_runtime_secrets = false
+
+# A deleted controller runtime secret remains recoverable for 30 days.
+secret_recovery_window_in_days = 30
+
+# When enable_network is later set, the public-instance design still needs no NAT Gateways.
+enable_nat_gateways = false
+
 github_repository     = "HeartlandTranspersonalAlliance/lucidity"
 github_publish_branch = "main"
 

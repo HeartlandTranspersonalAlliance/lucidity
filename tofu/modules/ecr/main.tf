@@ -2,7 +2,16 @@ resource "aws_ecr_repository" "bootc" {
   for_each = var.repository_names
 
   name                 = each.value
-  image_tag_mutability = "IMMUTABLE"
+  image_tag_mutability = length(var.mutable_channel_tags) > 0 ? "IMMUTABLE_WITH_EXCLUSION" : "IMMUTABLE"
+
+  dynamic "image_tag_mutability_exclusion_filter" {
+    for_each = var.mutable_channel_tags
+
+    content {
+      filter      = image_tag_mutability_exclusion_filter.value
+      filter_type = "WILDCARD"
+    }
+  }
 
   encryption_configuration {
     encryption_type = "AES256"
