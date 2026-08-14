@@ -2,7 +2,7 @@ SHELL := /usr/bin/env bash
 
 IMAGE ?= localhost/coolify-bootc-worker:dev
 
-.PHONY: build build-worker lint test validate clean
+.PHONY: build build-worker lint test validate image-worker ami-worker validate-disk-worker clean
 
 build: build-worker
 
@@ -20,5 +20,14 @@ test:
 validate: lint test
 	./scripts/validate-image.sh $(IMAGE)
 
+image-worker: build-worker
+	IMAGE_NAME=$(IMAGE) ./scripts/build-disk.sh worker qcow2
+
+ami-worker: build-worker
+	IMAGE_NAME=$(IMAGE) ./scripts/build-disk.sh worker ami
+
+validate-disk-worker:
+	./scripts/validate-disk.sh image-output/worker/coolify-worker-qcow2.qcow2
+
 clean:
-	@echo "No build artifacts are written to the repository. Remove $(IMAGE) with your container engine if desired."
+	@echo "Images and image-output/ artifacts are retained intentionally; remove explicit targets with your container tooling when desired."

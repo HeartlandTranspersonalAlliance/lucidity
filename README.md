@@ -40,11 +40,12 @@ Implemented:
 - key-only root SSH suitable for Coolify remote management;
 - idempotent runtime installation of a Coolify public key;
 - cloud-init and lightweight repository/image checks;
+- pinned unified image-builder workflow for local QCOW2 and AWS disk artifacts;
 - pull-request validation that builds and runs `bootc container lint`.
 
 The upstream base currently makes `bootc` and `rpm-ostree` depend on Podman, so Podman remains installed. It is a bootc host dependency/tool, not the production application runtime; Coolify workloads use Docker Engine.
 
-Next milestones are the persistent controller bootstrap, VM lifecycle tests, Terraform/ECR/OIDC, and bootc-image-builder AMI generation. No untested AWS deployment code is presented as complete.
+Next milestones are VM lifecycle tests, the persistent controller bootstrap, Terraform/ECR/OIDC, and EC2 AMI registration. No untested AWS deployment code is presented as complete.
 
 ## Why bootc
 
@@ -70,6 +71,8 @@ roles/worker/                 worker-only systemd configuration
 scripts/build.sh              local image build
 scripts/bootstrap-worker.sh   idempotent public-key provisioning
 scripts/validate-image.sh     bootc and package validation
+scripts/build-disk.sh         privileged qcow2/AMI artifact generation
+image/                        pinned upstream image-builder configuration
 tests/                        lightweight behavior and policy assertions
 .github/workflows/            pull-request validation
 proposal.md                   full implementation plan and milestones
@@ -97,6 +100,25 @@ IMAGE_NAME=example/coolify-bootc-worker:test \
 ```
 
 The `:10` base tag was verified as a multi-architecture index when this milestone was implemented. Because it is mutable, release builds should record and promote tested digests; production hosts must not blindly follow it or a `latest` application tag.
+
+## Build a bootable disk artifact
+
+The current upstream path is the unified osbuild `image-builder`; standalone `bootc-image-builder` is deprecated for new integrations. The builder runs privileged through `run0`, consumes the worker from local Podman storage, and is pinned by digest in `image/image-builder.env`.
+
+Build a local VM disk first:
+
+```bash
+make image-worker
+make validate-disk-worker
+```
+
+After VM boot and persistence testing succeeds, generate an AWS-format disk artifact:
+
+```bash
+make ami-worker
+```
+
+Artifacts are placed under `image-output/` and ignored by Git. An `.ami` artifact is not an EC2 AMI: it still requires controlled S3 upload and EC2 VM Import/Export registration. This command does neither and receives no AWS credentials. See [image/README.md](image/README.md) for the boundary.
 
 ## Worker SSH provisioning
 
