@@ -9,11 +9,14 @@ vm_name=${VM_NAME:-coolify-worker-vm}
 ssh_port=${VM_SSH_PORT:-2222}
 admin_identity=${vm_dir}/admin
 coolify_identity=${vm_dir}/coolify
+container_engine=${CONTAINER_ENGINE:-podman}
+wait_attempts=${VM_WAIT_ATTEMPTS:-120}
 
-command -v podman >/dev/null 2>&1 || { echo "podman is required" >&2; exit 1; }
+command -v "${container_engine}" >/dev/null 2>&1 || { echo "${container_engine} is required" >&2; exit 1; }
 command -v ssh >/dev/null 2>&1 || { echo "ssh is required" >&2; exit 1; }
+[[ ${wait_attempts} =~ ^[0-9]+$ && ${wait_attempts} -gt 0 ]] || { echo "VM_WAIT_ATTEMPTS must be a positive integer" >&2; exit 2; }
 [[ -f ${admin_identity} && -f ${coolify_identity} ]] || { echo "run make vm-init-worker first" >&2; exit 1; }
-podman container exists "${vm_name}" || { echo "VM is not running; run make vm-start-worker" >&2; exit 1; }
+"${container_engine}" container inspect "${vm_name}" >/dev/null 2>&1 || { echo "VM is not running; run make vm-start-worker" >&2; exit 1; }
 
 ssh_base=(
     ssh
@@ -27,13 +30,14 @@ ssh_base=(
 
 wait_for_ssh() {
     local identity=$1
-    for _ in {1..120}; do
+    local attempt
+    for ((attempt = 1; attempt <= wait_attempts; attempt++)); do
         if "${ssh_base[@]}" -i "${identity}" root@127.0.0.1 true >/dev/null 2>&1; then
             return 0
         fi
-        if ! podman container exists "${vm_name}"; then
+        if ! "${container_engine}" container inspect "${vm_name}" >/dev/null 2>&1; then
             echo "VM exited before SSH became available" >&2
-            podman logs "${vm_name}" >&2 || true
+            "${container_engine}" logs "${vm_name}" >&2 || true
             return 1
         fi
         sleep 2
@@ -77,13 +81,13 @@ old_boot_id=$("${admin_ssh[@]}" cat /proc/sys/kernel/random/boot_id)
 "${admin_ssh[@]}" systemctl reboot >/dev/null 2>&1 || true
 
 new_boot_id=""
-for _ in {1..120}; do
+for ((attempt = 1; attempt <= wait_attempts; attempt++)); do
     candidate=$("${admin_ssh[@]}" cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)
     if [[ -n ${candidate} && ${candidate} != "${old_boot_id}" ]]; then
         new_boot_id=${candidate}
         break
     fi
-    if ! podman container exists "${vm_name}"; then
+    if ! "${container_engine}" container inspect "${vm_name}" >/dev/null 2>&1; then
         echo "VM exited during reboot" >&2
         break
     fi

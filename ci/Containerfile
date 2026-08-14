@@ -1,0 +1,9 @@
+ARG IMAGE_BUILDER_IMAGE=ghcr.io/osbuild/image-builder-cli@sha256:27cabea9e504a7c4a7546f287f5d60a4846c62b5a8d18c0f678d25fdc2d7975a
+
+FROM ${IMAGE_BUILDER_IMAGE}
+
+# image-builder already supplies Podman, QEMU, OVMF, and qemu-img. xorriso
+# adds NoCloud seed generation so hosted CI needs no privileged host install.
+RUN dnf -y install xorriso && \
+    dnf clean all && \
+    rm -rf /var/cache/dnf

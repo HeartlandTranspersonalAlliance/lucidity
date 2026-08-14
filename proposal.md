@@ -145,7 +145,7 @@ Create a clean structure similar to:
 ├── image/
 │   └── image-builder configuration
 │
-├── terraform/
+├── tofu/
 │   ├── modules/
 │   │   ├── network/
 │   │   ├── controller/
@@ -506,7 +506,12 @@ or global permissive mode as the normal configuration.
 
 # 13. AWS architecture
 
-Create Terraform for a minimal AWS deployment.
+Create OpenTofu configuration for a minimal AWS deployment.
+
+Use the `tofu` CLI and OpenTofu-native CI tooling. Keep `.tf` configuration,
+AWS provider, module, state, and `.terraform.lock.hcl` formats compatible with
+Terraform where practical. Use Terraform only when a required integration has
+a documented incompatibility with OpenTofu and isolate that exception.
 
 Use variables rather than hard-coded IDs.
 
@@ -749,7 +754,7 @@ AWS_ACCESS_KEY_ID
 AWS_SECRET_ACCESS_KEY
 ```
 
-Terraform should be capable of creating:
+OpenTofu should be capable of creating:
 
 * GitHub OIDC identity provider if appropriate,
 * IAM role,
@@ -766,7 +771,7 @@ main
 
 and/or GitHub environments.
 
-Document the bootstrapping problem: Terraform cannot initially assume a role that does not yet exist.
+Document the bootstrapping problem: OpenTofu cannot initially assume a role that does not yet exist.
 
 Provide a safe initial setup procedure.
 
@@ -780,8 +785,8 @@ It should:
 
 1. lint shell scripts,
 2. validate Containerfiles,
-3. run Terraform formatting checks,
-4. run Terraform validation,
+3. run OpenTofu formatting checks,
+4. run OpenTofu validation,
 5. build the bootc images where feasible,
 6. run `bootc container lint`,
 7. execute lightweight tests,
@@ -838,7 +843,7 @@ bootc-image-builder
 
 where appropriate.
 
-The output should ultimately become an AMI usable by Terraform/EC2.
+The output should ultimately become an AMI usable by OpenTofu/EC2.
 
 Keep the following artifacts conceptually separate:
 
@@ -878,7 +883,7 @@ The repository should remain understandable to a Linux administrator without req
 
 Once AMI generation works, use EC2 Launch Templates for controller and worker definitions.
 
-Terraform should be able to point at a specific generated AMI.
+OpenTofu should be able to point at a specific generated AMI.
 
 Do not silently roll production instances onto a new AMI just because CI created one.
 
@@ -983,7 +988,7 @@ Do not promise seamless recovery before it has been tested.
 
 Prepare, but do not over-engineer, support for application/Coolify backups to S3.
 
-If Terraform creates an S3 bucket:
+If OpenTofu creates an S3 bucket:
 
 * enable encryption,
 * enable versioning if sensible,
@@ -1007,7 +1012,7 @@ Do not require Route 53.
 
 The user may use external DNS such as Cloudflare.
 
-Expose Terraform outputs containing:
+Expose OpenTofu outputs containing:
 
 ```text
 controller_public_ip
@@ -1173,7 +1178,13 @@ build artifacts
 AMI temporary files
 ```
 
-Terraform state may ultimately be migrated to a protected remote backend, but do not require that just to perform the first local build.
+OpenTofu state may ultimately be migrated to a protected remote backend, but do not require that just to perform the first local build.
+
+Use GitHub Actions OIDC instead of stored AWS access keys. Put CI-only values
+in GitHub Secrets, AWS-hosted runtime secrets in AWS Secrets Manager, and
+provider-neutral or self-hosted secrets in OpenBao. Commit secret references,
+never resolved secret values. Commit `.terraform.lock.hcl` so provider
+selections and checksums are reviewed and reproducible.
 
 ---
 
@@ -1191,7 +1202,7 @@ Explain:
 6. Local validation.
 7. AWS prerequisites.
 8. GitHub OIDC bootstrap.
-9. Terraform workflow.
+9. OpenTofu workflow.
 10. ECR publishing.
 11. AMI creation.
 12. Launching the controller.
@@ -1318,7 +1329,7 @@ Commit test tooling/documentation.
 
 ---
 
-## Milestone 6 — AWS Terraform foundation
+## Milestone 6 — AWS OpenTofu foundation
 
 Add:
 
@@ -1364,7 +1375,7 @@ Commit.
 
 ## Milestone 9 — EC2 deployment
 
-Terraform should launch:
+OpenTofu should launch:
 
 ```text
 coolify-controller
@@ -1501,11 +1512,11 @@ where appropriate.
 
 Use ShellCheck.
 
-Terraform:
+OpenTofu:
 
 ```text
-terraform fmt
-terraform validate
+tofu fmt
+tofu validate
 ```
 
 Pin provider constraints sensibly.
@@ -1536,8 +1547,8 @@ make lint
 make validate
 make image-controller
 make image-worker
-make terraform-fmt
-make terraform-validate
+make tofu-fmt
+make tofu-validate
 ```
 
 Do not hide critical behavior behind inscrutable Makefile logic.
@@ -1562,7 +1573,7 @@ Do not misrepresent upstream support.
 
 # 44. First implementation priority
 
-Do not start by writing all Terraform.
+Do not start by writing all OpenTofu configuration.
 
 Start by proving this sequence locally:
 
@@ -1586,7 +1597,7 @@ controller
 
 Only after both roles work should AWS automation become the primary focus.
 
-The hardest unknown is not Terraform. It is confirming the bootc + Docker + Coolify persistence lifecycle.
+The hardest unknown is not OpenTofu. It is confirming the bootc + Docker + Coolify persistence lifecycle.
 
 Solve that first.
 
@@ -1609,7 +1620,7 @@ feat: add persistent Coolify controller
 
 test: add controller worker integration validation
 
-feat: add AWS Terraform foundation
+feat: add AWS OpenTofu foundation
 
 ci: publish bootc images to ECR with OIDC
 
@@ -1666,7 +1677,7 @@ The initial project is complete when all of the following are true:
 [ ] GitHub Actions authenticates to AWS using OIDC.
 [ ] Images publish to ECR.
 [ ] AWS-compatible AMIs can be generated.
-[ ] Terraform can launch controller and worker EC2 instances.
+[ ] OpenTofu can launch controller and worker EC2 instances.
 [ ] Security groups expose only required services.
 [ ] No long-lived AWS credentials are stored in GitHub.
 [ ] README explains initial deployment.

@@ -5,31 +5,95 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
+
+env:
+  IMAGE: localhost/coolify-bootc-worker:ci
+  CI_TOOLS_IMAGE: localhost/coolify-aws-ci-tools:ci
 
 jobs:
   shell-and-static:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - name: Install validation tools
-        run: sudo apt-get update && sudo apt-get install --yes shellcheck
-      - name: Lint and test repository logic
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Lint shell and test repository logic
         run: make lint test
 
-  build-worker:
+      - name: Lint GitHub Actions workflows
+        run: |
+          source ci/images.env
+          docker run --rm \
+            --volume "${GITHUB_WORKSPACE}:/repo" \
+            --workdir /repo \
+            "${ACTIONLINT_IMAGE}" -color
+
+  worker-lifecycle:
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Report runner capacity
+        run: |
+          df -h /
+          docker system df
+          if test -r /dev/kvm && test -w /dev/kvm; then
+            echo "KVM acceleration is available"
+          else
+            echo "KVM unavailable; lifecycle test will use QEMU TCG"
+          fi
+
+      - name: Build pinned CI tooling image
+        run: |
+          source image/image-builder.env
+          docker build \
+            --build-arg "IMAGE_BUILDER_IMAGE=${IMAGE_BUILDER_IMAGE}" \
+            --tag "${CI_TOOLS_IMAGE}" \
+            --file ci/Containerfile \
+            .
+
       - name: Build worker bootc image
         env:
           CONTAINER_ENGINE: docker
-          IMAGE: localhost/coolify-bootc-worker:ci
         run: make build-worker
+
       - name: Validate worker bootc image
         env:
           CONTAINER_ENGINE: docker
-          IMAGE: localhost/coolify-bootc-worker:ci
         run: ./scripts/validate-image.sh "${IMAGE}"
+
+      - name: Build and validate worker QCOW2
+        env:
+          CONTAINER_ENGINE: docker
+          IMAGE_NAME: ${{ env.IMAGE }}
+          VM_TOOL_IMAGE: ${{ env.CI_TOOLS_IMAGE }}
+        run: |
+          ./scripts/build-disk.sh worker qcow2
+          make validate-disk-worker
+
+      - name: Boot worker and validate reboot persistence
+        env:
+          CONTAINER_ENGINE: docker
+          VM_TOOL_IMAGE: ${{ env.CI_TOOLS_IMAGE }}
+          VM_WAIT_ATTEMPTS: 300
+        run: |
+          cleanup() {
+            status=$?
+            if ((status != 0)); then
+              docker logs coolify-worker-vm || true
+            fi
+            make vm-stop-worker || true
+            exit "${status}"
+          }
+          trap cleanup EXIT
+          make vm-init-worker
+          make vm-start-worker
+          make vm-validate-worker
