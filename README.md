@@ -47,7 +47,7 @@ Implemented:
 
 The upstream base currently makes `bootc` and `rpm-ostree` depend on Podman, so Podman remains installed. It is a bootc host dependency/tool, not the production application runtime; Coolify workloads use Docker Engine.
 
-Next milestones are bootc update/rollback testing through a reachable registry, the persistent controller bootstrap, Terraform/ECR/OIDC, and EC2 AMI registration. No untested AWS deployment code is presented as complete.
+Next milestones are bootc update/rollback testing through a reachable registry, the persistent controller bootstrap, OpenTofu/ECR/OIDC, and EC2 AMI registration. No untested AWS deployment code is presented as complete.
 
 ## Why bootc
 
@@ -172,7 +172,7 @@ write_files:
       ssh-ed25519 REPLACE_WITH_COOLIFY_PUBLIC_KEY coolify
 ```
 
-The service runs after `cloud-final.service`. Reboots are safe: existing keys are retained and exact duplicates are not added. Never put a private key in user data, Git, an AMI, or Terraform configuration. EC2 user data should not be treated as a secret store even though this payload is only a public key.
+The service runs after `cloud-final.service`. Reboots are safe: existing keys are retained and exact duplicates are not added. Never put a private key in user data, Git, an AMI, or OpenTofu configuration. EC2 user data should not be treated as a secret store even though this payload is only a public key.
 
 The worker also accepts an EC2 administrator key provisioned independently by cloud-init. AWS security groups must restrict TCP/22 to the controller security group/private VPC path and, if needed, a specific administrator CIDR. Do not expose SSH to `0.0.0.0/0`.
 
@@ -220,7 +220,9 @@ Automatic OS reboots are enabled for changed bootc images in the daily update wi
 
 ## AWS direction
 
-The AWS layer will use configurable architecture, region, instance types, encrypted gp3 volumes, separate controller/worker security groups, instance profiles, and public plus private VPC addressing. GitHub Actions will publish to ECR through OIDC—not long-lived AWS keys. AMIs will be generated separately from OCI images with upstream bootc tooling and explicitly selected by Terraform.
+The AWS layer will use configurable architecture, region, instance types, encrypted gp3 volumes, separate controller/worker security groups, instance profiles, and public plus private VPC addressing. GitHub Actions will publish to ECR through OIDC—not long-lived AWS keys. AMIs will be generated separately from OCI images with upstream bootc tooling and explicitly selected by OpenTofu.
+
+OpenTofu is the infrastructure-as-code CLI for this project. Configuration remains Terraform-compatible where practical so the AWS provider and reusable modules retain broad ecosystem compatibility. Terraform is reserved for a documented incompatibility that cannot be resolved with OpenTofu. CI-only values belong in GitHub Secrets, AWS-hosted runtime secrets belong in AWS Secrets Manager, and provider-neutral or self-hosted secrets may use OpenBao.
 
 The cost-sensitive baseline has:
 

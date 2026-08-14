@@ -24,3 +24,12 @@
   NOT hit the Secrets Manager Agent daemon directly. MUST use
   `{{resolve:secretsmanager:secret-id:SecretString:json-key}}` with
   `asm-exec` so the secret resolves at runtime without entering context.
+
+## Project Infrastructure Policy
+
+- Use OpenTofu for infrastructure as code. Keep HCL, providers, modules,
+  state, and lock files Terraform-compatible where practical. Use Terraform
+  only for a documented compatibility issue that OpenTofu cannot satisfy.
+- Never commit secret values. Use GitHub Actions OIDC for AWS access, GitHub
+  Secrets for CI-only values, AWS Secrets Manager for AWS-hosted runtime
+  secrets, and OpenBao for provider-neutral or self-hosted secret management.

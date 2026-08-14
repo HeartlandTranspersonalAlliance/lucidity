@@ -7,13 +7,12 @@
 *.p12
 *.pfx
 
-# Terraform state and local overrides
+# OpenTofu state and local overrides (compatibility filenames are intentional)
 *.tfstate
 *.tfstate.*
 *.tfvars
 !*.tfvars.example
 .terraform/
-.terraform.lock.hcl
 override.tf
 override.tf.json
 *_override.tf
