@@ -9,6 +9,7 @@ required_files=(
     AGENTS.md
     ci/Containerfile
     ci/images.env
+    ci/worker-changes.sh
     roles/common/etc/docker/daemon.json
     roles/common/etc/ssh/sshd_config.d/40-coolify-aws.conf
     roles/common/usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-coolify-aws.conf
@@ -59,10 +60,20 @@ grep -Fq '/usr/lib/coolify-aws/image-version' Containerfile
 grep -Fq '=~ ^[[:alnum:].:-]+$' scripts/vm-init.sh
 grep -Fq '=~ ^[[:alnum:].:-]+$' scripts/vm-validate-update.sh
 grep -Fq 'CONTAINER_ENGINE' scripts/build-disk.sh
-if grep -R -n -F 'sudo ' .github/workflows; then
-    echo "GitHub Actions must use containerized tooling instead of host sudo" >&2
+[[ $(printf '%s\n' README.md tofu/environments/aws/main.tf roles/controller/usr/example | ci/worker-changes.sh) == false ]]
+[[ $(printf '%s\n' README.md roles/worker/usr/example | ci/worker-changes.sh) == true ]]
+[[ $(printf '%s\n' .github/workflows/validate.yml | ci/worker-changes.sh) == true ]]
+unexpected_sudo=$(grep -R -n -E '(^|[[:space:]])sudo[[:space:]]' .github/workflows | \
+    grep -Ev 'sudo (tee /etc/udev/rules.d/99-kvm4all.rules|udevadm control --reload-rules|udevadm trigger --name-match=kvm)$' || true)
+if [[ -n ${unexpected_sudo} ]]; then
+    echo "GitHub Actions may use host sudo only for the documented KVM udev rule" >&2
+    printf '%s\n' "${unexpected_sudo}" >&2
     exit 1
 fi
+[[ $(grep -R -h -E '(^|[[:space:]])sudo[[:space:]]' .github/workflows | wc -l) == 3 ]] || {
+    echo "the KVM setup must contain exactly three narrowly scoped sudo commands" >&2
+    exit 1
+}
 if grep -Eq '^IMAGE_BUILDER_IMAGE=.+:(latest|main)$' image/image-builder.env; then
     echo "image-builder must be pinned by digest" >&2
     exit 1

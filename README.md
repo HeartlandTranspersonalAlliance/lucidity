@@ -89,7 +89,7 @@ proposal.md                   full implementation plan and milestones
 
 ## Remote-first validation
 
-GitHub Actions is the primary build and test environment. Every pull request and push to `main` runs:
+GitHub Actions is the primary build and test environment. Every pull request runs the lightweight and infrastructure checks below. Worker-impacting pull requests, every push to `main`, and every manual run execute the complete image lifecycle:
 
 1. OpenTofu formatting, validation, and mocked infrastructure tests in a pinned Nix environment;
 2. ShellCheck, static behavior tests, and actionlint;
@@ -100,7 +100,9 @@ GitHub Actions is the primary build and test environment. Every pull request and
 7. a UEFI worker guest boot, cloud-init and SSH checks, and Docker-volume persistence across reboot;
 8. a two-version bootc update and rollback through a disposable guest-reachable registry, with the same Docker data verified after each reboot.
 
-The OpenTofu job installs Determinate Nix through a commit-pinned action; image jobs install nothing onto the hosted runner, and no job uses host `sudo`. If `/dev/kvm` is available the lifecycle job uses KVM; otherwise it falls back to QEMU TCG. GitHub documents nested virtualization on hosted runners as experimental, so the TCG path is the portable fallback. Build artifacts stay within the ephemeral job and are not uploaded, avoiding persistent storage cost and accidental publication of disposable SSH identities.
+The OpenTofu job installs Determinate Nix through a commit-pinned action. Image jobs install no packages onto the hosted runner. The worker job uses host `sudo` only for GitHub's documented udev rule granting access to the runner's existing `/dev/kvm` device; a repository test rejects every other workflow use of `sudo`. KVM accelerates the complete VM lifecycle without removing any reboot, update, or rollback checks, while QEMU TCG remains the automatic fallback. Build artifacts stay within the ephemeral job and are not uploaded, avoiding persistent storage cost and accidental publication of disposable SSH identities.
+
+For pull requests, the worker lifecycle runs whenever a changed path may affect the worker image or its test harness. It is skipped only when all changes are limited to documentation, OpenTofu, Nix metadata used by OpenTofu, or controller-only role files. Pushes to `main` and manual runs always execute the full lifecycle, so an unknown or newly added path defaults to the safer full validation.
 
 Local commands remain available for development and diagnosis, but a successful local run is not a substitute for the required GitHub checks.
 
