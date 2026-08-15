@@ -64,13 +64,23 @@ module "github_oidc" {
 module "ami_import_validation" {
   source = "../../modules/ami-import-validation"
 
-  aws_region                 = var.aws_region
-  environment                = var.environment
-  github_branch              = var.github_publish_branch
-  github_repository          = var.github_repository
-  github_repository_owner_id = var.github_repository_owner_id
-  github_repository_id       = var.github_repository_id
-  oidc_provider_arn          = module.github_oidc.oidc_provider_arn
-  project_name               = var.vpc_name
-  tags                       = var.tags
+  aws_region                              = var.aws_region
+  enable_launch_validation                = var.enable_ami_launch_validation
+  environment                             = var.environment
+  github_branch                           = var.github_publish_branch
+  github_repository                       = var.github_repository
+  github_repository_owner_id              = var.github_repository_owner_id
+  github_repository_id                    = var.github_repository_id
+  launch_validation_instance_profile_name = var.enable_instance_management ? module.instance_management[0].instance_profile_names.worker : null
+  launch_validation_instance_type         = var.controller_instance_type
+  launch_validation_role_arn              = var.enable_instance_management ? module.instance_management[0].role_arns.worker : null
+  launch_validation_security_group_ids = var.enable_network ? toset([
+    module.network[0].security_group_ids.application,
+  ]) : toset([])
+  launch_validation_subnet_ids = var.enable_network ? toset(values(
+    module.network[0].public_subnet_ids,
+  )) : toset([])
+  oidc_provider_arn = module.github_oidc.oidc_provider_arn
+  project_name      = var.vpc_name
+  tags              = var.tags
 }

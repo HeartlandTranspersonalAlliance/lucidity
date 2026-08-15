@@ -96,6 +96,9 @@ configure these non-secret GitHub repository variables from the OpenTofu outputs
 | `AWS_AMI_IMPORT_BUCKET` | `ami_import_bucket_name` |
 | `AWS_AMI_IMPORT_ROLE_ARN` | `github_ami_validation_role_arn` |
 | `AWS_VMIMPORT_ROLE_NAME` | `vmimport_role_name` |
+| `AWS_AMI_TEST_SUBNET_ID` | `ami_test_subnet_id` |
+| `AWS_AMI_TEST_SECURITY_GROUP_ID` | `ami_test_security_group_id` |
+| `AWS_AMI_TEST_INSTANCE_PROFILE_NAME` | `ami_test_instance_profile_name` |
 
 Then manually run **Validate AMI compatibility** with `run_aws_import` enabled. The
 workflow uploads the raw artifact and imports it as an encrypted EBS snapshot. It then
@@ -105,6 +108,29 @@ used because AWS VM Import/Export does not list AlmaLinux in its OS matrix and
 `import-image` rejects the AlmaLinux 10 bootc disk during OS detection. A successful
 registration proves AWS accepts the disk and AMI metadata; a later disposable T3a
 launch must still prove boot and guest behavior.
+
+GitHub Actions run `31859796836` on merged `main` completed this registration test
+on 2026-08-14. AWS completed the snapshot import, the workflow validated the
+temporary AMI, and an independent AWS MCP audit confirmed that no validation AMI,
+snapshot, or S3 object remained. The next gate is a disposable `t3a` launch with
+SSM-only management access and no inbound TCP/22.
+
+For that boot gate, temporarily set `enable_network`,
+`enable_instance_management`, and `enable_ami_launch_validation` to `true`, keep
+`enable_nat_gateways` and `enable_runtime_secrets` false, apply the reviewed plan,
+and configure the three `AWS_AMI_TEST_*` variables above. Manually dispatch the
+workflow with both `run_aws_import` and `run_aws_launch` enabled. It launches one
+`t3a.small` in standard CPU-credit mode with no key pair, IMDSv2 required, and the
+application security group. SSM Run Command verifies AMD64, SELinux enforcing,
+bootc, Docker, SSM Agent, and rejection of tokenless metadata access. Cleanup
+terminates the instance before deregistering the AMI and deleting its encrypted
+snapshot. Disable `enable_ami_launch_validation` after the gate passes.
+
+The pinned OSBuild native AWS uploader was also evaluated as a lower-maintenance
+replacement. It cannot currently assert encrypted import or AMI IMDSv2 support,
+select this stack's VM Import role, or match the cleanup contract, so the explicit
+workflow remains intentional. See
+[`docs/upstream-aws-uploader-evaluation.md`](../docs/upstream-aws-uploader-evaluation.md).
 
 ## Shell and bootstrap access
 

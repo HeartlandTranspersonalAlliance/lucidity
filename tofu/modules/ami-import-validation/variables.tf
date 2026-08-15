@@ -59,6 +59,49 @@ variable "oidc_provider_arn" {
   type        = string
 }
 
+variable "enable_launch_validation" {
+  description = "Allow the GitHub AMI workflow to launch and terminate one tagged disposable EC2 validation instance."
+  type        = bool
+  default     = false
+}
+
+variable "launch_validation_subnet_ids" {
+  description = "Public subnet IDs in which the disposable SSM validation instance may launch."
+  type        = set(string)
+  default     = []
+}
+
+variable "launch_validation_security_group_ids" {
+  description = "Security group IDs that the disposable SSM validation instance may use."
+  type        = set(string)
+  default     = []
+}
+
+variable "launch_validation_instance_profile_name" {
+  description = "SSM-enabled worker instance profile attached to the disposable validation instance."
+  type        = string
+  default     = null
+  nullable    = true
+}
+
+variable "launch_validation_role_arn" {
+  description = "EC2 role ARN that GitHub may pass only to the disposable validation instance."
+  type        = string
+  default     = null
+  nullable    = true
+}
+
+variable "launch_validation_instance_type" {
+  description = "Single EC2 instance type permitted for disposable AMI boot validation."
+  type        = string
+  default     = "t3a.small"
+
+  validation {
+    condition     = var.launch_validation_instance_type == "t3a.small"
+    error_message = "AMI launch validation is intentionally restricted to t3a.small."
+  }
+}
+
 variable "tags" {
   description = "Additional tags applied to supported resources."
   type        = map(string)

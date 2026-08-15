@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+: "${AWS_MOCK_LOG:?AWS_MOCK_LOG is required}"
+printf '%s\n' "$*" >> "${AWS_MOCK_LOG}"
+
+service=${1:-}
+operation=${2:-}
+
+case "${service} ${operation}" in
+    "s3 cp"|"s3 rm"|"ec2 create-tags"|"ec2 deregister-image"|"ec2 delete-snapshot")
+        ;;
+    "ec2 import-snapshot")
+        printf '%s\n' '{"ImportTaskId":"import-snap-test"}'
+        ;;
+    "ec2 describe-import-snapshot-tasks")
+        printf '%s\n' '{"ImportSnapshotTasks":[{"ImportTaskId":"import-snap-test","SnapshotTaskDetail":{"Status":"completed","Progress":"100","SnapshotId":"snap-test"}}]}'
+        ;;
+    "ec2 describe-snapshots")
+        printf '%s\n' '{"Snapshots":[{"SnapshotId":"snap-test","Encrypted":true,"State":"completed"}]}'
+        ;;
+    "ec2 register-image")
+        printf '%s\n' '{"ImageId":"ami-test"}'
+        ;;
+    "ec2 wait")
+        ;;
+    "ec2 describe-images")
+        printf '%s\n' '{"Images":[{"ImageId":"ami-test","State":"available","Architecture":"x86_64","RootDeviceType":"ebs","BootMode":"uefi","EnaSupport":true,"ImdsSupport":"v2.0","BlockDeviceMappings":[{"DeviceName":"/dev/xvda","Ebs":{"SnapshotId":"snap-test","DeleteOnTermination":true,"VolumeType":"gp3"}}]}]}'
+        ;;
+    "ec2 describe-security-groups")
+        printf '%s\n' '{"SecurityGroups":[{"GroupId":"sg-test","IpPermissions":[{"IpProtocol":"tcp","FromPort":22,"ToPort":22,"IpRanges":[],"Ipv6Ranges":[],"UserIdGroupPairs":[{"GroupId":"sg-controller"}]}]}]}'
+        ;;
+    "ec2 run-instances")
+        printf '%s\n' '{"Instances":[{"InstanceId":"i-test"}]}'
+        ;;
+    "ec2 describe-instances")
+        printf '%s\n' 'running'
+        ;;
+    "ec2 terminate-instances")
+        printf '%s\n' '{}'
+        ;;
+    "ssm describe-instance-information")
+        printf '%s\n' 'Online'
+        ;;
+    "ssm send-command")
+        printf '%s\n' '{"Command":{"CommandId":"command-test"}}'
+        ;;
+    "ssm get-command-invocation")
+        printf '%s\n' '{"Status":"Success","StandardOutputContent":"mock guest validation passed","StandardErrorContent":""}'
+        ;;
+    *)
+        echo "unsupported mocked AWS operation: ${service} ${operation}" >&2
+        exit 1
+        ;;
+esac
