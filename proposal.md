@@ -914,7 +914,10 @@ Do not confuse an ECR OCI image with an EC2 AMI.
 
 Automate this only after the container image itself works reliably.
 
-If automated AMI registration requires S3 upload/import, implement that cleanly and document cleanup of temporary artifacts.
+If automated AMI registration requires S3 upload/import, keep it as a documented
+compatibility fallback and clean up every temporary artifact. Prefer direct EBS
+snapshot upload when it preserves the same encryption, metadata, and cleanup
+contract with lower delivery latency.
 
 AWS does not currently publish a pre-generated Fedora or CentOS bootc AMI, and
 the RHEL image-mode workflow also expects operators to generate their own AMI.
@@ -923,18 +926,23 @@ depending on an unverified public AMI.
 
 AWS VM Import/Export does not list AlmaLinux in its supported OS matrix, and a
 real `import-image` validation rejected the AlmaLinux 10 bootc disk during OS
-detection. Import the raw disk as an encrypted EBS snapshot instead, then
+detection. Upload the raw disk directly as an encrypted EBS snapshot, then
 register the snapshot explicitly as an AMD64, UEFI, HVM, ENA-enabled,
 IMDSv2-only AMI. This preserves the AlmaLinux identity without pretending it is
-RHEL or Rocky Linux. A successful registration is not proof of bootability;
-the disposable T3a launch test remains mandatory.
+RHEL or Rocky Linux. The lifecycle-controlled S3 and `ImportSnapshot` path remains
+available as a manual fallback. A successful registration is not proof of bootability;
+the disposable T3a launch test remains mandatory for each materially changed disk
+pipeline.
 
 The merged `main` workflow completed this registration gate in GitHub Actions run
 `31859796836` on 2026-08-14. AWS completed import task
 `import-snap-9315bf3af20f6870t`, the workflow registered and validated the temporary
 AMI, and an independent AWS MCP audit confirmed that the AMI, encrypted snapshot,
-and S3 object were removed. Milestone 8 is therefore blocked only on the actual
-T3a boot and guest-behavior test, not AMI registration compatibility.
+and S3 object were removed. Run `31869009935` completed the T3a boot and guest gate
+on 2026-08-15 through SSM-only access. It verified AMD64, enforcing SELinux, bootc,
+Docker, SSM Agent, and IMDSv2 enforcement; a second AWS MCP audit confirmed that no
+tagged instance, AMI, snapshot, or validation object remained. Milestone 8 is
+complete for the current AMD64 worker pipeline.
 
 ---
 
@@ -950,7 +958,7 @@ snapshot import, supports UEFI, and enables ENA, but does not request snapshot
 encryption, set AMI IMDSv2 support, accept the project-specific VM Import role,
 or provide the validation workflow's deterministic AMI and snapshot cleanup. Its
 preflight also requires account-wide bucket discovery. Keep the current explicit
-snapshot workflow and reevaluate only after upstream closes those gaps. The full
+explicit snapshot workflow and reevaluate only after upstream closes those gaps. The full
 comparison is recorded in `docs/upstream-aws-uploader-evaluation.md`.
 
 Packer is not part of the initial pipeline. Its normal `amazon-ebs` workflow needs
@@ -1492,10 +1500,11 @@ Register AMIs.
 
 On pull requests, build and validate the raw AMD64 AMI artifact without AWS
 credentials. After the foundation is applied on `main`, manually dispatch the same
-workflow with AWS import enabled. It uploads to the lifecycle-controlled private S3
-bucket, imports the raw disk as an encrypted EBS snapshot using the project-scoped
-VM Import/Export role, explicitly registers and verifies the AMI metadata, then
-deletes the AMI, snapshot, and object.
+workflow with AWS validation enabled. By default it streams the raw disk directly to
+an encrypted EBS snapshot with bounded parallel workers, explicitly registers and
+verifies the AMI metadata, then deletes the AMI and snapshot. The lifecycle-controlled
+private S3 bucket and project-scoped VM Import/Export role remain available through
+the `vmimport` fallback, which also deletes its temporary object.
 
 Validate actual EC2 boot.
 

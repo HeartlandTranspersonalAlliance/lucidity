@@ -12,6 +12,16 @@
       forAllSystems = nixpkgs.lib.genAttrs systems;
     in
     {
+      packages = forAllSystems (
+        system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+        in
+        {
+          coldsnap = pkgs.coldsnap;
+        }
+      );
+
       devShells = forAllSystems (
         system:
         let

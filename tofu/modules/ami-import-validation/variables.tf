@@ -1,5 +1,5 @@
 variable "aws_region" {
-  description = "AWS region used for the disposable AMI import validation."
+  description = "AWS region used for disposable AMI snapshot validation."
   type        = string
 }
 

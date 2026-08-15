@@ -6,11 +6,13 @@ The repository-pinned `ghcr.io/osbuild/image-builder-cli` image reports
 `image-builder` commit `e0aa653eb4c8e19683a36714eaffbae1d81942a4`. Its
 native AWS uploader was evaluated as a possible replacement for
 `scripts/validate-ami-import.sh` after GitHub Actions run `31859796836` proved
-the existing snapshot workflow.
+the explicit snapshot registration workflow.
 
 ## Result
 
-Keep the current explicit AWS CLI workflow. The upstream uploader avoids
+Keep the current explicit snapshot workflow. Its optimized path uses pinned
+`coldsnap` and the EBS Direct APIs, while the original AWS CLI and VM Import path
+remains available as a compatibility fallback. The upstream uploader avoids
 AlmaLinux OS detection by calling `ImportSnapshot`, supports an explicit UEFI
 boot mode, enables ENA, uploads with short-lived environment credentials, and
 removes its intermediate S3 object. Those are useful properties, but it does

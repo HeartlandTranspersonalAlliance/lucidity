@@ -10,7 +10,7 @@ This stack creates the AWS resources needed to publish lucidity bootc OCI images
 - one empty controller-runtime Secrets Manager secret encrypted by a dedicated rotating KMS key;
 - SSM-enabled controller and worker instance profiles, with the controller optionally restricted to that secret and KMS key;
 - immutable controller and worker ECR version tags, one controlled mutable `stable` channel, scan-on-push, and bounded retention;
-- a private, auto-expiring S3 bucket and project-scoped IAM roles for disposable GitHub AMI import validation;
+- a rotating AMI snapshot KMS key, EBS Direct API permissions, and a private auto-expiring VM Import fallback for disposable GitHub AMI validation;
 - an account-level GitHub Actions OIDC provider, unless an existing provider ARN is supplied;
 - a repository-scoped IAM role that only trusts `main` for the immutable owner and repository IDs of `HeartlandTranspersonalAlliance/lucidity`;
 - least-privilege permissions to authenticate to ECR and push to these two repositories.
@@ -78,9 +78,10 @@ raise that baseline to about USD 2.40 and USD 3.40. Check the current
 
 ## AMI compatibility validation
 
-OpenTofu creates an empty private S3 import bucket, the project-scoped VM Import Export
-service role, and a GitHub OIDC role trusted only for this repository's `main` branch.
-Objects under `validation/` expire after one day if workflow cleanup fails.
+OpenTofu creates a customer-managed KMS key for AMI snapshots, an empty private S3
+fallback bucket, the project-scoped VM Import Export service role, and a GitHub OIDC
+role trusted only for this repository's `main` branch. Objects under `validation/`
+expire after one day if fallback cleanup fails.
 
 The trust subjects include GitHub's immutable numeric owner and repository IDs. This
 prevents a renamed or recycled repository name from inheriting AWS access. Confirm
@@ -95,36 +96,82 @@ configure these non-secret GitHub repository variables from the OpenTofu outputs
 |---|---|
 | `AWS_AMI_IMPORT_BUCKET` | `ami_import_bucket_name` |
 | `AWS_AMI_IMPORT_ROLE_ARN` | `github_ami_validation_role_arn` |
+| `AWS_AMI_SNAPSHOT_KMS_KEY_ARN` | `ami_snapshot_kms_key_arn` |
 | `AWS_VMIMPORT_ROLE_NAME` | `vmimport_role_name` |
 | `AWS_AMI_TEST_SUBNET_ID` | `ami_test_subnet_id` |
 | `AWS_AMI_TEST_SECURITY_GROUP_ID` | `ami_test_security_group_id` |
 | `AWS_AMI_TEST_INSTANCE_PROFILE_NAME` | `ami_test_instance_profile_name` |
 
-Then manually run **Validate AMI compatibility** with `run_aws_import` enabled. The
-workflow uploads the raw artifact and imports it as an encrypted EBS snapshot. It then
-registers a disposable AMD64, UEFI, HVM, ENA-enabled, IMDSv2-only AMI, validates the
-returned metadata, and removes the AMI, EBS snapshot, and S3 object. Snapshot import is
-used because AWS VM Import/Export does not list AlmaLinux in its OS matrix and
-`import-image` rejects the AlmaLinux 10 bootc disk during OS detection. A successful
-registration proves AWS accepts the disk and AMI metadata; a later disposable T3a
-launch must still prove boot and guest behavior.
+Then manually run **Validate AMI compatibility** with `run_aws_validation` enabled.
+The default `ebs-direct` mode resolves pinned `coldsnap 0.10.0` from `flake.lock` and
+uploads the raw artifact directly to an encrypted EBS snapshot with 64 concurrent
+workers. It registers a disposable AMD64, UEFI, HVM, ENA-enabled, IMDSv2-only AMI,
+validates the returned metadata and configured KMS key, then removes the AMI and EBS
+snapshot. This bypasses the observed 14-minute VM Import phase; measure the first live
+run before treating the projected latency reduction as proven.
 
-GitHub Actions run `31859796836` on merged `main` completed this registration test
-on 2026-08-14. AWS completed the snapshot import, the workflow validated the
-temporary AMI, and an independent AWS MCP audit confirmed that no validation AMI,
-snapshot, or S3 object remained. The next gate is a disposable `t3a` launch with
-SSM-only management access and no inbound TCP/22.
+Select `snapshot_upload_mode=vmimport` to use the lifecycle-controlled S3 bucket and
+project-scoped VM Import/Export role as a compatibility fallback. That path exists
+because `import-image` rejects the AlmaLinux 10 bootc disk during OS detection; it
+imports the raw disk as a snapshot without asking AWS to identify the guest OS. Both
+paths enforce the same AMI metadata and deterministic cleanup contract. Registration
+proves AWS accepts the disk and AMI metadata, while the separate disposable T3a gate
+proves boot and guest behavior.
 
-For that boot gate, temporarily set `enable_network`,
+GitHub Actions run `31859796836` on merged `main` completed the registration test on
+2026-08-14. Run `31869009935` completed the stronger disposable T3a boot gate on
+2026-08-15: AWS imported the encrypted snapshot, launched one `t3a.small` without a
+key pair or inbound TCP/22, and SSM verified AMD64, enforcing SELinux, bootc, Docker,
+SSM Agent, and rejection of tokenless metadata access. An independent AWS MCP audit
+confirmed that no tagged instance, AMI, snapshot, or validation S3 object remained.
+
+To repeat that boot gate, temporarily set `enable_network`,
 `enable_instance_management`, and `enable_ami_launch_validation` to `true`, keep
 `enable_nat_gateways` and `enable_runtime_secrets` false, apply the reviewed plan,
 and configure the three `AWS_AMI_TEST_*` variables above. Manually dispatch the
-workflow with both `run_aws_import` and `run_aws_launch` enabled. It launches one
+workflow with both `run_aws_validation` and `run_aws_launch` enabled. Keep the default
+`ebs-direct` transport unless diagnosing its uploader; select `vmimport` only for the
+fallback. The workflow launches one
 `t3a.small` in standard CPU-credit mode with no key pair, IMDSv2 required, and the
 application security group. SSM Run Command verifies AMD64, SELinux enforcing,
 bootc, Docker, SSM Agent, and rejection of tokenless metadata access. Cleanup
 terminates the instance before deregistering the AMI and deleting its encrypted
-snapshot. Disable `enable_ami_launch_validation` after the gate passes.
+snapshot. Keep `enable_ami_launch_validation` disabled outside an intentional gate
+run.
+
+### CodeBuild-hosted runner boundary
+
+Moving the AMI worker job to a
+[CodeBuild-hosted GitHub Actions runner](https://docs.aws.amazon.com/codebuild/latest/userguide/action-runner.html)
+is a sensible
+second optimization because that job is privileged, disk-heavy, AWS-authenticated,
+and uploads a large artifact into AWS. Start with on-demand CodeBuild compute and a
+measured comparison of queue time, build time, direct snapshot upload throughput, and
+total cost. A custom image can preinstall the pinned build and upload tools once the
+benchmark justifies the maintenance cost.
+
+Do not move lightweight shell checks, static validation, or ordinary controller OCI
+builds merely to maximize the number of AWS-hosted jobs. Those jobs gain little from
+AWS-local network placement and would add GitHub connection, runner project, IAM, and
+image maintenance. The CodeBuild GitHub connection requires an operator-authorized
+GitHub App or CodeConnections OAuth handshake, so it remains a separate reviewed
+OpenTofu change after the EBS Direct API timing is known.
+
+## ECR candidate publication
+
+Configure these non-secret repository variables from the applied OpenTofu outputs:
+
+| GitHub variable | OpenTofu output |
+|---|---|
+| `AWS_ECR_PUBLISH_ROLE_ARN` | `github_publish_role_arn` |
+| `AWS_ECR_CONTROLLER_REPOSITORY_URL` | `ecr_repository_urls["controller"]` |
+| `AWS_ECR_WORKER_REPOSITORY_URL` | `ecr_repository_urls["worker"]` |
+
+`.github/workflows/publish.yml` runs only on `main`, assumes the branch-restricted
+publishing role through GitHub OIDC, and publishes validated AMD64 controller and
+worker images as immutable `sha-<full-commit>` candidates. It does not consume stored
+AWS keys and does not move `stable`; promotion remains a separate post-boot-validation
+operation.
 
 The pinned OSBuild native AWS uploader was also evaluated as a lower-maintenance
 replacement. It cannot currently assert encrypted import or AMI IMDSv2 support,

@@ -142,6 +142,11 @@ run "default_registry_and_oidc_contract" {
   }
 
   assert {
+    condition     = output.ami_snapshot_kms_key_arn == "arn:aws:kms:us-east-2:123456789012:key/11111111-2222-3333-4444-555555555555"
+    error_message = "AMI validation must expose its customer-managed EBS snapshot encryption key."
+  }
+
+  assert {
     condition     = output.github_ami_validation_subject == "repo:HeartlandTranspersonalAlliance@256628390/lucidity@1333819830:ref:refs/heads/main"
     error_message = "AMI import credentials must remain restricted to this immutable repository identity and main branch."
   }

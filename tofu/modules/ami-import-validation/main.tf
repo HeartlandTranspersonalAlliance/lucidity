@@ -26,6 +26,19 @@ locals {
   )
 }
 
+resource "aws_kms_key" "ami_snapshot" {
+  description             = "Encrypts ${var.project_name} bootc AMI snapshots"
+  deletion_window_in_days = 30
+  enable_key_rotation     = true
+
+  tags = merge(local.common_tags, { Name = "${local.resource_prefix}-ami-snapshots" })
+}
+
+resource "aws_kms_alias" "ami_snapshot" {
+  name          = "alias/${local.resource_prefix}-ami-snapshots"
+  target_key_id = aws_kms_key.ami_snapshot.key_id
+}
+
 resource "aws_s3_bucket" "this" {
   bucket = local.bucket_name
 
@@ -205,7 +218,7 @@ data "aws_iam_policy_document" "github_assume_role" {
 resource "aws_iam_role" "github" {
   name                 = "${local.resource_prefix}-github-ami-validation"
   assume_role_policy   = data.aws_iam_policy_document.github_assume_role.json
-  description          = "GitHub Actions role for disposable ${var.project_name} AMI import validation"
+  description          = "GitHub Actions role for disposable ${var.project_name} AMI snapshot validation"
   max_session_duration = 10800
 
   tags = local.common_tags
@@ -224,6 +237,72 @@ resource "aws_iam_role" "github" {
 }
 
 data "aws_iam_policy_document" "github" {
+  statement {
+    sid     = "StartTaggedValidationSnapshot"
+    effect  = "Allow"
+    actions = ["ebs:StartSnapshot"]
+    resources = [
+      "arn:${data.aws_partition.current.partition}:ec2:${var.aws_region}::snapshot/*",
+    ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/Project"
+      values   = [var.project_name]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/Purpose"
+      values   = ["ami-validation"]
+    }
+  }
+
+  statement {
+    sid    = "WriteTaggedValidationSnapshot"
+    effect = "Allow"
+    actions = [
+      "ebs:CompleteSnapshot",
+      "ebs:PutSnapshotBlock",
+    ]
+    resources = [
+      "arn:${data.aws_partition.current.partition}:ec2:${var.aws_region}::snapshot/*",
+    ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/Purpose"
+      values   = ["ami-validation"]
+    }
+  }
+
+  statement {
+    sid    = "UseAmiSnapshotKey"
+    effect = "Allow"
+    actions = [
+      "kms:Decrypt",
+      "kms:DescribeKey",
+      "kms:GenerateDataKeyWithoutPlaintext",
+      "kms:ReEncrypt*",
+    ]
+    resources = [aws_kms_key.ami_snapshot.arn]
+  }
+
+  statement {
+    sid     = "CreateAmiSnapshotKeyGrant"
+    effect  = "Allow"
+    actions = ["kms:CreateGrant"]
+    resources = [
+      aws_kms_key.ami_snapshot.arn,
+    ]
+
+    condition {
+      test     = "Bool"
+      variable = "kms:GrantIsForAWSResource"
+      values   = ["true"]
+    }
+  }
+
   statement {
     sid    = "UseImportBucket"
     effect = "Allow"
@@ -271,6 +350,28 @@ data "aws_iam_policy_document" "github" {
       "ec2:RegisterImage",
     ]
     resources = ["*"]
+  }
+
+  statement {
+    sid     = "TagValidationImageAndSnapshot"
+    effect  = "Allow"
+    actions = ["ec2:CreateTags"]
+    resources = [
+      "arn:${data.aws_partition.current.partition}:ec2:${var.aws_region}::image/*",
+      "arn:${data.aws_partition.current.partition}:ec2:${var.aws_region}::snapshot/*",
+    ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/Project"
+      values   = [var.project_name]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/Purpose"
+      values   = ["ami-validation"]
+    }
   }
 
   dynamic "statement" {
@@ -387,10 +488,8 @@ data "aws_iam_policy_document" "github" {
         "ec2:CreateTags",
       ]
       resources = [
-        "arn:${data.aws_partition.current.partition}:ec2:${var.aws_region}::image/*",
         "arn:${data.aws_partition.current.partition}:ec2:${var.aws_region}:${local.account_id}:instance/*",
         "arn:${data.aws_partition.current.partition}:ec2:${var.aws_region}:${local.account_id}:network-interface/*",
-        "arn:${data.aws_partition.current.partition}:ec2:${var.aws_region}::snapshot/*",
         "arn:${data.aws_partition.current.partition}:ec2:${var.aws_region}:${local.account_id}:volume/*",
       ]
     }

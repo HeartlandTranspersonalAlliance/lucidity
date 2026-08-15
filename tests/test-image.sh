@@ -10,6 +10,7 @@ required_files=(
     ci/Containerfile
     ci/images.env
     ci/worker-changes.sh
+    .github/workflows/publish.yml
     roles/common/etc/docker/daemon.json
     roles/common/etc/selinux/config
     roles/common/etc/ssh/sshd_config.d/40-coolify-aws.conf
@@ -27,6 +28,7 @@ required_files=(
     scripts/vm-validate-update.sh
     scripts/vm-stop.sh
     tests/fixtures/aws
+    tests/fixtures/coldsnap
     tests/test-ami-import.sh
     image/image-builder.env
     tofu/modules/ami-import-validation/main.tf
@@ -87,6 +89,8 @@ grep -Fq 'grep -Eq "^SELINUX=enforcing$" /etc/selinux/config' scripts/validate-i
 grep -Fq 'getenforce) == Enforcing' scripts/vm-validate.sh
 grep -Fq "if [[ \${format} == qcow2 ]]" scripts/validate-disk.sh
 grep -Fq 'aws ec2 import-snapshot' scripts/validate-ami-import.sh
+grep -Fq 'coldsnap_command' scripts/validate-ami-import.sh
+grep -Fq -- '--kms-key-id' scripts/validate-ami-import.sh
 grep -Fq 'aws ec2 register-image' scripts/validate-ami-import.sh
 grep -Fq -- '--architecture x86_64' scripts/validate-ami-import.sh
 grep -Fq -- '--boot-mode uefi' scripts/validate-ami-import.sh
@@ -121,6 +125,11 @@ grep -Fq 'resource "aws_flow_log" "this"' tofu/modules/network/main.tf
 grep -Fq 'AmazonSSMManagedInstanceCore' tofu/modules/instance-management/main.tf
 grep -Fq 'resource "aws_iam_instance_profile" "node"' tofu/modules/instance-management/main.tf
 grep -Fq 'resource "aws_s3_bucket" "this"' tofu/modules/ami-import-validation/main.tf
+grep -Fq 'resource "aws_kms_key" "ami_snapshot"' tofu/modules/ami-import-validation/main.tf
+grep -Fq 'ebs:StartSnapshot' tofu/modules/ami-import-validation/main.tf
+grep -Fq 'ebs:PutSnapshotBlock' tofu/modules/ami-import-validation/main.tf
+grep -Fq 'ebs:CompleteSnapshot' tofu/modules/ami-import-validation/main.tf
+grep -Fq 'kms:GrantIsForAWSResource' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'identifiers = ["vmie.amazonaws.com"]' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'variable = "iam:PassedToService"' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'sid     = "CreateTaggedValidationInstance"' tofu/modules/ami-import-validation/main.tf
@@ -138,6 +147,28 @@ if rg -n 'ec2:\$\{var\.aws_region\}:\$\{local\.account_id\}:(image|snapshot)/\*'
     exit 1
 fi
 grep -Fq 'allowed-account-ids: 467590374785' .github/workflows/ami.yml
+grep -Fq "github.ref == 'refs/heads/main'" .github/workflows/publish.yml
+grep -Fq 'id-token: write' .github/workflows/publish.yml
+# This is a literal GitHub Actions expression.
+# shellcheck disable=SC2016
+grep -Fq 'IMAGE_TAG: sha-${{ github.sha }}' .github/workflows/publish.yml
+grep -Fq 'allowed-account-ids: 467590374785' .github/workflows/publish.yml
+grep -Fq 'aws ecr get-login-password' .github/workflows/publish.yml
+grep -Fq 'aws ecr batch-get-image' .github/workflows/publish.yml
+grep -Fq 'docker manifest inspect --verbose' .github/workflows/publish.yml
+grep -Fq '.Descriptor.platform.architecture == "amd64"' .github/workflows/publish.yml
+if grep -Fq 'pull_request:' .github/workflows/publish.yml; then
+    echo "ECR publishing must never receive credentials on pull requests" >&2
+    exit 1
+fi
+if rg -n 'AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|secrets\.' .github/workflows/publish.yml; then
+    echo "ECR publishing must use GitHub OIDC without stored AWS credentials" >&2
+    exit 1
+fi
+if rg -n '(^|[^[:alnum:]])(latest|stable)([^[:alnum:]]|$)' .github/workflows/publish.yml; then
+    echo "candidate publication must not write mutable latest or stable tags" >&2
+    exit 1
+fi
 grep -Fq 'resource "aws_secretsmanager_secret" "controller_runtime"' tofu/modules/runtime-secrets/main.tf
 grep -Fq 'enable_key_rotation     = true' tofu/modules/runtime-secrets/main.tf
 grep -Fq 'variable = "kms:ViaService"' tofu/modules/runtime-secrets/main.tf
@@ -147,6 +178,10 @@ grep -Fq 'default     = "t3a.small"' tofu/environments/aws/variables.tf
 grep -Fq 'default     = "t3a.large"' tofu/environments/aws/variables.tf
 grep -Fq 'enable_ami_launch_validation' tofu/environments/aws/variables.tf
 grep -Fq 'run_aws_launch:' .github/workflows/ami.yml
+grep -Fq 'run_aws_validation:' .github/workflows/ami.yml
+grep -Fq 'snapshot_upload_mode:' .github/workflows/ami.yml
+grep -Fq 'nix build --no-link --print-out-paths .#coldsnap' .github/workflows/ami.yml
+grep -Fq 'coldsnap = pkgs.coldsnap;' flake.nix
 if rg -n --glob '*.tf' '0\.0\.0\.0/0.*(22|8000)|(22|8000).*0\.0\.0\.0/0' tofu; then
     echo "SSH and the Coolify bootstrap port must not be globally accessible" >&2
     exit 1
