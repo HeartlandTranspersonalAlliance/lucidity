@@ -281,8 +281,9 @@ data "aws_iam_policy_document" "github" {
       effect  = "Allow"
       actions = ["ec2:RunInstances"]
       resources = [
-        "arn:${data.aws_partition.current.partition}:ec2:${var.aws_region}:${local.account_id}:image/*",
-        "arn:${data.aws_partition.current.partition}:ec2:${var.aws_region}:${local.account_id}:snapshot/*",
+        # EC2 image and snapshot ARNs intentionally have an empty account field.
+        "arn:${data.aws_partition.current.partition}:ec2:${var.aws_region}::image/*",
+        "arn:${data.aws_partition.current.partition}:ec2:${var.aws_region}::snapshot/*",
       ]
 
       condition {
@@ -386,10 +387,10 @@ data "aws_iam_policy_document" "github" {
         "ec2:CreateTags",
       ]
       resources = [
-        "arn:${data.aws_partition.current.partition}:ec2:${var.aws_region}:${local.account_id}:image/*",
+        "arn:${data.aws_partition.current.partition}:ec2:${var.aws_region}::image/*",
         "arn:${data.aws_partition.current.partition}:ec2:${var.aws_region}:${local.account_id}:instance/*",
         "arn:${data.aws_partition.current.partition}:ec2:${var.aws_region}:${local.account_id}:network-interface/*",
-        "arn:${data.aws_partition.current.partition}:ec2:${var.aws_region}:${local.account_id}:snapshot/*",
+        "arn:${data.aws_partition.current.partition}:ec2:${var.aws_region}::snapshot/*",
         "arn:${data.aws_partition.current.partition}:ec2:${var.aws_region}:${local.account_id}:volume/*",
       ]
     }

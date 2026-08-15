@@ -105,6 +105,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.run_aws_import
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
+          allowed-account-ids: 467590374785
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: ${{ vars.AWS_AMI_IMPORT_ROLE_ARN }}
           role-duration-seconds: 10800
