@@ -3,9 +3,9 @@ set -Eeuo pipefail
 
 role=${1:-worker}
 case "${role}" in
-    controller|worker) ;;
+    benchmark-base|controller|worker) ;;
     *)
-        echo "unsupported role '${role}'; expected controller or worker" >&2
+        echo "unsupported role '${role}'; expected benchmark-base, controller, or worker" >&2
         exit 2
         ;;
 esac

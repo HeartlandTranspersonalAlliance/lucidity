@@ -94,6 +94,20 @@ LABEL org.opencontainers.image.title="Coolify bootc controller foundation" \
       io.coolify-aws.role="controller" \
       io.coolify-aws.image-version="${IMAGE_VERSION}"
 
+FROM common AS benchmark-base
+
+ARG IMAGE_VERSION=benchmark
+
+RUN printf '%s\n' "${IMAGE_VERSION}" > /usr/lib/coolify-aws/image-version && \
+    bootc container lint
+
+LABEL org.opencontainers.image.title="Lucidity CentOS bootc benchmark base" \
+      org.opencontainers.image.description="Management-enabled CentOS bootc base used only for disposable cross-distribution switch benchmarks" \
+      org.opencontainers.image.source="https://github.com/HeartlandTranspersonalAlliance/lucidity" \
+      org.opencontainers.image.licenses="AGPL-3.0-only" \
+      io.coolify-aws.role="benchmark-base" \
+      io.coolify-aws.image-version="${IMAGE_VERSION}"
+
 FROM common AS worker
 
 ARG IMAGE_VERSION=dev

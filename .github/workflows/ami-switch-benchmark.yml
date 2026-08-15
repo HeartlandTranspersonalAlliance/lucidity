@@ -1,0 +1,126 @@
+name: Benchmark bootc switch delivery
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_benchmark:
+        description: Build a disposable CentOS bootc AMI, switch it to the current AlmaLinux worker image, test it, and clean up
+        required: true
+        type: boolean
+        default: false
+
+concurrency:
+  group: ami-switch-benchmark-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-east-2
+  CENTOS_BOOTC_IMAGE: quay.io/centos-bootc/centos-bootc:stream10@sha256:2b7e3b1abf8db094d1efb083721dc0f72e6feeef2355fc16ea010d0266b2bb95
+  CI_TOOLS_IMAGE: localhost/coolify-aws-ci-tools:ami-switch-benchmark
+  BOOTSTRAP_IMAGE: localhost/lucidity-centos-bootc-bootstrap:benchmark
+
+jobs:
+  benchmark:
+    if: github.ref == 'refs/heads/main' && inputs.confirm_benchmark
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Require configured benchmark identifiers
+        env:
+          AMI_ROLE_ARN: ${{ vars.AWS_AMI_IMPORT_ROLE_ARN }}
+          SNAPSHOT_KMS_KEY_ARN: ${{ vars.AWS_AMI_SNAPSHOT_KMS_KEY_ARN }}
+          TEST_INSTANCE_PROFILE: ${{ vars.AWS_AMI_TEST_INSTANCE_PROFILE_NAME }}
+          TEST_SECURITY_GROUP: ${{ vars.AWS_AMI_TEST_SECURITY_GROUP_ID }}
+          TEST_SUBNET: ${{ vars.AWS_AMI_TEST_SUBNET_ID }}
+          WORKER_REPOSITORY_URL: ${{ vars.AWS_ECR_WORKER_REPOSITORY_URL }}
+        run: |
+          test -n "${AMI_ROLE_ARN}" || { echo "AWS_AMI_IMPORT_ROLE_ARN repository variable is required" >&2; exit 1; }
+          test -n "${SNAPSHOT_KMS_KEY_ARN}" || { echo "AWS_AMI_SNAPSHOT_KMS_KEY_ARN repository variable is required" >&2; exit 1; }
+          test -n "${TEST_INSTANCE_PROFILE}" || { echo "AWS_AMI_TEST_INSTANCE_PROFILE_NAME repository variable is required" >&2; exit 1; }
+          test -n "${TEST_SECURITY_GROUP}" || { echo "AWS_AMI_TEST_SECURITY_GROUP_ID repository variable is required" >&2; exit 1; }
+          test -n "${TEST_SUBNET}" || { echo "AWS_AMI_TEST_SUBNET_ID repository variable is required" >&2; exit 1; }
+          [[ "${WORKER_REPOSITORY_URL}" =~ ^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[a-z0-9]+([._/-][a-z0-9]+)*$ ]] || {
+            echo "AWS_ECR_WORKER_REPOSITORY_URL must be a private commercial-region ECR repository" >&2
+            exit 1
+          }
+          echo "WORKER_IMAGE_REF=${WORKER_REPOSITORY_URL}:sha-${GITHUB_SHA}" >> "${GITHUB_ENV}"
+
+      - name: Configure short-lived AWS credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          allowed-account-ids: 467590374785
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_AMI_IMPORT_ROLE_ARN }}
+          role-duration-seconds: 10800
+          role-session-name: lucidity-ami-switch-${{ github.run_id }}
+
+      - name: Verify immutable AlmaLinux worker target
+        run: |
+          repository_name=${WORKER_IMAGE_REF#*/}
+          image_tag=${WORKER_IMAGE_REF##*:}
+          image=$(aws ecr batch-get-image \
+            --region "${AWS_REGION}" \
+            --repository-name "${repository_name}" \
+            --image-ids "imageTag=${image_tag}" \
+            --accepted-media-types application/vnd.docker.distribution.manifest.v2+json \
+            --output json)
+          jq -e '(.failures | length) == 0 and (.images | length) == 1' <<< "${image}" >/dev/null
+          echo "Benchmark target digest: $(jq -r '.images[0].imageId.imageDigest' <<< "${image}")"
+
+      - name: Build management-enabled CentOS bootc bootstrap image
+        env:
+          BASE_IMAGE: ${{ env.CENTOS_BOOTC_IMAGE }}
+          CONTAINER_ENGINE: docker
+          IMAGE_NAME: ${{ env.BOOTSTRAP_IMAGE }}
+          IMAGE_VERSION: benchmark-${{ github.sha }}
+        run: |
+          ./scripts/build.sh benchmark-base
+          ./scripts/validate-image.sh "${BOOTSTRAP_IMAGE}"
+
+      - name: Build pinned image tooling
+        run: |
+          source image/image-builder.env
+          docker build \
+            --build-arg "IMAGE_BUILDER_IMAGE=${IMAGE_BUILDER_IMAGE}" \
+            --tag "${CI_TOOLS_IMAGE}" \
+            --file ci/Containerfile \
+            .
+
+      - name: Build and validate CentOS bootc raw AMI artifact
+        env:
+          CONTAINER_ENGINE: docker
+          IMAGE_NAME: ${{ env.BOOTSTRAP_IMAGE }}
+          IMAGE_OUTPUT_NAME: lucidity-centos-bootstrap-ami
+          VM_TOOL_IMAGE: ${{ env.CI_TOOLS_IMAGE }}
+        run: |
+          ./scripts/build-disk.sh worker ami
+          ./scripts/validate-disk.sh image-output/worker/lucidity-centos-bootstrap-ami.raw
+
+      - name: Install Determinate Nix for the pinned EBS uploader
+        uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
+
+      - name: Resolve the pinned coldsnap binary
+        run: |
+          coldsnap_path=$(nix build --no-link --print-out-paths .#coldsnap)
+          test -x "${coldsnap_path}/bin/coldsnap"
+          echo "COLDSNAP_COMMAND=${coldsnap_path}/bin/coldsnap" >> "${GITHUB_ENV}"
+
+      - name: Upload, boot, switch, reboot, and self-validate
+        env:
+          AMI_LAUNCH_VALIDATION: true
+          AMI_LIFECYCLE: disposable
+          AMI_ROLE: worker
+          AMI_SNAPSHOT_KMS_KEY_ARN: ${{ vars.AWS_AMI_SNAPSHOT_KMS_KEY_ARN }}
+          AMI_SOURCE_REVISION: ${{ github.sha }}
+          AMI_SWITCH_TARGET_REF: ${{ env.WORKER_IMAGE_REF }}
+          AMI_TEST_INSTANCE_PROFILE_NAME: ${{ vars.AWS_AMI_TEST_INSTANCE_PROFILE_NAME }}
+          AMI_TEST_INSTANCE_TYPE: t3a.small
+          AMI_TEST_SECURITY_GROUP_ID: ${{ vars.AWS_AMI_TEST_SECURITY_GROUP_ID }}
+          AMI_TEST_SUBNET_ID: ${{ vars.AWS_AMI_TEST_SUBNET_ID }}
+        run: ./scripts/validate-ami-import.sh image-output/worker/lucidity-centos-bootstrap-ami.raw

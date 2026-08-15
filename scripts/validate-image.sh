@@ -16,7 +16,7 @@ fi
 
 role=$("${engine}" image inspect --format '{{ index .Config.Labels "io.coolify-aws.role" }}' "${image}")
 case "${role}" in
-    controller|worker) ;;
+    benchmark-base|controller|worker) ;;
     *) echo "unexpected image role: ${role:-<unset>}" >&2; exit 1 ;;
 esac
 

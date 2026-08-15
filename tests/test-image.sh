@@ -11,6 +11,7 @@ required_files=(
     ci/images.env
     ci/worker-changes.sh
     .github/workflows/publish.yml
+    .github/workflows/ami-switch-benchmark.yml
     roles/common/etc/docker/daemon.json
     roles/common/etc/selinux/config
     roles/common/etc/ssh/sshd_config.d/40-coolify-aws.conf
@@ -81,6 +82,9 @@ grep -Eq '^SHELLCHECK_IMAGE=.+@sha256:[0-9a-f]{64}$' ci/images.env
 grep -Eq '^ACTIONLINT_IMAGE=.+@sha256:[0-9a-f]{64}$' ci/images.env
 grep -Eq '^REGISTRY_IMAGE=.+@sha256:[0-9a-f]{64}$' ci/images.env
 grep -Fq 'IMAGE_VERSION' scripts/build.sh
+grep -Fq 'benchmark-base|controller|worker' scripts/build.sh
+grep -Fq 'benchmark-base|controller|worker' scripts/validate-image.sh
+grep -Fq 'FROM common AS benchmark-base' Containerfile
 grep -Fq '/usr/lib/coolify-aws/image-version' Containerfile
 grep -Fq '=~ ^[[:alnum:].:-]+$' scripts/vm-init.sh
 grep -Fq '=~ ^[[:alnum:].:-]+$' scripts/vm-validate-update.sh
@@ -207,6 +211,15 @@ grep -Fq "worker_image_ref=\"\${ECR_REPOSITORY_URL}:sha-\${GITHUB_SHA}\"" .githu
 grep -Fq 'retained AMIs require the disposable EC2 launch gate' scripts/validate-ami-import.sh
 grep -Fq 'artifact_purpose=ami-release' scripts/validate-ami-import.sh
 grep -Fq 'completed_successfully=true' scripts/validate-ami-import.sh
+grep -Fq 'AMI_SWITCH_TARGET_REF' scripts/validate-ami-import.sh
+grep -Fq 'CENTOS_BOOTC_IMAGE: quay.io/centos-bootc/centos-bootc:stream10@sha256:' .github/workflows/ami-switch-benchmark.yml
+grep -Fq './scripts/build.sh benchmark-base' .github/workflows/ami-switch-benchmark.yml
+# This is a literal workflow shell variable.
+# shellcheck disable=SC2016
+grep -Fq './scripts/validate-image.sh "${BOOTSTRAP_IMAGE}"' .github/workflows/ami-switch-benchmark.yml
+# This is a literal GitHub Actions expression.
+# shellcheck disable=SC2016
+grep -Fq 'AMI_SWITCH_TARGET_REF: ${{ env.WORKER_IMAGE_REF }}' .github/workflows/ami-switch-benchmark.yml
 grep -Fq 'nix build --no-link --print-out-paths .#coldsnap' .github/workflows/ami.yml
 grep -Fq 'coldsnap = pkgs.coldsnap;' flake.nix
 if rg -n -i 'vmimport|vm import|import-snapshot|AMI_IMPORT_BUCKET|VMIMPORT_ROLE_NAME|snapshot_upload_mode' \

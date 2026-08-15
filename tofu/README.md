@@ -127,6 +127,26 @@ OpenTofu selection. Rerunning the same commit reuses the already validated immut
 release instead of creating a duplicate. Registration proves AWS accepts the disk and
 AMI metadata, while the separate disposable T3a gate proves boot and guest behavior.
 
+### Disposable bootc switch benchmark
+
+`Benchmark bootc switch delivery` is an opt-in experiment for comparing retained AMI
+delivery with a reusable bootc bootstrap AMI. It builds a management-enabled CentOS
+Stream 10 bootc image from a digest-pinned upstream base, converts and registers that
+base through the same encrypted EBS Direct path, and launches it as a keyless
+`t3a.small`. SSM then configures instance-role ECR authentication, runs `bootc switch`
+to the current main commit's immutable AlmaLinux worker image, schedules a reboot, and
+repeats the production guest assertions after the new deployment boots. The job reports
+switch/pull and reboot/validation durations separately and always terminates the
+instance, deregisters the benchmark AMI, and deletes its snapshot.
+
+The experiment deliberately uses private ECR rather than GHCR so the AMI strategy is
+the only changed variable and no static registry credential is introduced. The
+upstream image-builder `--aws-*` uploader is not used: its documented AMI path requires
+an S3 bucket and the VM Import service role. Only dispatch this workflow from `main`
+after `Publish bootc images` has published the matching `sha-<full-commit>` worker tag.
+The benchmark base contains SSM Agent and the ECR credential helper because a stock
+CentOS bootc base does not provide the repository's keyless management contract.
+
 To repeat that boot gate, temporarily set `enable_network`,
 `enable_instance_management`, and `enable_ami_launch_validation` to `true`, keep
 `enable_nat_gateways` and `enable_runtime_secrets` false, apply the reviewed plan,

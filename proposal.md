@@ -947,6 +947,17 @@ upload completed in about 33 seconds and the AMI was launchable about 48 seconds
 upload began. The complete AWS validation and cleanup step took 4 minutes 54 seconds,
 compared with roughly 14 minutes for the earlier VM Import phase alone.
 
+Keep a separate, disposable benchmark for the alternative runtime-switch model. The
+benchmark may create a digest-pinned, management-enabled CentOS Stream 10 bootc base
+AMI through EBS Direct, launch it without an SSH key, switch it through SSM to the
+current immutable AlmaLinux worker ECR image, reboot, and run the normal guest checks
+on the switched host. Record the OCI pull/stage time independently from reboot and
+validation, then remove the benchmark instance, AMI, and snapshot. Do not use the
+upstream image-builder AWS uploader for this comparison because its documented path
+requires S3 staging and the VM Import service role. Do not replace ECR with GHCR in the
+same benchmark; registry choice and AMI delivery strategy must remain separate
+variables.
+
 ---
 
 # 24. Do not overuse EC2 Image Builder
