@@ -143,7 +143,9 @@ The experiment deliberately uses private ECR rather than GHCR so the AMI strateg
 the only changed variable and no static registry credential is introduced. The
 upstream image-builder `--aws-*` uploader is not used: its documented AMI path requires
 an S3 bucket and the VM Import service role. Only dispatch this workflow from `main`
-after `Publish bootc images` has published the matching `sha-<full-commit>` worker tag.
+after `Publish bootc images` has published the selected `sha-<full-commit>` worker tag.
+By default it selects the workflow revision; the optional `worker_revision` input can
+select an earlier, already-published immutable revision for workflow-only retries.
 The benchmark base contains SSM Agent and the ECR credential helper because a stock
 CentOS bootc base does not provide the repository's keyless management contract.
 

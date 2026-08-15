@@ -214,6 +214,15 @@ grep -Fq 'completed_successfully=true' scripts/validate-ami-import.sh
 grep -Fq 'AMI_SWITCH_TARGET_REF' scripts/validate-ami-import.sh
 grep -Fq 'CENTOS_BOOTC_IMAGE: quay.io/centos-bootc/centos-bootc:stream10@sha256:' .github/workflows/ami-switch-benchmark.yml
 grep -Fq './scripts/build.sh benchmark-base' .github/workflows/ami-switch-benchmark.yml
+# These are literal workflow shell expressions.
+# shellcheck disable=SC2016
+grep -Fq 'image_without_tag=${WORKER_IMAGE_REF%:*}' .github/workflows/ami-switch-benchmark.yml
+# shellcheck disable=SC2016
+grep -Fq 'repository_name=${image_without_tag#*/}' .github/workflows/ami-switch-benchmark.yml
+# This is a literal GitHub Actions expression.
+# shellcheck disable=SC2016
+grep -Fq 'TARGET_REVISION: ${{ inputs.worker_revision || github.sha }}' .github/workflows/ami-switch-benchmark.yml
+grep -Fq 'worker_revision must be a full lowercase Git commit SHA' .github/workflows/ami-switch-benchmark.yml
 # This is a literal workflow shell variable.
 # shellcheck disable=SC2016
 grep -Fq './scripts/validate-image.sh "${BOOTSTRAP_IMAGE}"' .github/workflows/ami-switch-benchmark.yml

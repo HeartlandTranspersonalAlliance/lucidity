@@ -8,6 +8,10 @@ on:
         required: true
         type: boolean
         default: false
+      worker_revision:
+        description: Full Git revision of an already-published immutable worker image (defaults to the workflow revision)
+        required: false
+        type: string
 
 concurrency:
   group: ami-switch-benchmark-${{ github.ref }}
@@ -22,6 +26,7 @@ env:
   CENTOS_BOOTC_IMAGE: quay.io/centos-bootc/centos-bootc:stream10@sha256:2b7e3b1abf8db094d1efb083721dc0f72e6feeef2355fc16ea010d0266b2bb95
   CI_TOOLS_IMAGE: localhost/coolify-aws-ci-tools:ami-switch-benchmark
   BOOTSTRAP_IMAGE: localhost/lucidity-centos-bootc-bootstrap:benchmark
+  TARGET_REVISION: ${{ inputs.worker_revision || github.sha }}
 
 jobs:
   benchmark:
@@ -49,7 +54,11 @@ jobs:
             echo "AWS_ECR_WORKER_REPOSITORY_URL must be a private commercial-region ECR repository" >&2
             exit 1
           }
-          echo "WORKER_IMAGE_REF=${WORKER_REPOSITORY_URL}:sha-${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          [[ "${TARGET_REVISION}" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "worker_revision must be a full lowercase Git commit SHA" >&2
+            exit 1
+          }
+          echo "WORKER_IMAGE_REF=${WORKER_REPOSITORY_URL}:sha-${TARGET_REVISION}" >> "${GITHUB_ENV}"
 
       - name: Configure short-lived AWS credentials
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
@@ -62,7 +71,8 @@ jobs:
 
       - name: Verify immutable AlmaLinux worker target
         run: |
-          repository_name=${WORKER_IMAGE_REF#*/}
+          image_without_tag=${WORKER_IMAGE_REF%:*}
+          repository_name=${image_without_tag#*/}
           image_tag=${WORKER_IMAGE_REF##*:}
           image=$(aws ecr batch-get-image \
             --region "${AWS_REGION}" \
@@ -117,7 +127,7 @@ jobs:
           AMI_LIFECYCLE: disposable
           AMI_ROLE: worker
           AMI_SNAPSHOT_KMS_KEY_ARN: ${{ vars.AWS_AMI_SNAPSHOT_KMS_KEY_ARN }}
-          AMI_SOURCE_REVISION: ${{ github.sha }}
+          AMI_SOURCE_REVISION: ${{ env.TARGET_REVISION }}
           AMI_SWITCH_TARGET_REF: ${{ env.WORKER_IMAGE_REF }}
           AMI_TEST_INSTANCE_PROFILE_NAME: ${{ vars.AWS_AMI_TEST_INSTANCE_PROFILE_NAME }}
           AMI_TEST_INSTANCE_TYPE: t3a.small
