@@ -129,6 +129,8 @@ grep -Fq 'resource "aws_kms_key" "ami_snapshot"' tofu/modules/ami-import-validat
 grep -Fq 'ebs:StartSnapshot' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'ebs:PutSnapshotBlock' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'ebs:CompleteSnapshot' tofu/modules/ami-import-validation/main.tf
+grep -Fq 'kms:GenerateDataKey' tofu/modules/ami-import-validation/main.tf
+grep -Fq 'kms:GenerateDataKeyWithoutPlaintext' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'kms:GrantIsForAWSResource' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'identifiers = ["vmie.amazonaws.com"]' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'variable = "iam:PassedToService"' tofu/modules/ami-import-validation/main.tf
