@@ -14,6 +14,8 @@ enable_nat_gateways = false
 
 github_repository     = "HeartlandTranspersonalAlliance/lucidity"
 github_publish_branch = "main"
+# Immutable GitHub identity values are defined as validated defaults in variables.tf.
+# Confirm them with `gh api repos/OWNER/REPO` after a repository transfer.
 
 # Set this when the AWS account already has the account-level GitHub provider.
 # github_oidc_provider_arn = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"

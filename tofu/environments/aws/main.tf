@@ -53,20 +53,24 @@ module "registry" {
 module "github_oidc" {
   source = "../../modules/github-oidc"
 
-  github_repository = var.github_repository
-  github_branch     = var.github_publish_branch
-  oidc_provider_arn = var.github_oidc_provider_arn
-  repository_arns   = toset(values(module.registry.repository_arns))
+  github_repository          = var.github_repository
+  github_repository_owner_id = var.github_repository_owner_id
+  github_repository_id       = var.github_repository_id
+  github_branch              = var.github_publish_branch
+  oidc_provider_arn          = var.github_oidc_provider_arn
+  repository_arns            = toset(values(module.registry.repository_arns))
 }
 
 module "ami_import_validation" {
   source = "../../modules/ami-import-validation"
 
-  aws_region        = var.aws_region
-  environment       = var.environment
-  github_branch     = var.github_publish_branch
-  github_repository = var.github_repository
-  oidc_provider_arn = module.github_oidc.oidc_provider_arn
-  project_name      = var.vpc_name
-  tags              = var.tags
+  aws_region                 = var.aws_region
+  environment                = var.environment
+  github_branch              = var.github_publish_branch
+  github_repository          = var.github_repository
+  github_repository_owner_id = var.github_repository_owner_id
+  github_repository_id       = var.github_repository_id
+  oidc_provider_arn          = module.github_oidc.oidc_provider_arn
+  project_name               = var.vpc_name
+  tags                       = var.tags
 }

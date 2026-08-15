@@ -8,6 +8,26 @@ variable "github_repository" {
   }
 }
 
+variable "github_repository_owner_id" {
+  description = "Immutable numeric ID of the GitHub repository owner."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9]+$", var.github_repository_owner_id))
+    error_message = "The GitHub repository owner ID must contain only digits."
+  }
+}
+
+variable "github_repository_id" {
+  description = "Immutable numeric ID of the GitHub repository."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9]+$", var.github_repository_id))
+    error_message = "The GitHub repository ID must contain only digits."
+  }
+}
+
 variable "github_branch" {
   description = "Only workflows on this branch may assume the publishing role."
   type        = string

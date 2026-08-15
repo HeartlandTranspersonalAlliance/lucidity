@@ -12,7 +12,7 @@ This stack creates the AWS resources needed to publish lucidity bootc OCI images
 - immutable controller and worker ECR version tags, one controlled mutable `stable` channel, scan-on-push, and bounded retention;
 - a private, auto-expiring S3 bucket and project-scoped IAM roles for disposable GitHub AMI import validation;
 - an account-level GitHub Actions OIDC provider, unless an existing provider ARN is supplied;
-- a repository-scoped IAM role that only trusts `main` in `HeartlandTranspersonalAlliance/lucidity`;
+- a repository-scoped IAM role that only trusts `main` for the immutable owner and repository IDs of `HeartlandTranspersonalAlliance/lucidity`;
 - least-privilege permissions to authenticate to ECR and push to these two repositories.
 
 It does not create EC2 instances, AMIs, state storage, or secret values. Networking,
@@ -82,6 +82,11 @@ OpenTofu creates an empty private S3 import bucket, the project-scoped VM Import
 service role, and a GitHub OIDC role trusted only for this repository's `main` branch.
 Objects under `validation/` expire after one day if workflow cleanup fails.
 
+The trust subjects include GitHub's immutable numeric owner and repository IDs. This
+prevents a renamed or recycled repository name from inheriting AWS access. Confirm
+`github_repository_owner_id` and `github_repository_id` with the GitHub API after a
+repository transfer before applying any trust-policy update.
+
 Pull requests run `.github/workflows/ami.yml` without AWS credentials to build and
 validate the raw AMD64 artifact. After applying the foundation from reviewed `main`,
 configure these non-secret GitHub repository variables from the OpenTofu outputs:
@@ -93,11 +98,13 @@ configure these non-secret GitHub repository variables from the OpenTofu outputs
 | `AWS_VMIMPORT_ROLE_NAME` | `vmimport_role_name` |
 
 Then manually run **Validate AMI compatibility** with `run_aws_import` enabled. The
-workflow uploads the raw artifact, specifies AMD64, UEFI, Linux, and the generic
-`RunInstances` usage operation, waits for VM Import/Export, validates the returned AMI,
-and removes the AMI, EBS snapshots, and S3 object. A successful import proves AWS
-accepts the artifact metadata; a later disposable T3a launch must still prove boot and
-guest behavior.
+workflow uploads the raw artifact and imports it as an encrypted EBS snapshot. It then
+registers a disposable AMD64, UEFI, HVM, ENA-enabled, IMDSv2-only AMI, validates the
+returned metadata, and removes the AMI, EBS snapshot, and S3 object. Snapshot import is
+used because AWS VM Import/Export does not list AlmaLinux in its OS matrix and
+`import-image` rejects the AlmaLinux 10 bootc disk during OS detection. A successful
+registration proves AWS accepts the disk and AMI metadata; a later disposable T3a
+launch must still prove boot and guest behavior.
 
 ## Shell and bootstrap access
 

@@ -83,8 +83,8 @@ run "default_registry_and_oidc_contract" {
   }
 
   assert {
-    condition     = output.github_oidc_subject == "repo:HeartlandTranspersonalAlliance/lucidity:ref:refs/heads/main"
-    error_message = "The GitHub OIDC trust must remain restricted to this repository's main branch."
+    condition     = output.github_oidc_subject == "repo:HeartlandTranspersonalAlliance@256628390/lucidity@1333819830:ref:refs/heads/main"
+    error_message = "The GitHub OIDC trust must remain restricted to this immutable repository identity and main branch."
   }
 
   assert {
@@ -130,8 +130,8 @@ run "default_registry_and_oidc_contract" {
   }
 
   assert {
-    condition     = output.github_ami_validation_subject == "repo:HeartlandTranspersonalAlliance/lucidity:ref:refs/heads/main"
-    error_message = "AMI import credentials must remain restricted to this repository's main branch."
+    condition     = output.github_ami_validation_subject == "repo:HeartlandTranspersonalAlliance@256628390/lucidity@1333819830:ref:refs/heads/main"
+    error_message = "AMI import credentials must remain restricted to this immutable repository identity and main branch."
   }
 
   assert {

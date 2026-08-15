@@ -116,6 +116,28 @@ variable "github_repository" {
   default     = "HeartlandTranspersonalAlliance/lucidity"
 }
 
+variable "github_repository_owner_id" {
+  description = "Immutable GitHub owner ID included in this repository's OIDC subject."
+  type        = string
+  default     = "256628390"
+
+  validation {
+    condition     = can(regex("^[0-9]+$", var.github_repository_owner_id))
+    error_message = "The GitHub repository owner ID must contain only digits."
+  }
+}
+
+variable "github_repository_id" {
+  description = "Immutable GitHub repository ID included in this repository's OIDC subject."
+  type        = string
+  default     = "1333819830"
+
+  validation {
+    condition     = can(regex("^[0-9]+$", var.github_repository_id))
+    error_message = "The GitHub repository ID must contain only digits."
+  }
+}
+
 variable "github_publish_branch" {
   description = "Git branch permitted to publish images through OIDC."
   type        = string
