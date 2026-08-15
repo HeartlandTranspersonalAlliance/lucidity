@@ -17,7 +17,7 @@ case "${service} ${operation}" in
         printf '%s\n' '{"ImportSnapshotTasks":[{"ImportTaskId":"import-snap-test","SnapshotTaskDetail":{"Status":"completed","Progress":"100","SnapshotId":"snap-test"}}]}'
         ;;
     "ec2 describe-snapshots")
-        printf '%s\n' '{"Snapshots":[{"SnapshotId":"snap-test","Encrypted":true,"State":"completed"}]}'
+        printf '%s\n' '{"Snapshots":[{"SnapshotId":"snap-test","Encrypted":true,"State":"completed","VolumeSize":12}]}'
         ;;
     "ec2 register-image")
         printf '%s\n' '{"ImageId":"ami-test"}'

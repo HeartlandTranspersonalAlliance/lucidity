@@ -24,6 +24,7 @@ VMIMPORT_ROLE_NAME=mock-vmimport \
 
 grep -Fq 'ec2 run-instances' "${mock_log}"
 grep -Fq -- '--count 1' "${mock_log}"
+grep -Fq -- '"VolumeSize":12' "${mock_log}"
 grep -Fq -- '--credit-specification CpuCredits=standard' "${mock_log}"
 grep -Fq 'HttpEndpoint=enabled,HttpTokens=required,HttpPutResponseHopLimit=2,InstanceMetadataTags=enabled' "${mock_log}"
 grep -Fq 'ssm send-command' "${mock_log}"
