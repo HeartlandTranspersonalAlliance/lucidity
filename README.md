@@ -51,16 +51,15 @@ Implemented:
 - Terraform-compatible OpenTofu modules for immutable ECR repositories and branch-restricted GitHub Actions OIDC publishing;
 - a three-AZ VPC with public/private subnets, optional NAT Gateways, tiered security groups, and VPC Flow Logs;
 - an empty controller runtime secret, dedicated rotating KMS key, and least-privilege EC2 instance profile, with no secret value in OpenTofu state.
-- a dedicated AMI snapshot KMS key, EBS Direct API upload path, and private auto-expiring VM Import fallback for disposable compatibility tests.
+- a dedicated AMI snapshot KMS key and EBS Direct API upload path for disposable validation and retained releases.
 - a manually gated retained worker-AMI release mode and hardened launch templates that require explicit self-owned AMI IDs.
 
 The upstream base currently makes `bootc` and `rpm-ostree` depend on Podman, so Podman remains installed. It is a bootc host dependency/tool, not the production application runtime; Coolify workloads use Docker Engine.
 
 The disposable AWS snapshot-to-AMI registration and T3a boot gates have passed on
 merged `main`. The guest was validated through SSM without a key pair or inbound
-SSH, and cleanup removed the instance, AMI, snapshot, and S3 object. The default
-transport now writes the raw disk directly to EBS; VM Import remains an explicit
-fallback. A retained release pulls the immutable private ECR candidate for the full
+SSH, and cleanup removed the instance, AMI, and snapshot. The delivery transport
+writes the raw disk directly to EBS. A retained release pulls the immutable private ECR candidate for the full
 source commit, uses that real registry reference as the bootc source, runs the same EBS
 Direct and T3a/SSM gates, and preserves the validated AMI and encrypted snapshot. EC2 launch
 templates are defined but remain disabled until exact controller and worker AMI IDs are
@@ -181,7 +180,7 @@ After VM boot and persistence testing succeeds, generate an AWS-format disk arti
 make ami-worker
 ```
 
-Artifacts are placed under `image-output/` and ignored by Git. An `.ami` artifact is not an EC2 AMI: it still requires upload to an EBS snapshot and explicit EC2 registration. The optimized validation path uses the EBS Direct APIs; controlled S3 upload and VM Import remain the compatibility fallback. This command performs neither path and receives no AWS credentials. See [image/README.md](image/README.md) for the boundary.
+Artifacts are placed under `image-output/` and ignored by Git. An `.ami` artifact is not an EC2 AMI: it still requires upload to an EBS snapshot and explicit EC2 registration. The validation and release path uses the EBS Direct APIs. This command performs no AWS upload and receives no AWS credentials. See [image/README.md](image/README.md) for the boundary.
 
 ## Boot and test the worker locally
 

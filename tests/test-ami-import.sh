@@ -7,13 +7,12 @@ trap 'rm -rf "${mock_dir}"' EXIT
 
 artifact="${mock_dir}/worker.raw"
 direct_log="${mock_dir}/direct.log"
-fallback_log="${mock_dir}/fallback.log"
 release_log="${mock_dir}/release.log"
 release_output="${mock_dir}/release.output"
 rerun_log="${mock_dir}/rerun.log"
 rerun_output="${mock_dir}/rerun.output"
 kms_key_arn=arn:aws:kms:us-east-2:123456789012:key/11111111-2222-3333-4444-555555555555
-touch "${artifact}" "${direct_log}" "${fallback_log}" "${release_log}" "${release_output}" "${rerun_log}" "${rerun_output}"
+touch "${artifact}" "${direct_log}" "${release_log}" "${release_output}" "${rerun_log}" "${rerun_output}"
 
 AWS_MOCK_LOG="${direct_log}" \
 AWS_MOCK_SNAPSHOT_ID=snap-123abc \
@@ -44,7 +43,7 @@ grep -Fq 'ec2 deregister-image' "${direct_log}"
 grep -Fq 'ec2 delete-snapshot' "${direct_log}"
 
 if grep -Eq '(^| )(s3 cp|s3 rm|ec2 import-snapshot)( |$)' "${direct_log}"; then
-    echo "EBS Direct API validation unexpectedly used the VM Import transport" >&2
+    echo "EBS Direct API validation unexpectedly used an S3 import transport" >&2
     exit 1
 fi
 
@@ -65,28 +64,6 @@ delete_snapshot_line=$(grep -n -m1 'ec2 delete-snapshot' "${direct_log}" | cut -
     echo "cleanup must terminate the instance before deregistering the AMI and deleting the snapshot" >&2
     exit 1
 }
-
-AWS_MOCK_LOG="${fallback_log}" \
-AWS_MOCK_SNAPSHOT_ID=snap-456def \
-AWS_REGION=us-east-2 \
-AMI_IMPORT_BUCKET=mock-import-bucket \
-AMI_LAUNCH_VALIDATION=false \
-AMI_SNAPSHOT_UPLOAD_MODE=vmimport \
-GITHUB_RUN_ID=mock-fallback \
-PATH="${repo_root}/tests/fixtures:${PATH}" \
-VMIMPORT_ROLE_NAME=mock-vmimport \
-    "${repo_root}/scripts/validate-ami-import.sh" "${artifact}"
-
-grep -Fq 's3 cp' "${fallback_log}"
-grep -Fq 'ec2 import-snapshot' "${fallback_log}"
-grep -Fq -- '--role-name mock-vmimport' "${fallback_log}"
-grep -Fq 'ec2 register-image' "${fallback_log}"
-grep -Fq 'ec2 delete-snapshot' "${fallback_log}"
-grep -Fq 's3 rm' "${fallback_log}"
-if grep -Fq 'coldsnap ' "${fallback_log}"; then
-    echo "VM Import fallback unexpectedly used coldsnap" >&2
-    exit 1
-fi
 
 AWS_MOCK_LOG="${release_log}" \
 AWS_MOCK_SNAPSHOT_ID=snap-789abc \
@@ -146,4 +123,4 @@ if grep -Eq '(^| )(coldsnap|ec2 register-image|ec2 run-instances|ec2 deregister-
     exit 1
 fi
 
-echo "mocked EBS Direct API, retained release, VM Import fallback, and T3a launch assertions passed"
+echo "mocked EBS Direct API, retained release, and T3a launch assertions passed"

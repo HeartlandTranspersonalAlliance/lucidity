@@ -153,11 +153,6 @@ output "runtime_secrets_kms_key_arn" {
   value       = var.enable_runtime_secrets ? module.runtime_secrets[0].kms_key_arn : null
 }
 
-output "ami_import_bucket_name" {
-  description = "Private S3 bucket used by the disposable GitHub AMI validation fallback."
-  value       = module.ami_import_validation.bucket_name
-}
-
 output "ami_snapshot_kms_key_arn" {
   description = "Customer-managed KMS key ARN for encrypted AMI snapshot uploads."
   value       = module.ami_import_validation.snapshot_kms_key_arn
@@ -171,11 +166,6 @@ output "github_ami_validation_role_arn" {
 output "github_ami_validation_subject" {
   description = "Exact GitHub OIDC subject allowed to run AMI snapshot validation."
   value       = module.ami_import_validation.github_subject
-}
-
-output "vmimport_role_name" {
-  description = "VM Import Export service role used for disposable AMI validation."
-  value       = module.ami_import_validation.vmimport_role_name
 }
 
 output "ami_launch_validation_enabled" {
