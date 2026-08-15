@@ -373,14 +373,18 @@ if [[ ${launch_validation} == true ]]; then
 
     if [[ -n ${switch_target_ref} ]]; then
         switch_registry=${switch_target_ref%%/*}
+        switch_auth_json=$(jq -cn \
+            --arg registry "${switch_registry}" \
+            '{auths:{($registry):{}},credHelpers:{($registry):"ecr-login"}}')
+        switch_auth_base64=$(printf '%s' "${switch_auth_json}" | base64 --wrap=0)
         switch_started_at=$(date +%s)
         switch_commands=$(jq -cn \
-            --arg registry "${switch_registry}" \
+            --arg auth_base64 "${switch_auth_base64}" \
             --arg target "${switch_target_ref}" \
             '{commands:[
                 "set -eu",
                 "install -d -m 0700 /run/ostree",
-                ("printf \u0027%s\\n\u0027 \u0027{\\\"auths\\\":{\\\"" + $registry + "\\\":{}},\\\"credHelpers\\\":{\\\"" + $registry + "\\\":\\\"ecr-login\\\"}}\u0027 > /run/ostree/auth.json"),
+                ("printf \u0027%s\u0027 \u0027" + $auth_base64 + "\u0027 | base64 --decode > /run/ostree/auth.json"),
                 "chmod 0600 /run/ostree/auth.json",
                 ("bootc switch \u0027" + $target + "\u0027"),
                 "systemd-run --unit=lucidity-bootc-switch-benchmark-reboot --on-active=10s /usr/bin/systemctl reboot"

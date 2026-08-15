@@ -115,6 +115,7 @@ grep -Fq 'aws ec2 run-instances' scripts/validate-ami-import.sh
 grep -Fq -- '--credit-specification CpuCredits=standard' scripts/validate-ami-import.sh
 grep -Fq 'HttpEndpoint=enabled,HttpTokens=required,HttpPutResponseHopLimit=2' scripts/validate-ami-import.sh
 grep -Fq 'aws ssm send-command' scripts/validate-ami-import.sh
+grep -Fq 'base64 --decode > /run/ostree/auth.json' scripts/validate-ami-import.sh
 # These are literal guest-shell snippets embedded in the jq command document.
 # shellcheck disable=SC2016
 grep -Fq 'test \"$(getenforce)\" = Enforcing' scripts/validate-ami-import.sh
