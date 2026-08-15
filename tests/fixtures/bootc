@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+[[ ${1:-} == status ]] || { echo "unsupported mocked bootc command" >&2; exit 1; }
+: "${MOCK_BOOTC_IMAGE:?MOCK_BOOTC_IMAGE is required}"
+
+jq -cn --arg image "${MOCK_BOOTC_IMAGE}" '{
+    status: {
+        booted: {
+            image: {
+                image: {
+                    image: $image
+                }
+            }
+        }
+    }
+}'

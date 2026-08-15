@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+auth_dir=${BOOTC_AUTH_DIR:-/run/ostree}
+auth_file=${auth_dir}/auth.json
+
+image_ref=$(bootc status --format=json --format-version=1 --booted | jq -er '.status.booted.image.image.image')
+registry=${image_ref%%/*}
+
+if [[ ! ${registry} =~ ^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com$ ]]; then
+    rm -f "${auth_file}"
+    echo "Booted image does not use a private Amazon ECR registry; no OSTree registry helper configured"
+    exit 0
+fi
+
+install -d -m 0700 "${auth_dir}"
+temporary_file=$(mktemp "${auth_dir}/auth.json.XXXXXX")
+trap 'rm -f "${temporary_file}"' EXIT
+
+jq -n --arg registry "${registry}" '{
+    auths: {($registry): {}},
+    credHelpers: {($registry): "ecr-login"}
+}' > "${temporary_file}"
+chmod 0600 "${temporary_file}"
+mv -f "${temporary_file}" "${auth_file}"
+trap - EXIT
+
+echo "Configured ephemeral bootc authentication for ${registry}"

@@ -51,6 +51,66 @@ variable "enable_ami_launch_validation" {
   default     = false
 }
 
+variable "enable_ec2_launch_templates" {
+  description = "Create hardened controller and worker launch templates from explicitly selected retained AMI IDs."
+  type        = bool
+  default     = false
+
+  validation {
+    condition = !var.enable_ec2_launch_templates || (
+      var.enable_network &&
+      var.enable_instance_management
+    )
+    error_message = "EC2 launch templates require networking and instance management to be enabled."
+  }
+}
+
+variable "controller_ami_id" {
+  description = "Explicit retained controller AMI ID. No newest-image lookup or automatic rollout is performed."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.controller_ami_id == null || can(regex("^ami-[0-9a-f]+$", var.controller_ami_id))
+    error_message = "The controller AMI ID must be null or an ami-* identifier."
+  }
+}
+
+variable "worker_ami_id" {
+  description = "Explicit retained worker AMI ID. No newest-image lookup or automatic rollout is performed."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.worker_ami_id == null || can(regex("^ami-[0-9a-f]+$", var.worker_ami_id))
+    error_message = "The worker AMI ID must be null or an ami-* identifier."
+  }
+}
+
+variable "controller_root_volume_size_gib" {
+  description = "Encrypted gp3 root volume size for the future controller launch template."
+  type        = number
+  default     = 40
+
+  validation {
+    condition     = var.controller_root_volume_size_gib >= 12
+    error_message = "The controller root volume must be at least 12 GiB."
+  }
+}
+
+variable "worker_root_volume_size_gib" {
+  description = "Encrypted gp3 root volume size for the future worker launch template."
+  type        = number
+  default     = 80
+
+  validation {
+    condition     = var.worker_root_volume_size_gib >= 12
+    error_message = "The worker root volume must be at least 12 GiB."
+  }
+}
+
 variable "vpc_name" {
   description = "Name prefix for production VPC resources."
   type        = string

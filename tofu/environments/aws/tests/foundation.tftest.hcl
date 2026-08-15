@@ -23,6 +23,12 @@ mock_provider "aws" {
     }
   }
 
+  mock_resource "aws_ecr_repository" {
+    defaults = {
+      arn = "arn:aws:ecr:us-east-2:123456789012:repository/lucidity/bootc/mock"
+    }
+  }
+
   mock_resource "aws_kms_key" {
     defaults = {
       arn    = "arn:aws:kms:us-east-2:123456789012:key/11111111-2222-3333-4444-555555555555"
@@ -45,6 +51,13 @@ mock_provider "aws" {
   mock_resource "aws_subnet" {
     defaults = {
       id = "subnet-0123456789abcdef0"
+    }
+  }
+
+  mock_resource "aws_launch_template" {
+    defaults = {
+      id             = "lt-0123456789abcdef0"
+      latest_version = 1
     }
   }
 
@@ -81,6 +94,20 @@ mock_provider "aws" {
       json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}"
     }
   }
+
+  mock_data "aws_ami" {
+    defaults = {
+      architecture        = "x86_64"
+      boot_mode           = "uefi"
+      ena_support         = true
+      image_id            = "ami-0123456789abcdef0"
+      imds_support        = "v2.0"
+      owner_id            = "123456789012"
+      root_device_type    = "ebs"
+      state               = "available"
+      virtualization_type = "hvm"
+    }
+  }
 }
 
 run "default_registry_and_oidc_contract" {
@@ -110,6 +137,14 @@ run "default_registry_and_oidc_contract" {
       output.worker_instance_type == "t3a.large"
     )
     error_message = "The initial controller and worker must retain the selected T3a defaults."
+  }
+
+  assert {
+    condition = (
+      length(output.ec2_launch_template_ids) == 0 &&
+      length(output.selected_ami_ids) == 0
+    )
+    error_message = "Launch templates must remain absent until retained AMI IDs are explicitly selected."
   }
 
   assert {
@@ -221,6 +256,27 @@ run "existing_oidc_provider" {
   assert {
     condition     = output.github_oidc_provider_arn == "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
     error_message = "An existing account-level GitHub OIDC provider must be reusable."
+  }
+}
+
+run "explicit_ami_launch_template_contract" {
+  command = plan
+
+  variables {
+    controller_ami_id           = "ami-01111111111111111"
+    enable_ec2_launch_templates = true
+    enable_instance_management  = true
+    enable_network              = true
+    worker_ami_id               = "ami-02222222222222222"
+  }
+
+  assert {
+    condition = (
+      length(output.ec2_launch_template_ids) == 2 &&
+      output.ec2_launch_template_latest_versions.controller == 1 &&
+      output.ec2_launch_template_latest_versions.worker == 1
+    )
+    error_message = "Explicit retained AMIs must create one numerically versioned launch template per node role."
   }
 }
 

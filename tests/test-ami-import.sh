@@ -8,8 +8,12 @@ trap 'rm -rf "${mock_dir}"' EXIT
 artifact="${mock_dir}/worker.raw"
 direct_log="${mock_dir}/direct.log"
 fallback_log="${mock_dir}/fallback.log"
+release_log="${mock_dir}/release.log"
+release_output="${mock_dir}/release.output"
+rerun_log="${mock_dir}/rerun.log"
+rerun_output="${mock_dir}/rerun.output"
 kms_key_arn=arn:aws:kms:us-east-2:123456789012:key/11111111-2222-3333-4444-555555555555
-touch "${artifact}" "${direct_log}" "${fallback_log}"
+touch "${artifact}" "${direct_log}" "${fallback_log}" "${release_log}" "${release_output}" "${rerun_log}" "${rerun_output}"
 
 AWS_MOCK_LOG="${direct_log}" \
 AWS_MOCK_SNAPSHOT_ID=snap-123abc \
@@ -84,4 +88,62 @@ if grep -Fq 'coldsnap ' "${fallback_log}"; then
     exit 1
 fi
 
-echo "mocked EBS Direct API, VM Import fallback, and T3a launch assertions passed"
+AWS_MOCK_LOG="${release_log}" \
+AWS_MOCK_SNAPSHOT_ID=snap-789abc \
+AWS_REGION=us-east-2 \
+AMI_LAUNCH_VALIDATION=true \
+AMI_EXPECTED_BOOTC_IMAGE_REF=123456789012.dkr.ecr.us-east-2.amazonaws.com/lucidity/bootc/worker:sha-0123456789abcdef0123456789abcdef01234567 \
+AMI_LIFECYCLE=retained \
+AMI_ROLE=worker \
+AMI_SNAPSHOT_KMS_KEY_ARN="${kms_key_arn}" \
+AMI_SOURCE_REVISION=0123456789abcdef0123456789abcdef01234567 \
+AMI_TEST_INSTANCE_PROFILE_NAME=mock-worker-profile \
+AMI_TEST_INSTANCE_TYPE=t3a.small \
+AMI_TEST_SECURITY_GROUP_ID=sg-test \
+AMI_TEST_SUBNET_ID=subnet-test \
+COLDSNAP_COMMAND="${repo_root}/tests/fixtures/coldsnap" \
+GITHUB_OUTPUT="${release_output}" \
+GITHUB_RUN_ID=mock-release \
+PATH="${repo_root}/tests/fixtures:${PATH}" \
+    "${repo_root}/scripts/validate-ami-import.sh" "${artifact}"
+
+grep -Fq -- '--tag Key=Purpose,Value=ami-release' "${release_log}"
+grep -Fq -- '--tag Key=Role,Value=worker' "${release_log}"
+grep -Fq -- '--tag Key=SourceRevision,Value=0123456789abcdef0123456789abcdef01234567' "${release_log}"
+grep -Fq 'ec2 terminate-instances' "${release_log}"
+grep -Fq 'ami_id=ami-test' "${release_output}"
+grep -Fq 'snapshot_id=snap-789abc' "${release_output}"
+if grep -Eq 'ec2 (deregister-image|delete-snapshot)' "${release_log}"; then
+    echo "a successful retained AMI release was removed during cleanup" >&2
+    exit 1
+fi
+
+AWS_MOCK_EXISTING_AMI=true \
+AWS_MOCK_LOG="${rerun_log}" \
+AWS_MOCK_SNAPSHOT_ID=snap-789abc \
+AWS_REGION=us-east-2 \
+AMI_LAUNCH_VALIDATION=true \
+AMI_EXPECTED_BOOTC_IMAGE_REF=123456789012.dkr.ecr.us-east-2.amazonaws.com/lucidity/bootc/worker:sha-0123456789abcdef0123456789abcdef01234567 \
+AMI_LIFECYCLE=retained \
+AMI_ROLE=worker \
+AMI_SNAPSHOT_KMS_KEY_ARN="${kms_key_arn}" \
+AMI_SOURCE_REVISION=0123456789abcdef0123456789abcdef01234567 \
+AMI_TEST_INSTANCE_PROFILE_NAME=mock-worker-profile \
+AMI_TEST_INSTANCE_TYPE=t3a.small \
+AMI_TEST_SECURITY_GROUP_ID=sg-test \
+AMI_TEST_SUBNET_ID=subnet-test \
+COLDSNAP_COMMAND="${repo_root}/tests/fixtures/coldsnap" \
+GITHUB_OUTPUT="${rerun_output}" \
+GITHUB_RUN_ID=mock-rerun \
+PATH="${repo_root}/tests/fixtures:${PATH}" \
+    "${repo_root}/scripts/validate-ami-import.sh" "${artifact}"
+
+grep -Fq 'ec2 describe-images' "${rerun_log}"
+grep -Fq 'ec2 describe-snapshots' "${rerun_log}"
+grep -Fq 'ami_id=ami-abc123' "${rerun_output}"
+if grep -Eq '(^| )(coldsnap|ec2 register-image|ec2 run-instances|ec2 deregister-image|ec2 delete-snapshot)( |$)' "${rerun_log}"; then
+    echo "an idempotent retained AMI rerun recreated or removed AWS resources" >&2
+    exit 1
+fi
+
+echo "mocked EBS Direct API, retained release, VM Import fallback, and T3a launch assertions passed"

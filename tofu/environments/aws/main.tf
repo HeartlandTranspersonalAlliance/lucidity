@@ -39,9 +39,10 @@ module "instance_management" {
   controller_policy_arns = var.enable_runtime_secrets ? toset([
     module.runtime_secrets[0].controller_policy_arn,
   ]) : toset([])
-  environment  = var.environment
-  project_name = var.vpc_name
-  tags         = var.tags
+  ecr_repository_arns = module.registry.repository_arns
+  environment         = var.environment
+  project_name        = var.vpc_name
+  tags                = var.tags
 }
 
 module "registry" {
@@ -82,5 +83,35 @@ module "ami_import_validation" {
   )) : toset([])
   oidc_provider_arn = module.github_oidc.oidc_provider_arn
   project_name      = var.vpc_name
-  tags              = var.tags
+  source_repository_arns = toset([
+    module.registry.repository_arns.worker,
+  ])
+  tags = var.tags
+}
+
+module "ec2_launch_templates" {
+  count  = var.enable_ec2_launch_templates ? 1 : 0
+  source = "../../modules/ec2-launch-templates"
+
+  ami_ids = {
+    controller = var.controller_ami_id
+    worker     = var.worker_ami_id
+  }
+  environment = var.environment
+  instance_profile_names = {
+    controller = module.instance_management[0].instance_profile_names.controller
+    worker     = module.instance_management[0].instance_profile_names.worker
+  }
+  instance_types = {
+    controller = var.controller_instance_type
+    worker     = var.worker_instance_type
+  }
+  project_name            = var.vpc_name
+  root_volume_kms_key_arn = module.ami_import_validation.snapshot_kms_key_arn
+  root_volume_sizes = {
+    controller = var.controller_root_volume_size_gib
+    worker     = var.worker_root_volume_size_gib
+  }
+  security_group_ids = module.network[0].security_group_ids
+  tags               = var.tags
 }

@@ -43,6 +43,21 @@ output "worker_instance_type" {
   value       = var.worker_instance_type
 }
 
+output "ec2_launch_template_ids" {
+  description = "Hardened EC2 launch template IDs keyed by node role, or an empty map until explicitly enabled."
+  value       = var.enable_ec2_launch_templates ? module.ec2_launch_templates[0].launch_template_ids : {}
+}
+
+output "ec2_launch_template_latest_versions" {
+  description = "Latest numeric launch template versions keyed by node role for explicit deployment pinning."
+  value       = var.enable_ec2_launch_templates ? module.ec2_launch_templates[0].launch_template_latest_versions : {}
+}
+
+output "selected_ami_ids" {
+  description = "Self-owned AMI IDs explicitly selected for EC2 launch templates."
+  value       = var.enable_ec2_launch_templates ? module.ec2_launch_templates[0].selected_ami_ids : {}
+}
+
 output "vpc_id" {
   description = "Production VPC ID."
   value       = var.enable_network ? module.network[0].vpc_id : null

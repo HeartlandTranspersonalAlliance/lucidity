@@ -35,8 +35,14 @@ case "${service} ${operation}" in
     "ec2 wait")
         ;;
     "ec2 describe-images")
-        jq -cn --arg snapshot_id "${AWS_MOCK_SNAPSHOT_ID}" \
-            '{Images:[{ImageId:"ami-test",State:"available",Architecture:"x86_64",RootDeviceType:"ebs",BootMode:"uefi",EnaSupport:true,ImdsSupport:"v2.0",BlockDeviceMappings:[{DeviceName:"/dev/xvda",Ebs:{SnapshotId:$snapshot_id,DeleteOnTermination:true,VolumeType:"gp3"}}]}]}'
+        if [[ " $* " == *" --owners self "* && ${AWS_MOCK_EXISTING_AMI:-false} != true ]]; then
+            printf '%s\n' '{"Images":[]}'
+        else
+            image_id=ami-test
+            [[ " $* " == *" --owners self "* ]] && image_id=ami-abc123
+            jq -cn --arg image_id "${image_id}" --arg snapshot_id "${AWS_MOCK_SNAPSHOT_ID}" \
+                '{Images:[{ImageId:$image_id,State:"available",Architecture:"x86_64",RootDeviceType:"ebs",BootMode:"uefi",EnaSupport:true,ImdsSupport:"v2.0",BlockDeviceMappings:[{DeviceName:"/dev/xvda",Ebs:{SnapshotId:$snapshot_id,DeleteOnTermination:true,VolumeType:"gp3"}}]}]}'
+        fi
         ;;
     "ec2 describe-security-groups")
         printf '%s\n' '{"SecurityGroups":[{"GroupId":"sg-test","IpPermissions":[{"IpProtocol":"tcp","FromPort":22,"ToPort":22,"IpRanges":[],"Ipv6Ranges":[],"UserIdGroupPairs":[{"GroupId":"sg-controller"}]}]}]}'

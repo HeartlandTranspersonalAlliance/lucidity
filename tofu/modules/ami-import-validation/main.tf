@@ -218,7 +218,7 @@ data "aws_iam_policy_document" "github_assume_role" {
 resource "aws_iam_role" "github" {
   name                 = "${local.resource_prefix}-github-ami-validation"
   assume_role_policy   = data.aws_iam_policy_document.github_assume_role.json
-  description          = "GitHub Actions role for disposable ${var.project_name} AMI snapshot validation"
+  description          = "GitHub Actions role for ${var.project_name} AMI validation and retained releases"
   max_session_duration = 10800
 
   tags = local.common_tags
@@ -254,7 +254,7 @@ data "aws_iam_policy_document" "github" {
     condition {
       test     = "StringEquals"
       variable = "aws:RequestTag/Purpose"
-      values   = ["ami-validation"]
+      values   = ["ami-release", "ami-validation"]
     }
   }
 
@@ -272,7 +272,7 @@ data "aws_iam_policy_document" "github" {
     condition {
       test     = "StringEquals"
       variable = "aws:ResourceTag/Purpose"
-      values   = ["ami-validation"]
+      values   = ["ami-release", "ami-validation"]
     }
   }
 
@@ -287,6 +287,24 @@ data "aws_iam_policy_document" "github" {
       "kms:ReEncrypt*",
     ]
     resources = [aws_kms_key.ami_snapshot.arn]
+  }
+
+  statement {
+    sid       = "AuthenticateToEcr"
+    effect    = "Allow"
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "PullImmutableAmiSource"
+    effect = "Allow"
+    actions = [
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:BatchGetImage",
+      "ecr:GetDownloadUrlForLayer",
+    ]
+    resources = var.source_repository_arns
   }
 
   statement {
@@ -371,7 +389,7 @@ data "aws_iam_policy_document" "github" {
     condition {
       test     = "StringEquals"
       variable = "aws:RequestTag/Purpose"
-      values   = ["ami-validation"]
+      values   = ["ami-release", "ami-validation"]
     }
   }
 
@@ -391,7 +409,7 @@ data "aws_iam_policy_document" "github" {
       condition {
         test     = "StringEquals"
         variable = "ec2:ResourceTag/Purpose"
-        values   = ["ami-validation"]
+        values   = ["ami-release", "ami-validation"]
       }
     }
   }

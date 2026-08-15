@@ -52,6 +52,7 @@ Implemented:
 - a three-AZ VPC with public/private subnets, optional NAT Gateways, tiered security groups, and VPC Flow Logs;
 - an empty controller runtime secret, dedicated rotating KMS key, and least-privilege EC2 instance profile, with no secret value in OpenTofu state.
 - a dedicated AMI snapshot KMS key, EBS Direct API upload path, and private auto-expiring VM Import fallback for disposable compatibility tests.
+- a manually gated retained worker-AMI release mode and hardened launch templates that require explicit self-owned AMI IDs.
 
 The upstream base currently makes `bootc` and `rpm-ostree` depend on Podman, so Podman remains installed. It is a bootc host dependency/tool, not the production application runtime; Coolify workloads use Docker Engine.
 
@@ -59,9 +60,17 @@ The disposable AWS snapshot-to-AMI registration and T3a boot gates have passed o
 merged `main`. The guest was validated through SSM without a key pair or inbound
 SSH, and cleanup removed the instance, AMI, snapshot, and S3 object. The default
 transport now writes the raw disk directly to EBS; VM Import remains an explicit
-fallback. Next milestones are authenticated ECR image publication, persistent
-controller bootstrap, and EC2
-launch templates. No untested AWS deployment code is presented as complete.
+fallback. A retained release pulls the immutable private ECR candidate for the full
+source commit, uses that real registry reference as the bootc source, runs the same EBS
+Direct and T3a/SSM gates, and preserves the validated AMI and encrypted snapshot. EC2 launch
+templates are defined but remain disabled until exact controller and worker AMI IDs are
+selected. The persistent controller bootstrap is still the blocker for launching the
+production pair. No untested AWS deployment code is presented as complete.
+
+Merged-main run `31899706447` measured the 12 GiB EBS Direct upload at about 33
+seconds and reached a launchable AMI about 48 seconds after upload began. The complete
+upload, registration, boot validation, and cleanup step took 4 minutes 54 seconds;
+the previous VM Import phase alone took about 14 minutes.
 
 ## Why bootc
 
@@ -236,6 +245,19 @@ The registry permits HTTP only on the QEMU host gateway for this disposable test
 `bootc-fetch-apply-updates.timer` is enabled in the image. It is due daily at 11:00 UTC with up to 30 minutes of randomized delay and is persistent across downtime. Its upstream service runs `bootc upgrade --apply --quiet`: if the tracked image changed, bootc stages it and reboots into the new deployment. Coolify's containers are not upgraded by this timer and retain their separate application lifecycle.
 
 The local QCOW2 initially tracks a local container-storage reference. The lifecycle harness switches it to explicit `lifecycle-v1` and `lifecycle-v2` tags in a disposable registry reachable only through the QEMU host gateway, then performs a real rollback. Production still requires switching the host to a published, authenticated ECR reference and validating registry authentication on EC2.
+
+For private ECR, the image builds the official Amazon ECR credential helper v0.12.0
+from checksum-pinned source. At boot, `coolify-bootc-ecr-auth.service` reads the fully
+qualified registry from `bootc status`, validates that it is a private ECR hostname,
+and atomically writes a mode-0600 `/run/ostree/auth.json` that references
+`docker-credential-ecr-login`. No registry password or 12-hour authorization token is
+stored in the image or on persistent disk. The helper obtains short-lived credentials
+from the EC2 instance profile, whose policy is restricted to the matching controller
+or worker repository. The service runs before `bootc-fetch-apply-updates.service`.
+
+Disposable local-registry images intentionally do not create this file. The retained
+AMI gate must verify the installed ECR reference and a successful authenticated
+`bootc upgrade --check` before EC2 deployment is declared complete.
 
 Inspect the schedule and update state with:
 

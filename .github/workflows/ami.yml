@@ -29,6 +29,14 @@ on:
           - ebs-direct
           - vmimport
         default: ebs-direct
+      ami_lifecycle:
+        description: Disposable validates and cleans up; retained publishes an immutable boot-validated worker AMI
+        required: true
+        type: choice
+        options:
+          - disposable
+          - retained
+        default: disposable
       run_aws_launch:
         description: Boot the disposable AMI on t3a.small and validate the guest through SSM
         required: true
@@ -60,6 +68,44 @@ jobs:
           df -h /
           docker system df
 
+      - name: Resolve worker image reference
+        env:
+          AMI_LIFECYCLE: ${{ inputs.ami_lifecycle }}
+          ECR_REPOSITORY_URL: ${{ vars.AWS_ECR_WORKER_REPOSITORY_URL }}
+        run: |
+          if [[ "${AMI_LIFECYCLE}" == retained ]]; then
+            [[ "${ECR_REPOSITORY_URL}" =~ ^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[a-z0-9]+([._/-][a-z0-9]+)*$ ]] || {
+              echo "AWS_ECR_WORKER_REPOSITORY_URL must be configured for retained AMIs" >&2
+              exit 1
+            }
+            worker_image_ref="${ECR_REPOSITORY_URL}:sha-${GITHUB_SHA}"
+          else
+            worker_image_ref="${IMAGE}"
+          fi
+          echo "WORKER_IMAGE_REF=${worker_image_ref}" >> "${GITHUB_ENV}"
+
+      - name: Configure AWS credentials for retained ECR candidate
+        if: github.event_name == 'workflow_dispatch' && inputs.ami_lifecycle == 'retained'
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          allowed-account-ids: 467590374785
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_AMI_IMPORT_ROLE_ARN }}
+          role-duration-seconds: 10800
+          role-session-name: lucidity-ami-source-${{ github.run_id }}
+
+      - name: Pull immutable ECR worker candidate
+        if: github.event_name == 'workflow_dispatch' && inputs.ami_lifecycle == 'retained'
+        run: |
+          registry=${WORKER_IMAGE_REF%%/*}
+          aws ecr get-login-password --region "${AWS_REGION}" | docker login --username AWS --password-stdin "${registry}"
+          docker pull "${WORKER_IMAGE_REF}"
+          ./scripts/validate-image.sh "${WORKER_IMAGE_REF}"
+          [[ $(docker image inspect --format '{{.Os}}/{{.Architecture}}' "${WORKER_IMAGE_REF}") == linux/amd64 ]] || {
+            echo "retained AMI source is not linux/amd64" >&2
+            exit 1
+          }
+
       - name: Build pinned image tooling
         run: |
           source image/image-builder.env
@@ -70,16 +116,17 @@ jobs:
             .
 
       - name: Build AMD64 worker bootc image
+        if: github.event_name != 'workflow_dispatch' || inputs.ami_lifecycle != 'retained'
         env:
           CONTAINER_ENGINE: docker
-          IMAGE_NAME: ${{ env.IMAGE }}
+          IMAGE_NAME: ${{ env.WORKER_IMAGE_REF }}
           IMAGE_VERSION: ami-validation
         run: ./scripts/build.sh worker
 
       - name: Build and validate raw AMI artifact
         env:
           CONTAINER_ENGINE: docker
-          IMAGE_NAME: ${{ env.IMAGE }}
+          IMAGE_NAME: ${{ env.WORKER_IMAGE_REF }}
           VM_TOOL_IMAGE: ${{ env.CI_TOOLS_IMAGE }}
         run: |
           ./scripts/build-disk.sh worker ami
@@ -91,9 +138,11 @@ jobs:
           RUN_AWS_VALIDATION: ${{ inputs.run_aws_validation }}
           RUN_AWS_LAUNCH: ${{ inputs.run_aws_launch }}
           SNAPSHOT_UPLOAD_MODE: ${{ inputs.snapshot_upload_mode }}
+          AMI_LIFECYCLE: ${{ inputs.ami_lifecycle }}
           IMPORT_BUCKET: ${{ vars.AWS_AMI_IMPORT_BUCKET }}
           IMPORT_ROLE_ARN: ${{ vars.AWS_AMI_IMPORT_ROLE_ARN }}
           SNAPSHOT_KMS_KEY_ARN: ${{ vars.AWS_AMI_SNAPSHOT_KMS_KEY_ARN }}
+          ECR_WORKER_REPOSITORY_URL: ${{ vars.AWS_ECR_WORKER_REPOSITORY_URL }}
           VMIMPORT_ROLE: ${{ vars.AWS_VMIMPORT_ROLE_NAME }}
           TEST_INSTANCE_PROFILE: ${{ vars.AWS_AMI_TEST_INSTANCE_PROFILE_NAME }}
           TEST_SECURITY_GROUP: ${{ vars.AWS_AMI_TEST_SECURITY_GROUP_ID }}
@@ -102,6 +151,13 @@ jobs:
           if [[ "${RUN_AWS_LAUNCH}" == true && "${RUN_AWS_VALIDATION}" != true ]]; then
             echo "run_aws_launch requires run_aws_validation" >&2
             exit 1
+          fi
+          if [[ "${AMI_LIFECYCLE}" == retained ]]; then
+            [[ "${RUN_AWS_VALIDATION}" == true ]] || { echo "retained AMI publication requires run_aws_validation" >&2; exit 1; }
+            [[ "${RUN_AWS_LAUNCH}" == true ]] || { echo "retained AMI publication requires the disposable EC2 launch gate" >&2; exit 1; }
+            [[ "${SNAPSHOT_UPLOAD_MODE}" == ebs-direct ]] || { echo "retained AMI publication requires ebs-direct" >&2; exit 1; }
+            [[ "${GITHUB_REF}" == refs/heads/main ]] || { echo "retained AMIs may be published only from main" >&2; exit 1; }
+            test -n "${ECR_WORKER_REPOSITORY_URL}" || { echo "AWS_ECR_WORKER_REPOSITORY_URL is required for retained AMIs" >&2; exit 1; }
           fi
           [[ "${RUN_AWS_VALIDATION}" == true ]] || exit 0
           test -n "${IMPORT_ROLE_ARN}" || { echo "AWS_AMI_IMPORT_ROLE_ARN repository variable is required" >&2; exit 1; }
@@ -141,6 +197,10 @@ jobs:
       - name: Validate disposable AWS snapshot and AMI
         if: github.event_name == 'workflow_dispatch' && inputs.run_aws_validation
         env:
+          AMI_EXPECTED_BOOTC_IMAGE_REF: ${{ env.WORKER_IMAGE_REF }}
+          AMI_LIFECYCLE: ${{ inputs.ami_lifecycle }}
+          AMI_ROLE: worker
+          AMI_SOURCE_REVISION: ${{ github.sha }}
           AMI_IMPORT_BUCKET: ${{ vars.AWS_AMI_IMPORT_BUCKET }}
           AMI_LAUNCH_VALIDATION: ${{ inputs.run_aws_launch }}
           AMI_SNAPSHOT_KMS_KEY_ARN: ${{ vars.AWS_AMI_SNAPSHOT_KMS_KEY_ARN }}
@@ -151,3 +211,7 @@ jobs:
           AMI_TEST_SUBNET_ID: ${{ vars.AWS_AMI_TEST_SUBNET_ID }}
           VMIMPORT_ROLE_NAME: ${{ vars.AWS_VMIMPORT_ROLE_NAME }}
         run: ./scripts/validate-ami-import.sh image-output/worker/coolify-worker-ami.raw
+
+      - name: Remove retained ECR login
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.ami_lifecycle == 'retained'
+        run: docker logout "${WORKER_IMAGE_REF%%/*}"

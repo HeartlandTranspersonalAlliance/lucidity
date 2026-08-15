@@ -1,0 +1,13 @@
+[Unit]
+Description=Configure ephemeral private ECR authentication for bootc
+After=network-online.target
+Before=bootc-fetch-apply-updates.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/coolify-aws/configure-bootc-ecr-auth
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -59,6 +59,12 @@ variable "oidc_provider_arn" {
   type        = string
 }
 
+variable "source_repository_arns" {
+  description = "Private ECR repositories from which retained AMI source candidates may be pulled."
+  type        = set(string)
+  default     = []
+}
+
 variable "enable_launch_validation" {
   description = "Allow the GitHub AMI workflow to launch and terminate one tagged disposable EC2 validation instance."
   type        = bool
