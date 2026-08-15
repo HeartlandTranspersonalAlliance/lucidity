@@ -23,6 +23,7 @@ VMIMPORT_ROLE_NAME=mock-vmimport \
     "${repo_root}/scripts/validate-ami-import.sh" "${artifact}"
 
 grep -Fq 'ec2 run-instances' "${mock_log}"
+grep -Fq -- '--count 1' "${mock_log}"
 grep -Fq -- '--credit-specification CpuCredits=standard' "${mock_log}"
 grep -Fq 'HttpEndpoint=enabled,HttpTokens=required,HttpPutResponseHopLimit=2,InstanceMetadataTags=enabled' "${mock_log}"
 grep -Fq 'ssm send-command' "${mock_log}"
@@ -33,6 +34,11 @@ grep -Fq 's3 rm' "${mock_log}"
 
 if grep -Eq -- '--key-name|KeyName=' "${mock_log}"; then
     echo "mocked launch unexpectedly used an EC2 key pair" >&2
+    exit 1
+fi
+
+if grep -Eq -- '--min-count|--max-count' "${mock_log}"; then
+    echo "mocked launch used obsolete AWS CLI instance count options" >&2
     exit 1
 fi
 

@@ -256,8 +256,7 @@ if [[ ${launch_validation} == true ]]; then
         --region "${region}" \
         --image-id "${image_id}" \
         --instance-type "${launch_instance_type}" \
-        --min-count 1 \
-        --max-count 1 \
+        --count 1 \
         --subnet-id "${launch_subnet}" \
         --security-group-ids "${launch_security_group}" \
         --iam-instance-profile "Name=${launch_instance_profile}" \
