@@ -101,7 +101,6 @@ grep -Fq 'Before=bootc-fetch-apply-updates.service' roles/common/usr/lib/systemd
 grep -Fq 'grep -Eq "^SELINUX=enforcing$" /etc/selinux/config' scripts/validate-image.sh
 grep -Fq 'getenforce) == Enforcing' scripts/vm-validate.sh
 grep -Fq "if [[ \${format} == qcow2 ]]" scripts/validate-disk.sh
-grep -Fq 'aws ec2 import-snapshot' scripts/validate-ami-import.sh
 grep -Fq 'coldsnap_command' scripts/validate-ami-import.sh
 grep -Fq -- '--kms-key-id' scripts/validate-ami-import.sh
 grep -Fq 'aws ec2 register-image' scripts/validate-ami-import.sh
@@ -138,7 +137,6 @@ grep -Fq 'resource "aws_flow_log" "this"' tofu/modules/network/main.tf
 grep -Fq 'AmazonSSMManagedInstanceCore' tofu/modules/instance-management/main.tf
 grep -Fq 'resource "aws_iam_role_policy" "ecr_pull"' tofu/modules/instance-management/main.tf
 grep -Fq 'resource "aws_iam_instance_profile" "node"' tofu/modules/instance-management/main.tf
-grep -Fq 'resource "aws_s3_bucket" "this"' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'resource "aws_kms_key" "ami_snapshot"' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'ebs:StartSnapshot' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'ebs:PutSnapshotBlock' tofu/modules/ami-import-validation/main.tf
@@ -149,8 +147,6 @@ grep -Fq 'kms:GrantIsForAWSResource' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'values   = ["ami-release", "ami-validation"]' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'ecr:GetAuthorizationToken' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'ecr:GetDownloadUrlForLayer' tofu/modules/ami-import-validation/main.tf
-grep -Fq 'identifiers = ["vmie.amazonaws.com"]' tofu/modules/ami-import-validation/main.tf
-grep -Fq 'variable = "iam:PassedToService"' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'sid     = "CreateTaggedValidationInstance"' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'variable = "ec2:MetadataHttpTokens"' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'values   = ["required"]' tofu/modules/ami-import-validation/main.tf
@@ -198,12 +194,14 @@ grep -Fq 'default     = "t3a.large"' tofu/environments/aws/variables.tf
 grep -Fq 'enable_ami_launch_validation' tofu/environments/aws/variables.tf
 grep -Fq 'run_aws_launch:' .github/workflows/ami.yml
 grep -Fq 'run_aws_validation:' .github/workflows/ami.yml
-grep -Fq 'snapshot_upload_mode:' .github/workflows/ami.yml
 grep -Fq 'ami_lifecycle:' .github/workflows/ami.yml
 # This is a literal GitHub Actions expression.
 # shellcheck disable=SC2016
 grep -Fq 'AMI_LIFECYCLE: ${{ inputs.ami_lifecycle }}' .github/workflows/ami.yml
 grep -Fq "docker pull \"\${WORKER_IMAGE_REF}\"" .github/workflows/ami.yml
+# This is a literal GitHub Actions shell expression.
+# shellcheck disable=SC2016
+grep -Fq 'CONTAINER_ENGINE=docker ./scripts/validate-image.sh "${WORKER_IMAGE_REF}"' .github/workflows/ami.yml
 grep -Fq 'AWS_ECR_WORKER_REPOSITORY_URL' .github/workflows/ami.yml
 grep -Fq "worker_image_ref=\"\${ECR_REPOSITORY_URL}:sha-\${GITHUB_SHA}\"" .github/workflows/ami.yml
 grep -Fq 'retained AMIs require the disposable EC2 launch gate' scripts/validate-ami-import.sh
@@ -211,6 +209,11 @@ grep -Fq 'artifact_purpose=ami-release' scripts/validate-ami-import.sh
 grep -Fq 'completed_successfully=true' scripts/validate-ami-import.sh
 grep -Fq 'nix build --no-link --print-out-paths .#coldsnap' .github/workflows/ami.yml
 grep -Fq 'coldsnap = pkgs.coldsnap;' flake.nix
+if rg -n -i 'vmimport|vm import|import-snapshot|AMI_IMPORT_BUCKET|VMIMPORT_ROLE_NAME|snapshot_upload_mode' \
+    .github/workflows/ami.yml scripts/validate-ami-import.sh tofu/modules/ami-import-validation; then
+    echo "legacy VM Import must not remain in the EBS Direct AMI delivery path" >&2
+    exit 1
+fi
 if rg -n --glob '*.tf' '0\.0\.0\.0/0.*(22|8000)|(22|8000).*0\.0\.0\.0/0' tofu; then
     echo "SSH and the Coolify bootstrap port must not be globally accessible" >&2
     exit 1

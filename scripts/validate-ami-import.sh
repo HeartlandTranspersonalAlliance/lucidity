@@ -3,14 +3,9 @@ set -Eeuo pipefail
 
 artifact=${1:-}
 region=${AWS_REGION:-}
-snapshot_upload_mode=${AMI_SNAPSHOT_UPLOAD_MODE:-ebs-direct}
 snapshot_kms_key_arn=${AMI_SNAPSHOT_KMS_KEY_ARN:-}
 coldsnap_command=${COLDSNAP_COMMAND:-coldsnap}
 coldsnap_workers=${COLDSNAP_WORKERS:-64}
-bucket=${AMI_IMPORT_BUCKET:-}
-vmimport_role=${VMIMPORT_ROLE_NAME:-}
-poll_attempts=${AMI_IMPORT_POLL_ATTEMPTS:-180}
-poll_interval=${AMI_IMPORT_POLL_INTERVAL:-30}
 run_id=${GITHUB_RUN_ID:-manual-$(date +%s)}
 ami_lifecycle=${AMI_LIFECYCLE:-disposable}
 ami_role=${AMI_ROLE:-worker}
@@ -26,11 +21,9 @@ launch_instance_profile=${AMI_TEST_INSTANCE_PROFILE_NAME:-}
 [[ -f ${artifact} ]] || { echo "AMI artifact not found: ${artifact}" >&2; exit 1; }
 [[ ${artifact} == *.ami || ${artifact} == *.raw ]] || { echo "AMI validation requires a raw .ami or .raw artifact" >&2; exit 2; }
 [[ -n ${region} ]] || { echo "AWS_REGION is required" >&2; exit 2; }
-[[ ${snapshot_upload_mode} == ebs-direct || ${snapshot_upload_mode} == vmimport ]] || { echo "AMI_SNAPSHOT_UPLOAD_MODE must be ebs-direct or vmimport" >&2; exit 2; }
 [[ ${ami_lifecycle} == disposable || ${ami_lifecycle} == retained ]] || { echo "AMI_LIFECYCLE must be disposable or retained" >&2; exit 2; }
 [[ ${ami_role} == controller || ${ami_role} == worker ]] || { echo "AMI_ROLE must be controller or worker" >&2; exit 2; }
 if [[ ${ami_lifecycle} == retained ]]; then
-    [[ ${snapshot_upload_mode} == ebs-direct ]] || { echo "retained AMIs require the ebs-direct snapshot transport" >&2; exit 2; }
     [[ ${launch_validation} == true ]] || { echo "retained AMIs require the disposable EC2 launch gate" >&2; exit 2; }
     [[ ${source_revision} =~ ^[0-9a-f]{40}$ ]] || { echo "AMI_SOURCE_REVISION must be a full lowercase Git commit SHA for retained AMIs" >&2; exit 2; }
     [[ ${expected_bootc_image_ref} =~ ^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[a-z0-9]+([._/-][a-z0-9]+)*:sha-${source_revision}$ ]] || {
@@ -38,18 +31,11 @@ if [[ ${ami_lifecycle} == retained ]]; then
         exit 2
     }
 fi
-if [[ ${snapshot_upload_mode} == ebs-direct ]]; then
-    [[ ${snapshot_kms_key_arn} =~ ^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/[0-9a-f-]+$ ]] || {
-        echo "AMI_SNAPSHOT_KMS_KEY_ARN must be a customer-managed KMS key ARN for ebs-direct uploads" >&2
-        exit 2
-    }
-    [[ ${coldsnap_workers} =~ ^[1-9][0-9]*$ ]] || { echo "COLDSNAP_WORKERS must be a positive integer" >&2; exit 2; }
-else
-    [[ -n ${bucket} ]] || { echo "AMI_IMPORT_BUCKET is required for vmimport" >&2; exit 2; }
-    [[ -n ${vmimport_role} ]] || { echo "VMIMPORT_ROLE_NAME is required for vmimport" >&2; exit 2; }
-fi
-[[ ${poll_attempts} =~ ^[1-9][0-9]*$ ]] || { echo "AMI_IMPORT_POLL_ATTEMPTS must be a positive integer" >&2; exit 2; }
-[[ ${poll_interval} =~ ^[1-9][0-9]*$ ]] || { echo "AMI_IMPORT_POLL_INTERVAL must be a positive integer" >&2; exit 2; }
+[[ ${snapshot_kms_key_arn} =~ ^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/[0-9a-f-]+$ ]] || {
+    echo "AMI_SNAPSHOT_KMS_KEY_ARN must be a customer-managed KMS key ARN for EBS Direct uploads" >&2
+    exit 2
+}
+[[ ${coldsnap_workers} =~ ^[1-9][0-9]*$ ]] || { echo "COLDSNAP_WORKERS must be a positive integer" >&2; exit 2; }
 [[ ${launch_validation} == true || ${launch_validation} == false ]] || { echo "AMI_LAUNCH_VALIDATION must be true or false" >&2; exit 2; }
 if [[ ${launch_validation} == true ]]; then
     [[ ${launch_instance_type} == t3a.small ]] || { echo "disposable launch validation is restricted to t3a.small" >&2; exit 2; }
@@ -61,9 +47,7 @@ fi
 for command in aws jq; do
     command -v "${command}" >/dev/null 2>&1 || { echo "${command} is required" >&2; exit 1; }
 done
-if [[ ${snapshot_upload_mode} == ebs-direct ]]; then
-    command -v "${coldsnap_command}" >/dev/null 2>&1 || { echo "${coldsnap_command} is required for ebs-direct uploads" >&2; exit 1; }
-fi
+command -v "${coldsnap_command}" >/dev/null 2>&1 || { echo "${coldsnap_command} is required for EBS Direct uploads" >&2; exit 1; }
 
 artifact=$(realpath "${artifact}")
 if [[ ${ami_lifecycle} == retained ]]; then
@@ -78,8 +62,6 @@ else
     image_description="Disposable lucidity AMD64 bootc AMI validation ${run_id}"
 fi
 source_revision_tag=${source_revision:-none}
-object_key=""
-import_task_id=""
 image_id=""
 instance_id=""
 snapshot_ids=()
@@ -88,7 +70,7 @@ completed_successfully=false
 cleanup() {
     local original_status=$?
     local cleanup_status=0
-    local already_known cleanup_task existing_snapshot_id status snapshot_id
+    local already_known existing_snapshot_id status snapshot_id
     local -a discovered_snapshot_ids=()
     trap - EXIT
     set +e
@@ -106,22 +88,6 @@ cleanup() {
             aws ec2 wait instance-terminated \
                 --region "${region}" \
                 --instance-ids "${instance_id}" || cleanup_status=1
-        fi
-    fi
-
-    if [[ -n ${import_task_id} ]]; then
-        cleanup_task=$(aws ec2 describe-import-snapshot-tasks \
-            --region "${region}" \
-            --import-task-ids "${import_task_id}" \
-            --output json 2>/dev/null)
-        status=$(jq -r '.ImportSnapshotTasks[0].SnapshotTaskDetail.Status // empty' <<< "${cleanup_task}")
-        if (( ${#snapshot_ids[@]} == 0 )); then
-            mapfile -t snapshot_ids < <(jq -r '.ImportSnapshotTasks[0].SnapshotTaskDetail.SnapshotId // empty' <<< "${cleanup_task}")
-        fi
-        if [[ ${status} == active ]]; then
-            aws ec2 cancel-import-task \
-                --region "${region}" \
-                --import-task-id "${import_task_id}" >/dev/null || cleanup_status=1
         fi
     fi
 
@@ -176,12 +142,6 @@ cleanup() {
         [[ ${deleted} == true ]] || { echo "failed to delete AMI snapshot ${snapshot_id}" >&2; cleanup_status=1; }
     done
 
-    if [[ -n ${object_key} ]]; then
-        aws s3 rm "s3://${bucket}/${object_key}" \
-            --region "${region}" \
-            --only-show-errors >/dev/null || cleanup_status=1
-    fi
-
     if ((original_status != 0)); then
         exit "${original_status}"
     fi
@@ -227,72 +187,25 @@ if [[ ${ami_lifecycle} == retained ]]; then
     fi
 fi
 
-if [[ ${snapshot_upload_mode} == ebs-direct ]]; then
-    echo "Uploading the ${ami_lifecycle} AMI artifact directly to an encrypted EBS snapshot"
-    snapshot_id=$("${coldsnap_command}" \
-        --region "${region}" \
-        upload \
-        --wait \
-        --no-progress \
-        --kms-key-id "${snapshot_kms_key_arn}" \
-        --workers "${coldsnap_workers}" \
-        --description "${image_description}" \
-        --tag "Key=Name,Value=${image_name}" \
-        --tag "Key=Project,Value=lucidity" \
-        --tag "Key=Purpose,Value=${artifact_purpose}" \
-        --tag "Key=Role,Value=${ami_role}" \
-        --tag "Key=GitHubRunId,Value=${run_id}" \
-        --tag "Key=SourceRevision,Value=${source_revision_tag}" \
-        --tag "Key=ReleaseStatus,Value=${release_status}" \
-        "${artifact}")
-    [[ ${snapshot_id} =~ ^snap-[0-9a-f]+$ ]] || { echo "coldsnap did not return a snapshot ID" >&2; exit 1; }
-    snapshot_ids=("${snapshot_id}")
-else
-    object_key="validation/${run_id}/$(basename "${artifact}")"
-    echo "Uploading disposable AMI artifact to s3://${bucket}/${object_key}"
-    aws s3 cp "${artifact}" "s3://${bucket}/${object_key}" \
-        --region "${region}" \
-        --only-show-errors
-
-    disk_container=$(jq -cn \
-        --arg bucket "${bucket}" \
-        --arg key "${object_key}" \
-        '{Description:"lucidity AMD64 bootc disk",Format:"RAW",UserBucket:{S3Bucket:$bucket,S3Key:$key}}')
-
-    import_response=$(aws ec2 import-snapshot \
-        --region "${region}" \
-        --role-name "${vmimport_role}" \
-        --encrypted \
-        --description "lucidity AMD64 bootc snapshot validation ${run_id}" \
-        --disk-container "${disk_container}" \
-        --output json)
-    import_task_id=$(jq -r '.ImportTaskId' <<< "${import_response}")
-    [[ -n ${import_task_id} && ${import_task_id} != null ]] || { echo "EC2 did not return an import task ID" >&2; exit 1; }
-    echo "Started ${import_task_id}"
-
-    task_response=""
-    for ((attempt = 1; attempt <= poll_attempts; attempt++)); do
-        task_response=$(aws ec2 describe-import-snapshot-tasks \
-            --region "${region}" \
-            --import-task-ids "${import_task_id}" \
-            --output json)
-        status=$(jq -r '.ImportSnapshotTasks[0].SnapshotTaskDetail.Status' <<< "${task_response}")
-        status_message=$(jq -r '.ImportSnapshotTasks[0].SnapshotTaskDetail.StatusMessage // ""' <<< "${task_response}")
-        progress=$(jq -r '.ImportSnapshotTasks[0].SnapshotTaskDetail.Progress // "0"' <<< "${task_response}")
-        echo "${import_task_id}: ${status} ${progress}% ${status_message}"
-
-        case "${status}" in
-            completed) break ;;
-            active) sleep "${poll_interval}" ;;
-            *) echo "snapshot import failed with status ${status}: ${status_message}" >&2; exit 1 ;;
-        esac
-    done
-
-    status=$(jq -r '.ImportSnapshotTasks[0].SnapshotTaskDetail.Status' <<< "${task_response}")
-    [[ ${status} == completed ]] || { echo "snapshot import did not complete within the polling window" >&2; exit 1; }
-
-    mapfile -t snapshot_ids < <(jq -r '.ImportSnapshotTasks[0].SnapshotTaskDetail.SnapshotId // empty' <<< "${task_response}")
-fi
+echo "Uploading the ${ami_lifecycle} AMI artifact directly to an encrypted EBS snapshot"
+snapshot_id=$("${coldsnap_command}" \
+    --region "${region}" \
+    upload \
+    --wait \
+    --no-progress \
+    --kms-key-id "${snapshot_kms_key_arn}" \
+    --workers "${coldsnap_workers}" \
+    --description "${image_description}" \
+    --tag "Key=Name,Value=${image_name}" \
+    --tag "Key=Project,Value=lucidity" \
+    --tag "Key=Purpose,Value=${artifact_purpose}" \
+    --tag "Key=Role,Value=${ami_role}" \
+    --tag "Key=GitHubRunId,Value=${run_id}" \
+    --tag "Key=SourceRevision,Value=${source_revision_tag}" \
+    --tag "Key=ReleaseStatus,Value=${release_status}" \
+    "${artifact}")
+[[ ${snapshot_id} =~ ^snap-[0-9a-f]+$ ]] || { echo "coldsnap did not return a snapshot ID" >&2; exit 1; }
+snapshot_ids=("${snapshot_id}")
 (( ${#snapshot_ids[@]} > 0 )) || { echo "snapshot upload did not return a snapshot ID" >&2; exit 1; }
 
 snapshot=$(aws ec2 describe-snapshots \
@@ -300,12 +213,10 @@ snapshot=$(aws ec2 describe-snapshots \
     --snapshot-ids "${snapshot_ids[0]}" \
     --output json)
 [[ $(jq -r '.Snapshots[0].Encrypted' <<< "${snapshot}") == true ]] || { echo "uploaded snapshot is not encrypted" >&2; exit 1; }
-if [[ ${snapshot_upload_mode} == ebs-direct ]]; then
-    [[ $(jq -r '.Snapshots[0].KmsKeyId // empty' <<< "${snapshot}") == "${snapshot_kms_key_arn}" ]] || {
-        echo "direct snapshot does not use the configured KMS key" >&2
-        exit 1
-    }
-fi
+[[ $(jq -r '.Snapshots[0].KmsKeyId // empty' <<< "${snapshot}") == "${snapshot_kms_key_arn}" ]] || {
+    echo "direct snapshot does not use the configured KMS key" >&2
+    exit 1
+}
 snapshot_volume_size=$(jq -r '.Snapshots[0].VolumeSize // empty' <<< "${snapshot}")
 [[ ${snapshot_volume_size} =~ ^[1-9][0-9]*$ ]] || { echo "uploaded snapshot did not return a valid volume size" >&2; exit 1; }
 
@@ -543,12 +454,9 @@ if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then
             echo "## AMI snapshot validation"
         fi
         echo
-        echo "AWS uploaded the AMD64 raw bootc disk using \`${snapshot_upload_mode}\`, verified the encrypted EBS snapshot, and registered it as an AMI."
+        echo "AWS uploaded the AMD64 raw bootc disk using EBS Direct, verified the encrypted EBS snapshot, and registered it as an AMI."
         echo
-        echo "- Snapshot transport: \`${snapshot_upload_mode}\`"
-        if [[ -n ${import_task_id} ]]; then
-            echo "- Import task: \`${import_task_id}\`"
-        fi
+        echo "- Snapshot transport: \`ebs-direct\`"
         if [[ ${ami_lifecycle} == retained ]]; then
             echo "- Role: \`${ami_role}\`"
             echo "- Source revision: \`${source_revision}\`"

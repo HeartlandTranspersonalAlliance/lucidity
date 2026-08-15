@@ -914,10 +914,8 @@ Do not confuse an ECR OCI image with an EC2 AMI.
 
 Automate this only after the container image itself works reliably.
 
-If automated AMI registration requires S3 upload/import, keep it as a documented
-compatibility fallback and clean up every temporary artifact. Prefer direct EBS
-snapshot upload when it preserves the same encryption, metadata, and cleanup
-contract with lower delivery latency.
+Use direct EBS snapshot upload for automated AMI registration. Keep its encryption,
+metadata validation, and deterministic cleanup contract mandatory.
 
 AWS does not currently publish a pre-generated Fedora or CentOS bootc AMI, and
 the RHEL image-mode workflow also expects operators to generate their own AMI.
@@ -929,8 +927,8 @@ real `import-image` validation rejected the AlmaLinux 10 bootc disk during OS
 detection. Upload the raw disk directly as an encrypted EBS snapshot, then
 register the snapshot explicitly as an AMD64, UEFI, HVM, ENA-enabled,
 IMDSv2-only AMI. This preserves the AlmaLinux identity without pretending it is
-RHEL or Rocky Linux. The lifecycle-controlled S3 and `ImportSnapshot` path remains
-available as a manual fallback. A successful registration is not proof of bootability;
+RHEL or Rocky Linux. The legacy S3 and VM Import fallback is intentionally removed.
+A successful registration is not proof of bootability;
 the disposable T3a launch test remains mandatory for each materially changed disk
 pipeline.
 
@@ -942,16 +940,6 @@ guest gate before its AMI and encrypted snapshot are preserved. Failed candidate
 deleted. A rerun for an already validated role and commit reuses the immutable AMI.
 The resulting AMI ID is an operator-reviewed OpenTofu input, never a newest-image
 lookup or an automatic deployment trigger.
-
-The merged `main` workflow completed this registration gate in GitHub Actions run
-`31859796836` on 2026-08-14. AWS completed import task
-`import-snap-9315bf3af20f6870t`, the workflow registered and validated the temporary
-AMI, and an independent AWS MCP audit confirmed that the AMI, encrypted snapshot,
-and S3 object were removed. Run `31869009935` completed the T3a boot and guest gate
-on 2026-08-15 through SSM-only access. It verified AMD64, enforcing SELinux, bootc,
-Docker, SSM Agent, and IMDSv2 enforcement; a second AWS MCP audit confirmed that no
-tagged instance, AMI, snapshot, or validation object remained. Milestone 8 is
-complete for the current AMD64 worker pipeline.
 
 After the EBS Direct KMS permission was corrected, merged-main run `31899706447`
 completed the same registration and T3a/SSM boot gate on 2026-08-15. Its 12 GiB raw
@@ -970,8 +958,8 @@ First determine whether bootc-image-builder + GitHub Actions provides a simpler 
 The current unified OSBuild `image-builder` already builds the AlmaLinux bootc AMI
 disk. A bounded evaluation of its pinned native AWS uploader found that it uses
 snapshot import, supports UEFI, and enables ENA, but does not request snapshot
-encryption, set AMI IMDSv2 support, accept the project-specific VM Import role,
-or provide the validation workflow's deterministic AMI and snapshot cleanup. Its
+encryption, set AMI IMDSv2 support, or provide the validation workflow's deterministic
+AMI and snapshot cleanup. Its
 preflight also requires account-wide bucket discovery. Keep the current explicit
 explicit snapshot workflow and reevaluate only after upstream closes those gaps. The full
 comparison is recorded in `docs/upstream-aws-uploader-evaluation.md`.
@@ -1517,9 +1505,8 @@ On pull requests, build and validate the raw AMD64 AMI artifact without AWS
 credentials. After the foundation is applied on `main`, manually dispatch the same
 workflow with AWS validation enabled. By default it streams the raw disk directly to
 an encrypted EBS snapshot with bounded parallel workers, explicitly registers and
-verifies the AMI metadata, then deletes the AMI and snapshot. The lifecycle-controlled
-private S3 bucket and project-scoped VM Import/Export role remain available through
-the `vmimport` fallback, which also deletes its temporary object.
+verifies the AMI metadata, then deletes the AMI and snapshot. No S3 staging or legacy
+VM Import worker is retained.
 
 For production delivery, an explicit retained mode uses only EBS Direct and requires
 the launch gate. It retains the validated encrypted snapshot and immutable AMI, records

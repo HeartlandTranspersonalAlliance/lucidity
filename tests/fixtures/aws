@@ -10,14 +10,7 @@ service=${1:-}
 operation=${2:-}
 
 case "${service} ${operation}" in
-    "s3 cp"|"s3 rm"|"ec2 create-tags"|"ec2 deregister-image"|"ec2 delete-snapshot")
-        ;;
-    "ec2 import-snapshot")
-        printf '%s\n' '{"ImportTaskId":"import-snap-test"}'
-        ;;
-    "ec2 describe-import-snapshot-tasks")
-        jq -cn --arg snapshot_id "${AWS_MOCK_SNAPSHOT_ID}" \
-            '{ImportSnapshotTasks:[{ImportTaskId:"import-snap-test",SnapshotTaskDetail:{Status:"completed",Progress:"100",SnapshotId:$snapshot_id}}]}'
+    "ec2 create-tags"|"ec2 deregister-image"|"ec2 delete-snapshot")
         ;;
     "ec2 describe-snapshots")
         if [[ " $* " == *" --owner-ids self "* ]]; then
