@@ -282,6 +282,7 @@ data "aws_iam_policy_document" "github" {
     actions = [
       "kms:Decrypt",
       "kms:DescribeKey",
+      "kms:GenerateDataKey",
       "kms:GenerateDataKeyWithoutPlaintext",
       "kms:ReEncrypt*",
     ]
