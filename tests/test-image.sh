@@ -128,6 +128,16 @@ grep -Fq 'variable = "ec2:MetadataHttpTokens"' tofu/modules/ami-import-validatio
 grep -Fq 'values   = ["required"]' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'sid       = "PassValidationInstanceRole"' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'document/AWS-RunShellScript' tofu/modules/ami-import-validation/main.tf
+# These are literal OpenTofu interpolation strings.
+# shellcheck disable=SC2016
+grep -Fq 'ec2:${var.aws_region}::image/*' tofu/modules/ami-import-validation/main.tf
+# shellcheck disable=SC2016
+grep -Fq 'ec2:${var.aws_region}::snapshot/*' tofu/modules/ami-import-validation/main.tf
+if rg -n 'ec2:\$\{var\.aws_region\}:\$\{local\.account_id\}:(image|snapshot)/\*' tofu/modules/ami-import-validation/main.tf; then
+    echo "EC2 image and snapshot IAM ARNs must use an empty account field" >&2
+    exit 1
+fi
+grep -Fq 'allowed-account-ids: 467590374785' .github/workflows/ami.yml
 grep -Fq 'resource "aws_secretsmanager_secret" "controller_runtime"' tofu/modules/runtime-secrets/main.tf
 grep -Fq 'enable_key_rotation     = true' tofu/modules/runtime-secrets/main.tf
 grep -Fq 'variable = "kms:ViaService"' tofu/modules/runtime-secrets/main.tf
@@ -137,7 +147,7 @@ grep -Fq 'default     = "t3a.small"' tofu/environments/aws/variables.tf
 grep -Fq 'default     = "t3a.large"' tofu/environments/aws/variables.tf
 grep -Fq 'enable_ami_launch_validation' tofu/environments/aws/variables.tf
 grep -Fq 'run_aws_launch:' .github/workflows/ami.yml
-if grep -R -n -E '0\.0\.0\.0/0.*(22|8000)|(22|8000).*0\.0\.0\.0/0' tofu; then
+if rg -n --glob '*.tf' '0\.0\.0\.0/0.*(22|8000)|(22|8000).*0\.0\.0\.0/0' tofu; then
     echo "SSH and the Coolify bootstrap port must not be globally accessible" >&2
     exit 1
 fi
