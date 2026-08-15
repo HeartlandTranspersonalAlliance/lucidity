@@ -161,6 +161,8 @@ snapshot=$(aws ec2 describe-snapshots \
     --snapshot-ids "${snapshot_ids[0]}" \
     --output json)
 [[ $(jq -r '.Snapshots[0].Encrypted' <<< "${snapshot}") == true ]] || { echo "imported snapshot is not encrypted" >&2; exit 1; }
+snapshot_volume_size=$(jq -r '.Snapshots[0].VolumeSize // empty' <<< "${snapshot}")
+[[ ${snapshot_volume_size} =~ ^[1-9][0-9]*$ ]] || { echo "imported snapshot did not return a valid volume size" >&2; exit 1; }
 
 if [[ ${launch_validation} == true ]]; then
     aws ec2 create-tags \
@@ -246,10 +248,12 @@ if [[ ${launch_validation} == true ]]; then
             {Key:"GitHubRunId",Value:$run_id}
         ]}
     ]')
-    launch_block_devices=$(jq -cn '[{
-        DeviceName:"/dev/xvda",
-        Ebs:{DeleteOnTermination:true,Encrypted:true,VolumeSize:10,VolumeType:"gp3"}
-    }]')
+    launch_block_devices=$(jq -cn \
+        --argjson volume_size "${snapshot_volume_size}" \
+        '[{
+            DeviceName:"/dev/xvda",
+            Ebs:{DeleteOnTermination:true,Encrypted:true,VolumeSize:$volume_size,VolumeType:"gp3"}
+        }]')
 
     echo "Launching disposable ${launch_instance_type} without a key pair or inbound SSH"
     instance_response=$(aws ec2 run-instances \
