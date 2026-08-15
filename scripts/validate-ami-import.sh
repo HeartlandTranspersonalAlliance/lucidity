@@ -3,6 +3,10 @@ set -Eeuo pipefail
 
 artifact=${1:-}
 region=${AWS_REGION:-}
+snapshot_upload_mode=${AMI_SNAPSHOT_UPLOAD_MODE:-ebs-direct}
+snapshot_kms_key_arn=${AMI_SNAPSHOT_KMS_KEY_ARN:-}
+coldsnap_command=${COLDSNAP_COMMAND:-coldsnap}
+coldsnap_workers=${COLDSNAP_WORKERS:-64}
 bucket=${AMI_IMPORT_BUCKET:-}
 vmimport_role=${VMIMPORT_ROLE_NAME:-}
 poll_attempts=${AMI_IMPORT_POLL_ATTEMPTS:-180}
@@ -18,8 +22,17 @@ launch_instance_profile=${AMI_TEST_INSTANCE_PROFILE_NAME:-}
 [[ -f ${artifact} ]] || { echo "AMI artifact not found: ${artifact}" >&2; exit 1; }
 [[ ${artifact} == *.ami || ${artifact} == *.raw ]] || { echo "AMI validation requires a raw .ami or .raw artifact" >&2; exit 2; }
 [[ -n ${region} ]] || { echo "AWS_REGION is required" >&2; exit 2; }
-[[ -n ${bucket} ]] || { echo "AMI_IMPORT_BUCKET is required" >&2; exit 2; }
-[[ -n ${vmimport_role} ]] || { echo "VMIMPORT_ROLE_NAME is required" >&2; exit 2; }
+[[ ${snapshot_upload_mode} == ebs-direct || ${snapshot_upload_mode} == vmimport ]] || { echo "AMI_SNAPSHOT_UPLOAD_MODE must be ebs-direct or vmimport" >&2; exit 2; }
+if [[ ${snapshot_upload_mode} == ebs-direct ]]; then
+    [[ ${snapshot_kms_key_arn} =~ ^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/[0-9a-f-]+$ ]] || {
+        echo "AMI_SNAPSHOT_KMS_KEY_ARN must be a customer-managed KMS key ARN for ebs-direct uploads" >&2
+        exit 2
+    }
+    [[ ${coldsnap_workers} =~ ^[1-9][0-9]*$ ]] || { echo "COLDSNAP_WORKERS must be a positive integer" >&2; exit 2; }
+else
+    [[ -n ${bucket} ]] || { echo "AMI_IMPORT_BUCKET is required for vmimport" >&2; exit 2; }
+    [[ -n ${vmimport_role} ]] || { echo "VMIMPORT_ROLE_NAME is required for vmimport" >&2; exit 2; }
+fi
 [[ ${poll_attempts} =~ ^[1-9][0-9]*$ ]] || { echo "AMI_IMPORT_POLL_ATTEMPTS must be a positive integer" >&2; exit 2; }
 [[ ${poll_interval} =~ ^[1-9][0-9]*$ ]] || { echo "AMI_IMPORT_POLL_INTERVAL must be a positive integer" >&2; exit 2; }
 [[ ${launch_validation} == true || ${launch_validation} == false ]] || { echo "AMI_LAUNCH_VALIDATION must be true or false" >&2; exit 2; }
@@ -33,9 +46,12 @@ fi
 for command in aws jq; do
     command -v "${command}" >/dev/null 2>&1 || { echo "${command} is required" >&2; exit 1; }
 done
+if [[ ${snapshot_upload_mode} == ebs-direct ]]; then
+    command -v "${coldsnap_command}" >/dev/null 2>&1 || { echo "${coldsnap_command} is required for ebs-direct uploads" >&2; exit 1; }
+fi
 
 artifact=$(realpath "${artifact}")
-object_key="validation/${run_id}/$(basename "${artifact}")"
+object_key=""
 import_task_id=""
 image_id=""
 instance_id=""
@@ -44,7 +60,8 @@ snapshot_ids=()
 cleanup() {
     local original_status=$?
     local cleanup_status=0
-    local cleanup_task status
+    local already_known cleanup_task existing_snapshot_id status snapshot_id
+    local -a discovered_snapshot_ids=()
     trap - EXIT
     set +e
 
@@ -86,6 +103,29 @@ cleanup() {
             --image-id "${image_id}" >/dev/null || cleanup_status=1
     fi
 
+    mapfile -t discovered_snapshot_ids < <(aws ec2 describe-snapshots \
+        --region "${region}" \
+        --owner-ids self \
+        --filters \
+            "Name=tag:Project,Values=lucidity" \
+            "Name=tag:Purpose,Values=ami-validation" \
+            "Name=tag:GitHubRunId,Values=${run_id}" \
+        --query 'Snapshots[].SnapshotId' \
+        --output text 2>/dev/null | tr '\t' '\n')
+    for snapshot_id in "${discovered_snapshot_ids[@]}"; do
+        [[ ${snapshot_id} =~ ^snap-[0-9a-f]+$ ]] || continue
+        already_known=false
+        for existing_snapshot_id in "${snapshot_ids[@]}"; do
+            if [[ ${existing_snapshot_id} == "${snapshot_id}" ]]; then
+                already_known=true
+                break
+            fi
+        done
+        if [[ ${already_known} == false ]]; then
+            snapshot_ids+=("${snapshot_id}")
+        fi
+    done
+
     for snapshot_id in "${snapshot_ids[@]}"; do
         deleted=false
         for _ in {1..6}; do
@@ -100,9 +140,11 @@ cleanup() {
         [[ ${deleted} == true ]] || { echo "failed to delete validation snapshot ${snapshot_id}" >&2; cleanup_status=1; }
     done
 
-    aws s3 rm "s3://${bucket}/${object_key}" \
-        --region "${region}" \
-        --only-show-errors >/dev/null || cleanup_status=1
+    if [[ -n ${object_key} ]]; then
+        aws s3 rm "s3://${bucket}/${object_key}" \
+            --region "${region}" \
+            --only-show-errors >/dev/null || cleanup_status=1
+    fi
 
     if ((original_status != 0)); then
         exit "${original_status}"
@@ -111,81 +153,102 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "Uploading disposable AMI artifact to s3://${bucket}/${object_key}"
-aws s3 cp "${artifact}" "s3://${bucket}/${object_key}" \
-    --region "${region}" \
-    --only-show-errors
-
-disk_container=$(jq -cn \
-    --arg bucket "${bucket}" \
-    --arg key "${object_key}" \
-    '{Description:"lucidity AMD64 bootc disk",Format:"RAW",UserBucket:{S3Bucket:$bucket,S3Key:$key}}')
-
-import_response=$(aws ec2 import-snapshot \
-    --region "${region}" \
-    --role-name "${vmimport_role}" \
-    --encrypted \
-    --description "lucidity AMD64 bootc snapshot validation ${run_id}" \
-    --disk-container "${disk_container}" \
-    --output json)
-import_task_id=$(jq -r '.ImportTaskId' <<< "${import_response}")
-[[ -n ${import_task_id} && ${import_task_id} != null ]] || { echo "EC2 did not return an import task ID" >&2; exit 1; }
-echo "Started ${import_task_id}"
-
-task_response=""
-for ((attempt = 1; attempt <= poll_attempts; attempt++)); do
-    task_response=$(aws ec2 describe-import-snapshot-tasks \
+if [[ ${snapshot_upload_mode} == ebs-direct ]]; then
+    echo "Uploading the disposable AMI artifact directly to an encrypted EBS snapshot"
+    snapshot_id=$("${coldsnap_command}" \
         --region "${region}" \
-        --import-task-ids "${import_task_id}" \
+        upload \
+        --wait \
+        --no-progress \
+        --kms-key-id "${snapshot_kms_key_arn}" \
+        --workers "${coldsnap_workers}" \
+        --description "lucidity AMD64 bootc snapshot validation ${run_id}" \
+        --tag "Key=Name,Value=lucidity-ami-validation-${run_id}" \
+        --tag "Key=Project,Value=lucidity" \
+        --tag "Key=Purpose,Value=ami-validation" \
+        --tag "Key=GitHubRunId,Value=${run_id}" \
+        "${artifact}")
+    [[ ${snapshot_id} =~ ^snap-[0-9a-f]+$ ]] || { echo "coldsnap did not return a snapshot ID" >&2; exit 1; }
+    snapshot_ids=("${snapshot_id}")
+else
+    object_key="validation/${run_id}/$(basename "${artifact}")"
+    echo "Uploading disposable AMI artifact to s3://${bucket}/${object_key}"
+    aws s3 cp "${artifact}" "s3://${bucket}/${object_key}" \
+        --region "${region}" \
+        --only-show-errors
+
+    disk_container=$(jq -cn \
+        --arg bucket "${bucket}" \
+        --arg key "${object_key}" \
+        '{Description:"lucidity AMD64 bootc disk",Format:"RAW",UserBucket:{S3Bucket:$bucket,S3Key:$key}}')
+
+    import_response=$(aws ec2 import-snapshot \
+        --region "${region}" \
+        --role-name "${vmimport_role}" \
+        --encrypted \
+        --description "lucidity AMD64 bootc snapshot validation ${run_id}" \
+        --disk-container "${disk_container}" \
         --output json)
+    import_task_id=$(jq -r '.ImportTaskId' <<< "${import_response}")
+    [[ -n ${import_task_id} && ${import_task_id} != null ]] || { echo "EC2 did not return an import task ID" >&2; exit 1; }
+    echo "Started ${import_task_id}"
+
+    task_response=""
+    for ((attempt = 1; attempt <= poll_attempts; attempt++)); do
+        task_response=$(aws ec2 describe-import-snapshot-tasks \
+            --region "${region}" \
+            --import-task-ids "${import_task_id}" \
+            --output json)
+        status=$(jq -r '.ImportSnapshotTasks[0].SnapshotTaskDetail.Status' <<< "${task_response}")
+        status_message=$(jq -r '.ImportSnapshotTasks[0].SnapshotTaskDetail.StatusMessage // ""' <<< "${task_response}")
+        progress=$(jq -r '.ImportSnapshotTasks[0].SnapshotTaskDetail.Progress // "0"' <<< "${task_response}")
+        echo "${import_task_id}: ${status} ${progress}% ${status_message}"
+
+        case "${status}" in
+            completed) break ;;
+            active) sleep "${poll_interval}" ;;
+            *) echo "snapshot import failed with status ${status}: ${status_message}" >&2; exit 1 ;;
+        esac
+    done
+
     status=$(jq -r '.ImportSnapshotTasks[0].SnapshotTaskDetail.Status' <<< "${task_response}")
-    status_message=$(jq -r '.ImportSnapshotTasks[0].SnapshotTaskDetail.StatusMessage // ""' <<< "${task_response}")
-    progress=$(jq -r '.ImportSnapshotTasks[0].SnapshotTaskDetail.Progress // "0"' <<< "${task_response}")
-    echo "${import_task_id}: ${status} ${progress}% ${status_message}"
+    [[ ${status} == completed ]] || { echo "snapshot import did not complete within the polling window" >&2; exit 1; }
 
-    case "${status}" in
-        completed) break ;;
-        active) sleep "${poll_interval}" ;;
-        *) echo "snapshot import failed with status ${status}: ${status_message}" >&2; exit 1 ;;
-    esac
-done
-
-status=$(jq -r '.ImportSnapshotTasks[0].SnapshotTaskDetail.Status' <<< "${task_response}")
-[[ ${status} == completed ]] || { echo "snapshot import did not complete within the polling window" >&2; exit 1; }
-
-mapfile -t snapshot_ids < <(jq -r '.ImportSnapshotTasks[0].SnapshotTaskDetail.SnapshotId // empty' <<< "${task_response}")
-(( ${#snapshot_ids[@]} > 0 )) || { echo "completed import did not return a snapshot ID" >&2; exit 1; }
+    mapfile -t snapshot_ids < <(jq -r '.ImportSnapshotTasks[0].SnapshotTaskDetail.SnapshotId // empty' <<< "${task_response}")
+fi
+(( ${#snapshot_ids[@]} > 0 )) || { echo "snapshot upload did not return a snapshot ID" >&2; exit 1; }
 
 snapshot=$(aws ec2 describe-snapshots \
     --region "${region}" \
     --snapshot-ids "${snapshot_ids[0]}" \
     --output json)
-[[ $(jq -r '.Snapshots[0].Encrypted' <<< "${snapshot}") == true ]] || { echo "imported snapshot is not encrypted" >&2; exit 1; }
-snapshot_volume_size=$(jq -r '.Snapshots[0].VolumeSize // empty' <<< "${snapshot}")
-[[ ${snapshot_volume_size} =~ ^[1-9][0-9]*$ ]] || { echo "imported snapshot did not return a valid volume size" >&2; exit 1; }
-
-if [[ ${launch_validation} == true ]]; then
-    aws ec2 create-tags \
-        --region "${region}" \
-        --resources "${snapshot_ids[0]}" \
-        --tags \
-            "Key=Name,Value=lucidity-ami-validation-${run_id}" \
-            "Key=Project,Value=lucidity" \
-            "Key=Purpose,Value=ami-validation" \
-            "Key=GitHubRunId,Value=${run_id}"
+[[ $(jq -r '.Snapshots[0].Encrypted' <<< "${snapshot}") == true ]] || { echo "uploaded snapshot is not encrypted" >&2; exit 1; }
+if [[ ${snapshot_upload_mode} == ebs-direct ]]; then
+    [[ $(jq -r '.Snapshots[0].KmsKeyId // empty' <<< "${snapshot}") == "${snapshot_kms_key_arn}" ]] || {
+        echo "direct snapshot does not use the configured KMS key" >&2
+        exit 1
+    }
 fi
+snapshot_volume_size=$(jq -r '.Snapshots[0].VolumeSize // empty' <<< "${snapshot}")
+[[ ${snapshot_volume_size} =~ ^[1-9][0-9]*$ ]] || { echo "uploaded snapshot did not return a valid volume size" >&2; exit 1; }
+
+aws ec2 create-tags \
+    --region "${region}" \
+    --resources "${snapshot_ids[0]}" \
+    --tags \
+        "Key=Name,Value=lucidity-ami-validation-${run_id}" \
+        "Key=Project,Value=lucidity" \
+        "Key=Purpose,Value=ami-validation" \
+        "Key=GitHubRunId,Value=${run_id}"
 
 block_device_mappings=$(jq -cn \
     --arg snapshot_id "${snapshot_ids[0]}" \
     '[{DeviceName:"/dev/xvda",Ebs:{SnapshotId:$snapshot_id,DeleteOnTermination:true,VolumeType:"gp3"}}]')
 image_name="lucidity-ami-validation-${run_id}"
-register_tag_arguments=()
-if [[ ${launch_validation} == true ]]; then
-    register_tag_arguments=(
-        --tag-specifications
-        "ResourceType=image,Tags=[{Key=Name,Value=${image_name}},{Key=Project,Value=lucidity},{Key=Purpose,Value=ami-validation},{Key=GitHubRunId,Value=${run_id}}]"
-    )
-fi
+register_tag_arguments=(
+    --tag-specifications
+    "ResourceType=image,Tags=[{Key=Name,Value=${image_name}},{Key=Project,Value=lucidity},{Key=Purpose,Value=ami-validation},{Key=GitHubRunId,Value=${run_id}}]"
+)
 register_response=$(aws ec2 register-image \
     --region "${region}" \
     --name "${image_name}" \
@@ -209,12 +272,12 @@ image=$(aws ec2 describe-images \
     --region "${region}" \
     --image-ids "${image_id}" \
     --output json)
-[[ $(jq -r '.Images[0].State' <<< "${image}") == available ]] || { echo "imported AMI is not available" >&2; exit 1; }
-[[ $(jq -r '.Images[0].Architecture' <<< "${image}") == x86_64 ]] || { echo "imported AMI is not x86_64" >&2; exit 1; }
-[[ $(jq -r '.Images[0].RootDeviceType' <<< "${image}") == ebs ]] || { echo "imported AMI is not EBS-backed" >&2; exit 1; }
-[[ $(jq -r '.Images[0].BootMode' <<< "${image}") == uefi ]] || { echo "imported AMI is not UEFI-only" >&2; exit 1; }
-[[ $(jq -r '.Images[0].EnaSupport' <<< "${image}") == true ]] || { echo "imported AMI does not enable ENA" >&2; exit 1; }
-[[ $(jq -r '.Images[0].ImdsSupport' <<< "${image}") == v2.0 ]] || { echo "imported AMI does not require IMDSv2" >&2; exit 1; }
+[[ $(jq -r '.Images[0].State' <<< "${image}") == available ]] || { echo "registered AMI is not available" >&2; exit 1; }
+[[ $(jq -r '.Images[0].Architecture' <<< "${image}") == x86_64 ]] || { echo "registered AMI is not x86_64" >&2; exit 1; }
+[[ $(jq -r '.Images[0].RootDeviceType' <<< "${image}") == ebs ]] || { echo "registered AMI is not EBS-backed" >&2; exit 1; }
+[[ $(jq -r '.Images[0].BootMode' <<< "${image}") == uefi ]] || { echo "registered AMI is not UEFI-only" >&2; exit 1; }
+[[ $(jq -r '.Images[0].EnaSupport' <<< "${image}") == true ]] || { echo "registered AMI does not enable ENA" >&2; exit 1; }
+[[ $(jq -r '.Images[0].ImdsSupport' <<< "${image}") == v2.0 ]] || { echo "registered AMI does not require IMDSv2" >&2; exit 1; }
 [[ $(jq -r '.Images[0].BlockDeviceMappings[0].Ebs.DeleteOnTermination' <<< "${image}") == true ]] || { echo "AMI root volume is not deleted on instance termination" >&2; exit 1; }
 [[ $(jq -r '.Images[0].BlockDeviceMappings[0].Ebs.VolumeType' <<< "${image}") == gp3 ]] || { echo "AMI root volume is not gp3" >&2; exit 1; }
 
@@ -344,14 +407,18 @@ if [[ ${launch_validation} == true ]]; then
     echo "SSM validated the disposable bootc guest ${instance_id}; cleanup will terminate it"
 fi
 
-echo "AWS registered the AMD64 bootc snapshot as ${image_id}; cleanup will now remove the AMI, snapshot, and S3 object"
+echo "AWS registered the AMD64 bootc snapshot as ${image_id}; cleanup will now remove all disposable validation resources"
 if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then
     {
-        echo "## AMI import validation"
+        echo "## AMI snapshot validation"
         echo
-        echo "AWS imported the AMD64 raw bootc disk as an encrypted EBS snapshot and registered it as an AMI."
+        echo "AWS uploaded the AMD64 raw bootc disk using \`${snapshot_upload_mode}\`, verified the encrypted EBS snapshot, and registered it as an AMI."
         echo
-        echo "- Import task: \`${import_task_id}\`"
+        echo "- Snapshot transport: \`${snapshot_upload_mode}\`"
+        if [[ -n ${import_task_id} ]]; then
+            echo "- Import task: \`${import_task_id}\`"
+        fi
+        echo "- Snapshot: \`${snapshot_ids[0]}\` (disposable; removed during cleanup)"
         echo "- AMI: \`${image_id}\` (disposable; removed during cleanup)"
         if [[ -n ${instance_id} ]]; then
             echo "- T3a instance: \`${instance_id}\` (disposable; terminated during cleanup)"

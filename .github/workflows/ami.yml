@@ -6,6 +6,8 @@ on:
       - .github/workflows/ami.yml
       - Containerfile
       - ci/Containerfile
+      - flake.lock
+      - flake.nix
       - image/**
       - roles/**
       - scripts/build.sh
@@ -14,11 +16,19 @@ on:
       - scripts/validate-disk.sh
   workflow_dispatch:
     inputs:
-      run_aws_import:
-        description: Upload the raw artifact and perform a disposable AWS VM Import/Export validation
+      run_aws_validation:
+        description: Upload the raw artifact, register a disposable AMI, and validate its AWS metadata
         required: true
         type: boolean
         default: false
+      snapshot_upload_mode:
+        description: EBS Direct API is the optimized default; VM Import remains the compatibility fallback
+        required: true
+        type: choice
+        options:
+          - ebs-direct
+          - vmimport
+        default: ebs-direct
       run_aws_launch:
         description: Boot the disposable AMI on t3a.small and validate the guest through SSM
         required: true
@@ -78,31 +88,48 @@ jobs:
       - name: Require configured AWS validation identifiers
         if: github.event_name == 'workflow_dispatch'
         env:
-          RUN_AWS_IMPORT: ${{ inputs.run_aws_import }}
+          RUN_AWS_VALIDATION: ${{ inputs.run_aws_validation }}
           RUN_AWS_LAUNCH: ${{ inputs.run_aws_launch }}
+          SNAPSHOT_UPLOAD_MODE: ${{ inputs.snapshot_upload_mode }}
           IMPORT_BUCKET: ${{ vars.AWS_AMI_IMPORT_BUCKET }}
           IMPORT_ROLE_ARN: ${{ vars.AWS_AMI_IMPORT_ROLE_ARN }}
+          SNAPSHOT_KMS_KEY_ARN: ${{ vars.AWS_AMI_SNAPSHOT_KMS_KEY_ARN }}
           VMIMPORT_ROLE: ${{ vars.AWS_VMIMPORT_ROLE_NAME }}
           TEST_INSTANCE_PROFILE: ${{ vars.AWS_AMI_TEST_INSTANCE_PROFILE_NAME }}
           TEST_SECURITY_GROUP: ${{ vars.AWS_AMI_TEST_SECURITY_GROUP_ID }}
           TEST_SUBNET: ${{ vars.AWS_AMI_TEST_SUBNET_ID }}
         run: |
-          if [[ "${RUN_AWS_LAUNCH}" == true && "${RUN_AWS_IMPORT}" != true ]]; then
-            echo "run_aws_launch requires run_aws_import" >&2
+          if [[ "${RUN_AWS_LAUNCH}" == true && "${RUN_AWS_VALIDATION}" != true ]]; then
+            echo "run_aws_launch requires run_aws_validation" >&2
             exit 1
           fi
-          [[ "${RUN_AWS_IMPORT}" == true ]] || exit 0
-          test -n "${IMPORT_BUCKET}" || { echo "AWS_AMI_IMPORT_BUCKET repository variable is required" >&2; exit 1; }
+          [[ "${RUN_AWS_VALIDATION}" == true ]] || exit 0
           test -n "${IMPORT_ROLE_ARN}" || { echo "AWS_AMI_IMPORT_ROLE_ARN repository variable is required" >&2; exit 1; }
-          test -n "${VMIMPORT_ROLE}" || { echo "AWS_VMIMPORT_ROLE_NAME repository variable is required" >&2; exit 1; }
+          if [[ "${SNAPSHOT_UPLOAD_MODE}" == ebs-direct ]]; then
+            test -n "${SNAPSHOT_KMS_KEY_ARN}" || { echo "AWS_AMI_SNAPSHOT_KMS_KEY_ARN repository variable is required" >&2; exit 1; }
+          else
+            test -n "${IMPORT_BUCKET}" || { echo "AWS_AMI_IMPORT_BUCKET repository variable is required for vmimport" >&2; exit 1; }
+            test -n "${VMIMPORT_ROLE}" || { echo "AWS_VMIMPORT_ROLE_NAME repository variable is required for vmimport" >&2; exit 1; }
+          fi
           if [[ "${RUN_AWS_LAUNCH}" == true ]]; then
             test -n "${TEST_INSTANCE_PROFILE}" || { echo "AWS_AMI_TEST_INSTANCE_PROFILE_NAME repository variable is required" >&2; exit 1; }
             test -n "${TEST_SECURITY_GROUP}" || { echo "AWS_AMI_TEST_SECURITY_GROUP_ID repository variable is required" >&2; exit 1; }
             test -n "${TEST_SUBNET}" || { echo "AWS_AMI_TEST_SUBNET_ID repository variable is required" >&2; exit 1; }
           fi
 
+      - name: Install Determinate Nix for the pinned EBS uploader
+        if: github.event_name == 'workflow_dispatch' && inputs.run_aws_validation && inputs.snapshot_upload_mode == 'ebs-direct'
+        uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
+
+      - name: Resolve the pinned coldsnap binary
+        if: github.event_name == 'workflow_dispatch' && inputs.run_aws_validation && inputs.snapshot_upload_mode == 'ebs-direct'
+        run: |
+          coldsnap_path=$(nix build --no-link --print-out-paths .#coldsnap)
+          test -x "${coldsnap_path}/bin/coldsnap"
+          echo "COLDSNAP_COMMAND=${coldsnap_path}/bin/coldsnap" >> "${GITHUB_ENV}"
+
       - name: Configure short-lived AWS credentials
-        if: github.event_name == 'workflow_dispatch' && inputs.run_aws_import
+        if: github.event_name == 'workflow_dispatch' && inputs.run_aws_validation
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
           allowed-account-ids: 467590374785
@@ -111,11 +138,13 @@ jobs:
           role-duration-seconds: 10800
           role-session-name: lucidity-ami-${{ github.run_id }}
 
-      - name: Validate disposable AWS VM import
-        if: github.event_name == 'workflow_dispatch' && inputs.run_aws_import
+      - name: Validate disposable AWS snapshot and AMI
+        if: github.event_name == 'workflow_dispatch' && inputs.run_aws_validation
         env:
           AMI_IMPORT_BUCKET: ${{ vars.AWS_AMI_IMPORT_BUCKET }}
           AMI_LAUNCH_VALIDATION: ${{ inputs.run_aws_launch }}
+          AMI_SNAPSHOT_KMS_KEY_ARN: ${{ vars.AWS_AMI_SNAPSHOT_KMS_KEY_ARN }}
+          AMI_SNAPSHOT_UPLOAD_MODE: ${{ inputs.snapshot_upload_mode }}
           AMI_TEST_INSTANCE_PROFILE_NAME: ${{ vars.AWS_AMI_TEST_INSTANCE_PROFILE_NAME }}
           AMI_TEST_INSTANCE_TYPE: t3a.small
           AMI_TEST_SECURITY_GROUP_ID: ${{ vars.AWS_AMI_TEST_SECURITY_GROUP_ID }}

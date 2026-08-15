@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+: "${AWS_MOCK_LOG:?AWS_MOCK_LOG is required}"
+: "${AWS_MOCK_SNAPSHOT_ID:=snap-123abc}"
+
+printf 'coldsnap %s\n' "$*" >> "${AWS_MOCK_LOG}"
+printf '%s\n' "${AWS_MOCK_SNAPSHOT_ID}"

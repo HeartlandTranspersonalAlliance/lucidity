@@ -2,6 +2,8 @@
 set -Eeuo pipefail
 
 : "${AWS_MOCK_LOG:?AWS_MOCK_LOG is required}"
+: "${AWS_MOCK_SNAPSHOT_ID:=snap-123abc}"
+: "${AWS_MOCK_KMS_KEY_ARN:=arn:aws:kms:us-east-2:123456789012:key/11111111-2222-3333-4444-555555555555}"
 printf '%s\n' "$*" >> "${AWS_MOCK_LOG}"
 
 service=${1:-}
@@ -14,10 +16,18 @@ case "${service} ${operation}" in
         printf '%s\n' '{"ImportTaskId":"import-snap-test"}'
         ;;
     "ec2 describe-import-snapshot-tasks")
-        printf '%s\n' '{"ImportSnapshotTasks":[{"ImportTaskId":"import-snap-test","SnapshotTaskDetail":{"Status":"completed","Progress":"100","SnapshotId":"snap-test"}}]}'
+        jq -cn --arg snapshot_id "${AWS_MOCK_SNAPSHOT_ID}" \
+            '{ImportSnapshotTasks:[{ImportTaskId:"import-snap-test",SnapshotTaskDetail:{Status:"completed",Progress:"100",SnapshotId:$snapshot_id}}]}'
         ;;
     "ec2 describe-snapshots")
-        printf '%s\n' '{"Snapshots":[{"SnapshotId":"snap-test","Encrypted":true,"State":"completed","VolumeSize":12}]}'
+        if [[ " $* " == *" --owner-ids self "* ]]; then
+            printf '%s\n' "${AWS_MOCK_SNAPSHOT_ID}"
+        else
+            jq -cn \
+                --arg kms_key_id "${AWS_MOCK_KMS_KEY_ARN}" \
+                --arg snapshot_id "${AWS_MOCK_SNAPSHOT_ID}" \
+                '{Snapshots:[{SnapshotId:$snapshot_id,Encrypted:true,KmsKeyId:$kms_key_id,State:"completed",VolumeSize:12}]}'
+        fi
         ;;
     "ec2 register-image")
         printf '%s\n' '{"ImageId":"ami-test"}'
@@ -25,7 +35,8 @@ case "${service} ${operation}" in
     "ec2 wait")
         ;;
     "ec2 describe-images")
-        printf '%s\n' '{"Images":[{"ImageId":"ami-test","State":"available","Architecture":"x86_64","RootDeviceType":"ebs","BootMode":"uefi","EnaSupport":true,"ImdsSupport":"v2.0","BlockDeviceMappings":[{"DeviceName":"/dev/xvda","Ebs":{"SnapshotId":"snap-test","DeleteOnTermination":true,"VolumeType":"gp3"}}]}]}'
+        jq -cn --arg snapshot_id "${AWS_MOCK_SNAPSHOT_ID}" \
+            '{Images:[{ImageId:"ami-test",State:"available",Architecture:"x86_64",RootDeviceType:"ebs",BootMode:"uefi",EnaSupport:true,ImdsSupport:"v2.0",BlockDeviceMappings:[{DeviceName:"/dev/xvda",Ebs:{SnapshotId:$snapshot_id,DeleteOnTermination:true,VolumeType:"gp3"}}]}]}'
         ;;
     "ec2 describe-security-groups")
         printf '%s\n' '{"SecurityGroups":[{"GroupId":"sg-test","IpPermissions":[{"IpProtocol":"tcp","FromPort":22,"ToPort":22,"IpRanges":[],"Ipv6Ranges":[],"UserIdGroupPairs":[{"GroupId":"sg-controller"}]}]}]}'

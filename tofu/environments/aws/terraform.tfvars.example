@@ -1,7 +1,7 @@
 # This file contains identifiers and configuration only. Do not add credentials.
 aws_region = "us-east-2"
 
-# Apply only ECR, GitHub OIDC, and disposable AMI import validation initially.
+# Apply only ECR, GitHub OIDC, and disposable AMI snapshot validation initially.
 enable_network         = false
 enable_runtime_secrets = false
 enable_instance_management = false

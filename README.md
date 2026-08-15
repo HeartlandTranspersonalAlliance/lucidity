@@ -51,14 +51,17 @@ Implemented:
 - Terraform-compatible OpenTofu modules for immutable ECR repositories and branch-restricted GitHub Actions OIDC publishing;
 - a three-AZ VPC with public/private subnets, optional NAT Gateways, tiered security groups, and VPC Flow Logs;
 - an empty controller runtime secret, dedicated rotating KMS key, and least-privilege EC2 instance profile, with no secret value in OpenTofu state.
-- a private, auto-expiring AMI import bucket and least-privilege GitHub/VM Import roles for disposable compatibility tests.
+- a dedicated AMI snapshot KMS key, EBS Direct API upload path, and private auto-expiring VM Import fallback for disposable compatibility tests.
 
 The upstream base currently makes `bootc` and `rpm-ostree` depend on Podman, so Podman remains installed. It is a bootc host dependency/tool, not the production application runtime; Coolify workloads use Docker Engine.
 
-The disposable AWS snapshot-to-AMI registration gate has passed on merged `main`.
-Next milestones are a disposable T3a boot with SSM-only access, authenticated ECR
-image publication, persistent controller bootstrap, and EC2 launch templates. No
-untested AWS deployment code is presented as complete.
+The disposable AWS snapshot-to-AMI registration and T3a boot gates have passed on
+merged `main`. The guest was validated through SSM without a key pair or inbound
+SSH, and cleanup removed the instance, AMI, snapshot, and S3 object. The default
+transport now writes the raw disk directly to EBS; VM Import remains an explicit
+fallback. Next milestones are authenticated ECR image publication, persistent
+controller bootstrap, and EC2
+launch templates. No untested AWS deployment code is presented as complete.
 
 ## Why bootc
 
@@ -114,6 +117,13 @@ For pull requests, the worker lifecycle runs whenever a changed path may affect 
 
 Local commands remain available for development and diagnosis, but a successful local run is not a substitute for the required GitHub checks.
 
+After relevant changes merge to `main`, **Publish bootc images** builds and validates
+the AMD64 controller and worker images, assumes the repository-scoped AWS role through
+GitHub OIDC, and publishes each image under an immutable `sha-<full-commit>` tag. It
+verifies the tag digest and remote `linux/amd64` manifest before succeeding. Pull
+requests receive no publishing credentials, and this candidate workflow never moves
+the mutable `stable` channel.
+
 ## Build and validate locally
 
 Requirements are a running Podman or Docker daemon, Bash, Make, jq, OpenSSH tools, and ShellCheck.
@@ -162,7 +172,7 @@ After VM boot and persistence testing succeeds, generate an AWS-format disk arti
 make ami-worker
 ```
 
-Artifacts are placed under `image-output/` and ignored by Git. An `.ami` artifact is not an EC2 AMI: it still requires controlled S3 upload and EC2 VM Import/Export registration. This command does neither and receives no AWS credentials. See [image/README.md](image/README.md) for the boundary.
+Artifacts are placed under `image-output/` and ignored by Git. An `.ami` artifact is not an EC2 AMI: it still requires upload to an EBS snapshot and explicit EC2 registration. The optimized validation path uses the EBS Direct APIs; controlled S3 upload and VM Import remain the compatibility fallback. This command performs neither path and receives no AWS credentials. See [image/README.md](image/README.md) for the boundary.
 
 ## Boot and test the worker locally
 
@@ -253,7 +263,7 @@ Automatic OS reboots are enabled for changed bootc images in the daily update wi
 
 ## AWS direction
 
-The AWS layer uses configurable architecture, region, and instance types. The initial target is AMD64 with `t3a.small` for the controller and `t3a.large` for the worker; ARM64 is deferred until the first AWS deployment path is proven. GitHub Actions will publish to ECR through OIDC, not long-lived AWS keys. AMIs will be generated separately from OCI images with upstream bootc tooling and explicitly selected by OpenTofu.
+The AWS layer uses configurable architecture, region, and instance types. The initial target is AMD64 with `t3a.small` for the controller and `t3a.large` for the worker; ARM64 is deferred until the first AWS deployment path is proven. GitHub Actions publishes immutable candidates to ECR through OIDC, not long-lived AWS keys. AMIs are generated separately from OCI images with upstream bootc tooling and explicitly selected by OpenTofu.
 
 Networking spans three Availability Zones by default and provides public and isolated private subnets, DNS support, tiered security groups, and 90-day VPC Flow Logs. The initial two-node deployment puts the controller and worker in public subnets with one Elastic IP each. It uses private VPC addresses for controller-to-worker SSH and exposes only the required public service ports. NAT Gateways and an ALB are not justified for the expected five-to-ten-person, low-traffic workload and remain disabled.
 
@@ -277,9 +287,31 @@ Those services can be added later only when a concrete operational requirement j
 
 AMD64 is preferred for the first deployment and maximum third-party image compatibility. ARM64/Graviton remains a future optimization when every required application image is multi-architecture. Production x86 emulation on ARM is not enabled implicitly.
 
-The AWS foundation is implemented under [`tofu/`](tofu/README.md). Its first apply creates immutable scanned ECR repositories, branch-restricted GitHub identities, and disposable AMI import resources. Networking and the empty encrypted controller secret are feature-gated until the AMI is accepted and EC2 deployment begins. The stack deliberately does not deploy instances or require AWS credentials during pull-request artifact validation. An authorized operator must perform the initial bootstrap apply, then manual import validation can use OIDC without storing AWS access keys in GitHub.
+The AWS foundation is implemented under [`tofu/`](tofu/README.md). Its first apply creates immutable scanned ECR repositories, branch-restricted GitHub identities, and disposable AMI snapshot validation resources. Networking and the empty encrypted controller secret are feature-gated until the AMI is accepted and EC2 deployment begins. The stack deliberately does not deploy instances or require AWS credentials during pull-request artifact validation. An authorized operator must perform the initial bootstrap apply, then manual snapshot validation can use OIDC without storing AWS access keys in GitHub.
 
 See [proposal.md](proposal.md) for the complete staged implementation and acceptance criteria.
+
+## Publish immutable bootc candidates to ECR
+
+After the OpenTofu foundation is applied, configure these non-secret GitHub repository
+variables from its outputs:
+
+| GitHub variable | OpenTofu output |
+|---|---|
+| `AWS_ECR_PUBLISH_ROLE_ARN` | `github_publish_role_arn` |
+| `AWS_ECR_CONTROLLER_REPOSITORY_URL` | `ecr_repository_urls["controller"]` |
+| `AWS_ECR_WORKER_REPOSITORY_URL` | `ecr_repository_urls["worker"]` |
+
+The publishing workflow runs only for `main`, uses short-lived OIDC credentials, and
+does not require AWS access-key secrets. Every published controller and worker image
+uses `sha-<full-commit>` so the repository's immutable-tag policy binds that name to
+one digest. A manual rerun retains an existing immutable image instead of attempting
+to overwrite it.
+
+The ECR repositories reserve `stable` as their only mutable channel, but candidate
+publication deliberately does not update it. Add promotion only after a candidate has
+passed the corresponding boot test, and retain its immutable SHA tag and digest for
+rollback.
 
 ## License
 
