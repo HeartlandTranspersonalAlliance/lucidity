@@ -34,7 +34,13 @@ variable "enable_network" {
 }
 
 variable "enable_runtime_secrets" {
-  description = "Create the controller runtime secret, KMS key, and instance profile when EC2 deployment begins."
+  description = "Create the controller runtime secret, KMS key, and least-privilege IAM policy when EC2 deployment begins."
+  type        = bool
+  default     = false
+}
+
+variable "enable_instance_management" {
+  description = "Create SSM-enabled controller and worker EC2 roles and instance profiles."
   type        = bool
   default     = false
 }
@@ -75,22 +81,16 @@ variable "allowed_web_cidrs" {
   default     = ["0.0.0.0/0"]
 }
 
-variable "enable_ssh_access" {
-  description = "Create a restricted administrator SSH security group."
-  type        = bool
-  default     = false
+variable "controller_outbound_tcp_ports" {
+  description = "Internet TCP ports available to the controller security group."
+  type        = set(number)
+  default     = [443]
 }
 
-variable "ssh_allowed_cidrs" {
-  description = "IPv4 CIDR blocks allowed to use the optional administrator SSH security group."
-  type        = set(string)
-  default     = ["10.0.0.0/8"]
-}
-
-variable "controller_bootstrap_cidrs" {
-  description = "IPv4 CIDR blocks allowed to reach the controller bootstrap port 8000."
-  type        = set(string)
-  default     = []
+variable "application_outbound_tcp_ports" {
+  description = "Internet TCP ports available to the worker security group."
+  type        = set(number)
+  default     = [443, 8448]
 }
 
 variable "flow_log_retention_days" {

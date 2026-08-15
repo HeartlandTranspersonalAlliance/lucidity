@@ -5,28 +5,35 @@ This stack creates the AWS resources needed to publish lucidity bootc OCI images
 - a production VPC spanning three Availability Zones by default;
 - public and isolated private subnets, with AZ-local NAT Gateways available but disabled by default;
 - an Internet Gateway, AZ-local route tables, and VPC DNS support;
-- web, controller, application, database, and optional administrator SSH security groups;
+- web, controller, application, and database security groups with no public management ingress;
 - VPC Flow Logs delivered to a 90-day CloudWatch Logs group;
 - one empty controller-runtime Secrets Manager secret encrypted by a dedicated rotating KMS key;
-- a controller EC2 instance profile restricted to that secret and KMS key;
+- SSM-enabled controller and worker instance profiles, with the controller optionally restricted to that secret and KMS key;
 - immutable controller and worker ECR version tags, one controlled mutable `stable` channel, scan-on-push, and bounded retention;
 - a private, auto-expiring S3 bucket and project-scoped IAM roles for disposable GitHub AMI import validation;
 - an account-level GitHub Actions OIDC provider, unless an existing provider ARN is supplied;
 - a repository-scoped IAM role that only trusts `main` in `HeartlandTranspersonalAlliance/lucidity`;
 - least-privilege permissions to authenticate to ECR and push to these two repositories.
 
-It does not create EC2 instances, AMIs, state storage, or secret values. Networking
-and the runtime secret module are implemented but disabled during the initial image-
-pipeline bootstrap.
+It does not create EC2 instances, AMIs, state storage, or secret values. Networking,
+instance management, and the runtime secret module are implemented but disabled during
+the initial image-pipeline bootstrap.
 
 The initial compute contract is AMD64 with `t3a.small` for the controller and
 `t3a.large` for the worker. These values are outputs for the future launch-template
 milestone and do not create instances yet. ARM64 remains configurable but deferred.
 
-The default `allowed_web_cidrs` value is `0.0.0.0/0` because application HTTPS must
-be reachable from the internet. Administrator SSH is disabled by default, and port
-8000 has no ingress until `controller_bootstrap_cidrs` is explicitly set. Review all
-CIDRs before applying.
+The default `allowed_web_cidrs` value is `0.0.0.0/0` because application HTTP and
+HTTPS must be reachable from the internet. There is no administrator SSH security
+group and no ingress rule for port 8000. External shell and bootstrap access use
+Systems Manager Session Manager over outbound HTTPS. Coolify's controller-to-worker
+SSH remains restricted to the private VPC security-group relationship.
+
+The controller can initiate outbound TCP 443. The worker can initiate outbound TCP
+443 and 8448; 8448 is retained for Matrix federation with remote servers that do not
+delegate federation to 443. The web and database security groups add no egress, and
+security groups are stateful, so response traffic for accepted connections does not
+need a separate outbound rule.
 
 The initial controller and worker will use public subnets and stable Elastic IPs, so
 `enable_nat_gateways` defaults to `false`. The private subnets remain isolated. Enable
@@ -49,8 +56,10 @@ through an out-of-band operator workflow after apply. Never put that value in HC
 tfvars, user data, an AMI, CI logs, or OpenTofu state.
 
 The future controller launch template must attach `controller_instance_profile_name`.
-That role can describe and read only this secret and can decrypt only through Secrets
-Manager in the configured region. Runtime consumers must use the output pattern:
+Its SSM-enabled role can describe and read only this secret and can decrypt only
+through Secrets Manager in the configured region. The worker uses
+`worker_instance_profile_name` and receives no secret permission. Runtime consumers
+must use the output pattern:
 
 ```text
 {{resolve:secretsmanager:lucidity/production/controller-runtime:SecretString:json-key}}
@@ -90,6 +99,31 @@ and removes the AMI, EBS snapshots, and S3 object. A successful import proves AW
 accepts the artifact metadata; a later disposable T3a launch must still prove boot and
 guest behavior.
 
+## Shell and bootstrap access
+
+Both bootc images include and enable SSM Agent. After a launch template attaches the
+corresponding instance profile and the node reports `Online` in Systems Manager, open
+an AWS CLI shell without any inbound management port:
+
+```bash
+aws ssm start-session --region us-east-2 --target i-INSTANCE_ID
+```
+
+For the temporary Coolify bootstrap UI, forward local port 8000 through the SSM data
+channel instead of opening it in the security group:
+
+```bash
+aws ssm start-session \
+  --region us-east-2 \
+  --target i-CONTROLLER_INSTANCE_ID \
+  --document-name AWS-StartPortForwardingSession \
+  --parameters '{"portNumber":["8000"],"localPortNumber":["8000"]}'
+```
+
+Then open `http://127.0.0.1:8000`. Direct Session Manager shells can be logged. SSH
+and port-forwarded sessions are encrypted tunnels, but their payload is not available
+to Session Manager logging. CloudTrail still records the session API calls.
+
 ## Validate without AWS credentials
 
 From the repository root:
@@ -120,9 +154,10 @@ pipeline foundation:
 - the private AMI import bucket;
 - VM Import Export and GitHub AMI validation roles.
 
-It deliberately leaves `enable_network` and `enable_runtime_secrets` false. After the
-disposable AWS import succeeds and EC2 deployment is ready, set both to true and apply
-again. Keep `enable_nat_gateways` false for the selected direct-public design.
+It deliberately leaves `enable_network`, `enable_instance_management`, and
+`enable_runtime_secrets` false. After the disposable AWS import succeeds and EC2
+deployment is ready, set all three to true and apply again. Keep
+`enable_nat_gateways` false for the selected direct-public design.
 
 If `token.actions.githubusercontent.com` is already configured in the account, set `github_oidc_provider_arn` to its ARN. IAM permits only one provider for that URL in an account.
 

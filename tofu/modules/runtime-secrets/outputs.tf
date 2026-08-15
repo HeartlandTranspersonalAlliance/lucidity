@@ -1,11 +1,6 @@
-output "controller_instance_profile_name" {
-  description = "Instance profile granting the controller least-privilege runtime secret access."
-  value       = aws_iam_instance_profile.controller.name
-}
-
-output "controller_role_arn" {
-  description = "IAM role ARN used by the future controller EC2 instance."
-  value       = aws_iam_role.controller.arn
+output "controller_policy_arn" {
+  description = "Customer-managed policy granting read-only access to the controller runtime secret."
+  value       = aws_iam_policy.controller_secrets.arn
 }
 
 output "kms_key_arn" {

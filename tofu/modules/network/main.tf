@@ -177,17 +177,6 @@ resource "aws_security_group" "database" {
   tags = merge(local.common_tags, { Name = "${var.vpc_name}-database-sg" })
 }
 
-resource "aws_security_group" "ssh" {
-  count = var.enable_ssh_access ? 1 : 0
-
-  name_prefix            = "${var.vpc_name}-ssh-"
-  description            = "Restricted administrator SSH access for ${var.vpc_name}"
-  revoke_rules_on_delete = true
-  vpc_id                 = aws_vpc.this.id
-
-  tags = merge(local.common_tags, { Name = "${var.vpc_name}-ssh-sg" })
-}
-
 resource "aws_vpc_security_group_ingress_rule" "web" {
   for_each = {
     for rule in setproduct(var.allowed_web_cidrs, [80, 443]) :
@@ -209,17 +198,6 @@ resource "aws_vpc_security_group_ingress_rule" "controller_self_ssh" {
   referenced_security_group_id = aws_security_group.controller.id
   security_group_id            = aws_security_group.controller.id
   to_port                      = 22
-}
-
-resource "aws_vpc_security_group_ingress_rule" "controller_bootstrap" {
-  for_each = var.controller_bootstrap_cidrs
-
-  cidr_ipv4         = each.value
-  description       = "Restricted Coolify bootstrap UI"
-  from_port         = 8000
-  ip_protocol       = "tcp"
-  security_group_id = aws_security_group.controller.id
-  to_port           = 8000
 }
 
 resource "aws_vpc_security_group_ingress_rule" "worker_ssh_from_controller" {
@@ -249,36 +227,48 @@ resource "aws_vpc_security_group_ingress_rule" "database_mysql" {
   to_port                      = 3306
 }
 
-resource "aws_vpc_security_group_ingress_rule" "administrator_ssh" {
-  for_each = var.enable_ssh_access ? var.ssh_allowed_cidrs : toset([])
-
-  cidr_ipv4         = each.value
-  description       = "Restricted administrator SSH"
-  from_port         = 22
-  ip_protocol       = "tcp"
-  security_group_id = aws_security_group.ssh[0].id
-  to_port           = 22
-}
-
-locals {
-  egress_security_groups = merge(
-    {
-      application = aws_security_group.application.id
-      controller  = aws_security_group.controller.id
-      database    = aws_security_group.database.id
-      web         = aws_security_group.web.id
-    },
-    var.enable_ssh_access ? { ssh = aws_security_group.ssh[0].id } : {},
-  )
-}
-
-resource "aws_vpc_security_group_egress_rule" "all" {
-  for_each = local.egress_security_groups
+resource "aws_vpc_security_group_egress_rule" "controller_tcp" {
+  for_each = {
+    for port in var.controller_outbound_tcp_ports : tostring(port) => port
+  }
 
   cidr_ipv4         = "0.0.0.0/0"
-  description       = "Required outbound access"
-  ip_protocol       = "-1"
-  security_group_id = each.value
+  description       = "Controller outbound TCP ${each.value}"
+  from_port         = each.value
+  ip_protocol       = "tcp"
+  security_group_id = aws_security_group.controller.id
+  to_port           = each.value
+}
+
+resource "aws_vpc_security_group_egress_rule" "application_tcp" {
+  for_each = {
+    for port in var.application_outbound_tcp_ports : tostring(port) => port
+  }
+
+  cidr_ipv4         = "0.0.0.0/0"
+  description       = "Application outbound TCP ${each.value}"
+  from_port         = each.value
+  ip_protocol       = "tcp"
+  security_group_id = aws_security_group.application.id
+  to_port           = each.value
+}
+
+resource "aws_vpc_security_group_egress_rule" "controller_ssh_to_worker" {
+  description                  = "Coolify controller SSH management of worker"
+  from_port                    = 22
+  ip_protocol                  = "tcp"
+  referenced_security_group_id = aws_security_group.application.id
+  security_group_id            = aws_security_group.controller.id
+  to_port                      = 22
+}
+
+resource "aws_vpc_security_group_egress_rule" "controller_self_ssh" {
+  description                  = "Coolify controller management of its local Docker host"
+  from_port                    = 22
+  ip_protocol                  = "tcp"
+  referenced_security_group_id = aws_security_group.controller.id
+  security_group_id            = aws_security_group.controller.id
+  to_port                      = 22
 }
 
 data "aws_iam_policy_document" "flow_logs_assume_role" {

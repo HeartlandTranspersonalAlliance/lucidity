@@ -59,35 +59,25 @@ variable "allowed_web_cidrs" {
   }
 }
 
-variable "enable_ssh_access" {
-  description = "Create an administrator SSH security group."
-  type        = bool
-  default     = false
-}
-
-variable "ssh_allowed_cidrs" {
-  description = "IPv4 CIDR blocks allowed to use the optional administrator SSH security group."
-  type        = set(string)
-  default     = ["10.0.0.0/8"]
+variable "controller_outbound_tcp_ports" {
+  description = "Internet TCP ports available to the controller. HTTPS supports SSM, ECR, registries, GitHub, and certificate automation."
+  type        = set(number)
+  default     = [443]
 
   validation {
-    condition = alltrue([
-      for cidr in var.ssh_allowed_cidrs : can(cidrhost(cidr, 0))
-    ])
-    error_message = "Every SSH ingress entry must be a valid IPv4 CIDR block."
+    condition     = alltrue([for port in var.controller_outbound_tcp_ports : port >= 1 && port <= 65535])
+    error_message = "Every controller outbound TCP port must be between 1 and 65535."
   }
 }
 
-variable "controller_bootstrap_cidrs" {
-  description = "IPv4 CIDR blocks allowed to reach the controller bootstrap port 8000."
-  type        = set(string)
-  default     = []
+variable "application_outbound_tcp_ports" {
+  description = "Internet TCP ports available to the worker. Port 8448 supports outbound Matrix federation when remote servers do not delegate to 443."
+  type        = set(number)
+  default     = [443, 8448]
 
   validation {
-    condition = alltrue([
-      for cidr in var.controller_bootstrap_cidrs : can(cidrhost(cidr, 0))
-    ])
-    error_message = "Every controller bootstrap entry must be a valid IPv4 CIDR block."
+    condition     = alltrue([for port in var.application_outbound_tcp_ports : port >= 1 && port <= 65535])
+    error_message = "Every application outbound TCP port must be between 1 and 65535."
   }
 }
 

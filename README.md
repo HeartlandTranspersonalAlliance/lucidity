@@ -35,7 +35,9 @@ Coolify itself will remain containerized and retain its own update lifecycle. An
 Implemented:
 
 - shared AlmaLinux 10 bootc base using Docker's official RHEL repository;
-- controller-only persistent, writable `/nix` mount prepared for a future Determinate Nix installation;
+- native `/nix` mountpoint present in both roles for a future Determinate Nix OSTree installation;
+- targeted SELinux policy packages and an explicit enforcing configuration in both roles;
+- AWS Systems Manager Agent enabled in both roles for shell access without public SSH;
 - worker image target for both arm64 and amd64 base manifests;
 - Docker data root fixed explicitly at `/var/lib/docker`;
 - key-only root SSH suitable for Coolify remote management;
@@ -75,7 +77,7 @@ Do not use runtime `dnf install` as normal configuration management. Add require
 ```text
 Containerfile                 shared and role-specific image stages
 roles/common/                 Docker, SSH, systemd, and filesystem policy
-roles/controller/             controller-only persistent Nix mount foundation
+roles/controller/             controller-only host configuration
 roles/worker/                 worker-only systemd configuration
 tofu/                         AWS network, runtime identity, secrets, ECR, and OIDC bootstrap
 scripts/build.sh              local image build
@@ -97,7 +99,7 @@ GitHub Actions is the primary build and test environment. Every pull request run
 1. OpenTofu formatting, validation, and mocked infrastructure tests in a pinned Nix environment;
 2. ShellCheck, static behavior tests, and actionlint;
 3. separate amd64 controller and worker OCI builds plus `bootc container lint`;
-4. controller image assertions for the controller-only persistent Nix mount;
+4. controller image assertions for the native `/nix` mountpoint and enforcing SELinux configuration;
 5. a privileged worker QCOW2 conversion inside the pinned CI tooling container;
 6. QCOW2 consistency checks;
 7. a UEFI worker guest boot, cloud-init and SSH checks, and Docker-volume persistence across reboot;
@@ -134,11 +136,11 @@ IMAGE_NAME=example/coolify-bootc-worker:test \
 
 The `:10` base tag was verified as a multi-architecture index when this milestone was implemented. Because it is mutable, release builds should record and promote tested digests; production hosts must not blindly follow it or a `latest` application tag.
 
-## Controller Nix storage foundation
+## Determinate Nix roadmap
 
-Only the controller image contains an empty native `/nix` directory. At boot, `nix.mount` bind-mounts persistent `/var/lib/nix` at `/nix`; the worker image contains neither this mount nor Nix-specific state. This keeps the Nix store outside the bootc deployment without modifying the immutable root at runtime.
+Both images contain an empty native `/nix` directory. This follows the proven Purplefin bootc boundary: the immutable image supplies the mountpoint, while Determinate's installer owns the generated mount, daemon, socket, and SELinux-policy integration. The repository deliberately does not maintain a competing `nix.mount` unit.
 
-Nix is not installed in the image. The current Determinate Nix Installer's [OSTree planner](https://github.com/DeterminateSystems/nix-installer/blob/main/src/planner/ostree.rs) supports an explicit persistence path and installs its SELinux policy while SELinux remains enforcing. A future booted-controller bootstrap should select that planner with `/var/lib/nix`; `install linux --init none` does not expose the persistence option and is not used here. The controller VM test must confirm that `/nix` is a writable mount, then confirm its contents survive reboot, bootc update, and rollback before the controller milestone is considered complete.
+Nix installation is a post-AMI milestone for both controller and worker, not a prerequisite for the first AWS boot. Use a reviewed, version-pinned Determinate Nix Installer with its native [OSTree planner](https://github.com/DeterminateSystems/nix-installer/blob/main/src/planner/ostree.rs), an explicit persistent path such as `/var/lib/nix`, and its native SELinux policy action. Do not use the generic Linux planner or disable SELinux. Validation must prove `nix-daemon` works while `getenforce` reports `Enforcing`, and that the store survives reboot, bootc update, rollback, and instance replacement with the intended persistent volume attached.
 
 ## Build a bootable disk artifact
 
@@ -198,11 +200,13 @@ write_files:
 
 The service runs after `cloud-final.service`. Reboots are safe: existing keys are retained and exact duplicates are not added. Never put a private key in user data, Git, an AMI, or OpenTofu configuration. EC2 user data should not be treated as a secret store even though this payload is only a public key.
 
-The worker also accepts an EC2 administrator key provisioned independently by cloud-init. AWS security groups must restrict TCP/22 to the controller security group/private VPC path and, if needed, a specific administrator CIDR. Do not expose SSH to `0.0.0.0/0`.
+The worker also accepts an EC2 administrator key in the local VM test harness. AWS administration uses Systems Manager Session Manager instead: there is no public TCP/22 rule. The only EC2 SSH path is controller-to-worker over private VPC addresses because Coolify requires it. Do not expose SSH to an administrator CIDR or `0.0.0.0/0`.
 
 ## Persistence and SELinux
 
-`/var/lib/docker` is conventional mutable host storage and remains outside bootc's immutable `/usr` deployment. Docker's data root is explicit in `daemon.json`, and the standard `container-selinux` policy is installed. SELinux is not disabled or made permissive.
+`/var/lib/docker` is conventional mutable host storage and remains outside bootc's immutable `/usr` deployment. Docker's data root is explicit in `daemon.json`, the standard `container-selinux` and targeted policy packages are installed, and `/etc/selinux/config` requires enforcing mode. The booted-VM test rejects anything other than `Enforcing`.
+
+Coolify officially lists AlmaLinux among its supported Red Hat-family hosts, but its current production Compose file uses `/data/coolify` bind mounts without SELinux relabel flags. The controller bootstrap must add a persistent, narrowly scoped `container_file_t` file-context rule for the required `/data/coolify` tree and run `restorecon` before starting Coolify. An end-to-end test must reject AVC denials; disabling or weakening SELinux is not an accepted workaround.
 
 The local lifecycle test establishes the intended persistence boundary by:
 

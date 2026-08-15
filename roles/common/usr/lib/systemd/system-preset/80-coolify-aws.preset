@@ -1,4 +1,5 @@
 enable docker.service
+enable amazon-ssm-agent.service
 enable sshd.service
 enable cloud-init-local.service
 enable cloud-init.service

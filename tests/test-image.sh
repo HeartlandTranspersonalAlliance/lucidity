@@ -11,10 +11,9 @@ required_files=(
     ci/images.env
     ci/worker-changes.sh
     roles/common/etc/docker/daemon.json
+    roles/common/etc/selinux/config
     roles/common/etc/ssh/sshd_config.d/40-coolify-aws.conf
     roles/common/usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-coolify-aws.conf
-    roles/controller/usr/lib/systemd/system/nix-storage.service
-    roles/controller/usr/lib/systemd/system/nix.mount
     roles/worker/usr/lib/systemd/system/coolify-worker-authorized-keys.service
     scripts/build.sh
     scripts/build-disk.sh
@@ -32,6 +31,10 @@ required_files=(
     tofu/modules/ami-import-validation/outputs.tf
     tofu/modules/ami-import-validation/variables.tf
     tofu/modules/ami-import-validation/versions.tf
+    tofu/modules/instance-management/main.tf
+    tofu/modules/instance-management/outputs.tf
+    tofu/modules/instance-management/variables.tf
+    tofu/modules/instance-management/versions.tf
     tofu/modules/network/main.tf
     tofu/modules/network/outputs.tf
     tofu/modules/network/variables.tf
@@ -56,12 +59,10 @@ grep -Fq 'WantedBy=cloud-init.target' roles/worker/usr/lib/systemd/system/coolif
 grep -Fq 'enable bootc-fetch-apply-updates.timer' roles/common/usr/lib/systemd/system-preset/80-coolify-aws.preset
 grep -Fq 'OnCalendar=*-*-* 11:00:00 UTC' roles/common/usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-coolify-aws.conf
 grep -Fq 'install -d -m 0755 /nix' Containerfile
-grep -Fq 'What=/var/lib/nix' roles/controller/usr/lib/systemd/system/nix.mount
-grep -Fq 'Where=/nix' roles/controller/usr/lib/systemd/system/nix.mount
-grep -Fq 'WantedBy=local-fs.target' roles/controller/usr/lib/systemd/system/nix.mount
-grep -Fq 'Before=nix.mount' roles/controller/usr/lib/systemd/system/nix-storage.service
-if grep -R -n -E 'nix\.mount|/var/lib/nix' roles/common roles/worker; then
-    echo "controller-only Nix storage leaked into the common or worker role" >&2
+grep -Fxq 'SELINUX=enforcing' roles/common/etc/selinux/config
+grep -Fxq 'SELINUXTYPE=targeted' roles/common/etc/selinux/config
+if rg -n 'nix\.mount|nix-storage|/var/lib/nix' roles Containerfile; then
+    echo "Determinate's OSTree planner, not the bootc image, must own Nix mount units" >&2
     exit 1
 fi
 grep -Eq '^IMAGE_BUILDER_IMAGE=.+@sha256:[0-9a-f]{64}$' image/image-builder.env
@@ -73,6 +74,15 @@ grep -Fq '/usr/lib/coolify-aws/image-version' Containerfile
 grep -Fq '=~ ^[[:alnum:].:-]+$' scripts/vm-init.sh
 grep -Fq '=~ ^[[:alnum:].:-]+$' scripts/vm-validate-update.sh
 grep -Fq 'CONTAINER_ENGINE' scripts/build-disk.sh
+grep -Fq 'amazon-ssm-agent' Containerfile
+grep -Fq '/3.3.5068.0/linux_amd64/amazon-ssm-agent.rpm' Containerfile
+if grep -Fq '/latest/linux_amd64/amazon-ssm-agent.rpm' Containerfile; then
+    echo "SSM Agent RPM must be version-pinned" >&2
+    exit 1
+fi
+grep -Fq 'systemctl is-enabled --quiet amazon-ssm-agent.service' scripts/validate-image.sh
+grep -Fq 'grep -Eq "^SELINUX=enforcing$" /etc/selinux/config' scripts/validate-image.sh
+grep -Fq 'getenforce) == Enforcing' scripts/vm-validate.sh
 grep -Fq "if [[ \${format} == qcow2 ]]" scripts/validate-disk.sh
 grep -Fq -- '--usage-operation RunInstances' scripts/validate-ami-import.sh
 grep -Fq -- '--architecture x86_64' scripts/validate-ami-import.sh
@@ -86,6 +96,8 @@ grep -Fq 'resource "aws_nat_gateway" "this"' tofu/modules/network/main.tf
 grep -Fq 'default     = false' tofu/modules/network/variables.tf
 grep -Fq 'image_tag_mutability = length(var.mutable_channel_tags) > 0 ? "IMMUTABLE_WITH_EXCLUSION" : "IMMUTABLE"' tofu/modules/ecr/main.tf
 grep -Fq 'resource "aws_flow_log" "this"' tofu/modules/network/main.tf
+grep -Fq 'AmazonSSMManagedInstanceCore' tofu/modules/instance-management/main.tf
+grep -Fq 'resource "aws_iam_instance_profile" "node"' tofu/modules/instance-management/main.tf
 grep -Fq 'resource "aws_s3_bucket" "this"' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'identifiers = ["vmie.amazonaws.com"]' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'variable = "iam:PassedToService"' tofu/modules/ami-import-validation/main.tf
@@ -98,6 +110,10 @@ grep -Fq 'default     = "t3a.small"' tofu/environments/aws/variables.tf
 grep -Fq 'default     = "t3a.large"' tofu/environments/aws/variables.tf
 if grep -R -n -E '0\.0\.0\.0/0.*(22|8000)|(22|8000).*0\.0\.0\.0/0' tofu; then
     echo "SSH and the Coolify bootstrap port must not be globally accessible" >&2
+    exit 1
+fi
+if rg -n 'controller_bootstrap|administrator_ssh|security_group" "ssh"|ip_protocol\s*=\s*"-1"' tofu/modules/network; then
+    echo "Public management ingress and unrestricted security-group egress are forbidden" >&2
     exit 1
 fi
 if rg -n --glob '*.tf' 'aws_secretsmanager_secret_version|secret_string\s*=' tofu; then

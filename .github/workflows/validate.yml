@@ -92,7 +92,7 @@ jobs:
           IMAGE_VERSION: controller-ci
         run: ./scripts/build.sh controller
 
-      - name: Validate controller bootc image and persistent Nix mount
+      - name: Validate controller bootc image and Nix mountpoint
         env:
           CONTAINER_ENGINE: docker
         run: ./scripts/validate-image.sh "${CONTROLLER_IMAGE}"
