@@ -157,3 +157,30 @@ output "vmimport_role_name" {
   description = "VM Import Export service role used for disposable AMI validation."
   value       = module.ami_import_validation.vmimport_role_name
 }
+
+output "ami_launch_validation_enabled" {
+  description = "Whether the main-branch AMI workflow may launch one tagged disposable t3a.small."
+  value       = var.enable_ami_launch_validation
+}
+
+output "ami_test_subnet_id" {
+  description = "Public subnet ID configured for the disposable SSM AMI boot test."
+  value = var.enable_ami_launch_validation && var.enable_network ? module.network[0].public_subnet_ids[
+    sort(keys(module.network[0].public_subnet_ids))[0]
+  ] : null
+}
+
+output "ami_test_security_group_id" {
+  description = "Application security group used by the disposable SSM AMI boot test."
+  value       = var.enable_ami_launch_validation && var.enable_network ? module.network[0].security_group_ids.application : null
+}
+
+output "ami_test_instance_profile_name" {
+  description = "SSM-enabled worker profile used by the disposable AMI boot test."
+  value       = var.enable_ami_launch_validation && var.enable_instance_management ? module.instance_management[0].instance_profile_names.worker : null
+}
+
+output "ami_test_instance_type" {
+  description = "T3a instance type permitted for disposable AMI boot validation."
+  value       = var.enable_ami_launch_validation ? var.controller_instance_type : null
+}

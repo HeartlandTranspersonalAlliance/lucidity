@@ -929,6 +929,13 @@ IMDSv2-only AMI. This preserves the AlmaLinux identity without pretending it is
 RHEL or Rocky Linux. A successful registration is not proof of bootability;
 the disposable T3a launch test remains mandatory.
 
+The merged `main` workflow completed this registration gate in GitHub Actions run
+`31859796836` on 2026-08-14. AWS completed import task
+`import-snap-9315bf3af20f6870t`, the workflow registered and validated the temporary
+AMI, and an independent AWS MCP audit confirmed that the AMI, encrypted snapshot,
+and S3 object were removed. Milestone 8 is therefore blocked only on the actual
+T3a boot and guest-behavior test, not AMI registration compatibility.
+
 ---
 
 # 24. Do not overuse EC2 Image Builder
@@ -936,6 +943,21 @@ the disposable T3a launch test remains mandatory.
 AWS EC2 Image Builder may be useful, but do not automatically adopt it.
 
 First determine whether bootc-image-builder + GitHub Actions provides a simpler and more transparent pipeline.
+
+The current unified OSBuild `image-builder` already builds the AlmaLinux bootc AMI
+disk. A bounded evaluation of its pinned native AWS uploader found that it uses
+snapshot import, supports UEFI, and enables ENA, but does not request snapshot
+encryption, set AMI IMDSv2 support, accept the project-specific VM Import role,
+or provide the validation workflow's deterministic AMI and snapshot cleanup. Its
+preflight also requires account-wide bucket discovery. Keep the current explicit
+snapshot workflow and reevaluate only after upstream closes those gaps. The full
+comparison is recorded in `docs/upstream-aws-uploader-evaluation.md`.
+
+Packer is not part of the initial pipeline. Its normal `amazon-ebs` workflow needs
+an existing source AMI, while import-oriented builders still depend on AWS VM
+Import/Export. Adding Packer would not reduce AWS cost or solve the AlmaLinux OS
+detection issue. Revisit it only if multi-cloud builds or AMI catalog promotion
+workflows make the extra dependency worthwhile.
 
 Use EC2 Image Builder only if it clearly reduces operational burden.
 
@@ -1789,7 +1811,7 @@ The initial project is complete when all of the following are true:
 [ ] GitHub Actions validates pull requests.
 [ ] GitHub Actions authenticates to AWS using OIDC.
 [ ] Images publish to ECR.
-[ ] AWS-compatible AMIs can be generated.
+[x] AWS-compatible AMIs can be generated and registered through encrypted snapshot import.
 [ ] OpenTofu can launch controller and worker EC2 instances.
 [ ] Security groups expose only required services.
 [ ] Session Manager provides shell access with no public TCP/22 rule.

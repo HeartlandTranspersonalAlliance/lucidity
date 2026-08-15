@@ -55,7 +55,10 @@ Implemented:
 
 The upstream base currently makes `bootc` and `rpm-ostree` depend on Podman, so Podman remains installed. It is a bootc host dependency/tool, not the production application runtime; Coolify workloads use Docker Engine.
 
-Next milestones are authenticated ECR image publication, disposable AWS AMI import validation, persistent controller bootstrap, and EC2 launch templates. No untested AWS deployment code is presented as complete.
+The disposable AWS snapshot-to-AMI registration gate has passed on merged `main`.
+Next milestones are a disposable T3a boot with SSM-only access, authenticated ECR
+image publication, persistent controller bootstrap, and EC2 launch templates. No
+untested AWS deployment code is presented as complete.
 
 ## Why bootc
 

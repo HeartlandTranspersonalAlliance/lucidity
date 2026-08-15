@@ -19,6 +19,11 @@ on:
         required: true
         type: boolean
         default: false
+      run_aws_launch:
+        description: Boot the disposable AMI on t3a.small and validate the guest through SSM
+        required: true
+        type: boolean
+        default: false
 
 concurrency:
   group: ami-validation-${{ github.ref }}
@@ -71,15 +76,30 @@ jobs:
           ./scripts/validate-disk.sh image-output/worker/coolify-worker-ami.raw
 
       - name: Require configured AWS validation identifiers
-        if: github.event_name == 'workflow_dispatch' && inputs.run_aws_import
+        if: github.event_name == 'workflow_dispatch'
         env:
+          RUN_AWS_IMPORT: ${{ inputs.run_aws_import }}
+          RUN_AWS_LAUNCH: ${{ inputs.run_aws_launch }}
           IMPORT_BUCKET: ${{ vars.AWS_AMI_IMPORT_BUCKET }}
           IMPORT_ROLE_ARN: ${{ vars.AWS_AMI_IMPORT_ROLE_ARN }}
           VMIMPORT_ROLE: ${{ vars.AWS_VMIMPORT_ROLE_NAME }}
+          TEST_INSTANCE_PROFILE: ${{ vars.AWS_AMI_TEST_INSTANCE_PROFILE_NAME }}
+          TEST_SECURITY_GROUP: ${{ vars.AWS_AMI_TEST_SECURITY_GROUP_ID }}
+          TEST_SUBNET: ${{ vars.AWS_AMI_TEST_SUBNET_ID }}
         run: |
+          if [[ "${RUN_AWS_LAUNCH}" == true && "${RUN_AWS_IMPORT}" != true ]]; then
+            echo "run_aws_launch requires run_aws_import" >&2
+            exit 1
+          fi
+          [[ "${RUN_AWS_IMPORT}" == true ]] || exit 0
           test -n "${IMPORT_BUCKET}" || { echo "AWS_AMI_IMPORT_BUCKET repository variable is required" >&2; exit 1; }
           test -n "${IMPORT_ROLE_ARN}" || { echo "AWS_AMI_IMPORT_ROLE_ARN repository variable is required" >&2; exit 1; }
           test -n "${VMIMPORT_ROLE}" || { echo "AWS_VMIMPORT_ROLE_NAME repository variable is required" >&2; exit 1; }
+          if [[ "${RUN_AWS_LAUNCH}" == true ]]; then
+            test -n "${TEST_INSTANCE_PROFILE}" || { echo "AWS_AMI_TEST_INSTANCE_PROFILE_NAME repository variable is required" >&2; exit 1; }
+            test -n "${TEST_SECURITY_GROUP}" || { echo "AWS_AMI_TEST_SECURITY_GROUP_ID repository variable is required" >&2; exit 1; }
+            test -n "${TEST_SUBNET}" || { echo "AWS_AMI_TEST_SUBNET_ID repository variable is required" >&2; exit 1; }
+          fi
 
       - name: Configure short-lived AWS credentials
         if: github.event_name == 'workflow_dispatch' && inputs.run_aws_import
@@ -94,5 +114,10 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.run_aws_import
         env:
           AMI_IMPORT_BUCKET: ${{ vars.AWS_AMI_IMPORT_BUCKET }}
+          AMI_LAUNCH_VALIDATION: ${{ inputs.run_aws_launch }}
+          AMI_TEST_INSTANCE_PROFILE_NAME: ${{ vars.AWS_AMI_TEST_INSTANCE_PROFILE_NAME }}
+          AMI_TEST_INSTANCE_TYPE: t3a.small
+          AMI_TEST_SECURITY_GROUP_ID: ${{ vars.AWS_AMI_TEST_SECURITY_GROUP_ID }}
+          AMI_TEST_SUBNET_ID: ${{ vars.AWS_AMI_TEST_SUBNET_ID }}
           VMIMPORT_ROLE_NAME: ${{ vars.AWS_VMIMPORT_ROLE_NAME }}
         run: ./scripts/validate-ami-import.sh image-output/worker/coolify-worker-ami.raw

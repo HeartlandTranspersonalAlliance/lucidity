@@ -42,6 +42,18 @@ mock_provider "aws" {
     }
   }
 
+  mock_resource "aws_subnet" {
+    defaults = {
+      id = "subnet-0123456789abcdef0"
+    }
+  }
+
+  mock_resource "aws_security_group" {
+    defaults = {
+      id = "sg-0123456789abcdef0"
+    }
+  }
+
   mock_data "aws_availability_zones" {
     defaults = {
       names    = ["us-east-2a", "us-east-2b", "us-east-2c"]
@@ -138,6 +150,16 @@ run "default_registry_and_oidc_contract" {
     condition     = output.vmimport_role_name == "lucidity-vmimport"
     error_message = "The AMI workflow must pass the project-scoped VM Import Export role explicitly."
   }
+
+  assert {
+    condition = (
+      output.ami_launch_validation_enabled == false &&
+      output.ami_test_subnet_id == null &&
+      output.ami_test_security_group_id == null &&
+      output.ami_test_instance_profile_name == null
+    )
+    error_message = "Disposable EC2 launch permissions and identifiers must remain disabled during the initial image-pipeline bootstrap."
+  }
 }
 
 run "ec2_foundation_contract" {
@@ -194,6 +216,27 @@ run "existing_oidc_provider" {
   assert {
     condition     = output.github_oidc_provider_arn == "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
     error_message = "An existing account-level GitHub OIDC provider must be reusable."
+  }
+}
+
+run "ami_launch_validation_contract" {
+  command = plan
+
+  variables {
+    enable_ami_launch_validation = true
+    enable_instance_management   = true
+    enable_network               = true
+  }
+
+  assert {
+    condition = (
+      output.ami_launch_validation_enabled == true &&
+      output.ami_test_instance_type == "t3a.small" &&
+      output.ami_test_instance_profile_name == "lucidity-production-worker-profile" &&
+      output.ami_test_subnet_id == "subnet-0123456789abcdef0" &&
+      output.ami_test_security_group_id == "sg-0123456789abcdef0"
+    )
+    error_message = "The disposable AMI launch gate must expose only the selected t3a.small, public subnet, application security group, and SSM worker profile."
   }
 }
 

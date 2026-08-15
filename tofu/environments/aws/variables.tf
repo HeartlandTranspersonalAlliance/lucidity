@@ -45,6 +45,12 @@ variable "enable_instance_management" {
   default     = false
 }
 
+variable "enable_ami_launch_validation" {
+  description = "Temporarily grant the main-branch AMI workflow permission to boot and validate one tagged t3a.small through SSM. Requires networking and instance management."
+  type        = bool
+  default     = false
+}
+
 variable "vpc_name" {
   description = "Name prefix for production VPC resources."
   type        = string

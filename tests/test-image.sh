@@ -26,6 +26,8 @@ required_files=(
     scripts/vm-registry.sh
     scripts/vm-validate-update.sh
     scripts/vm-stop.sh
+    tests/fixtures/aws
+    tests/test-ami-import.sh
     image/image-builder.env
     tofu/modules/ami-import-validation/main.tf
     tofu/modules/ami-import-validation/outputs.tf
@@ -89,6 +91,19 @@ grep -Fq 'aws ec2 register-image' scripts/validate-ami-import.sh
 grep -Fq -- '--architecture x86_64' scripts/validate-ami-import.sh
 grep -Fq -- '--boot-mode uefi' scripts/validate-ami-import.sh
 grep -Fq -- '--imds-support v2.0' scripts/validate-ami-import.sh
+grep -Fq 'aws ec2 run-instances' scripts/validate-ami-import.sh
+grep -Fq -- '--credit-specification CpuCredits=standard' scripts/validate-ami-import.sh
+grep -Fq 'HttpEndpoint=enabled,HttpTokens=required,HttpPutResponseHopLimit=2' scripts/validate-ami-import.sh
+grep -Fq 'aws ssm send-command' scripts/validate-ami-import.sh
+# These are literal guest-shell snippets embedded in the jq command document.
+# shellcheck disable=SC2016
+grep -Fq 'test \"$(getenforce)\" = Enforcing' scripts/validate-ami-import.sh
+# shellcheck disable=SC2016
+grep -Fq 'test \"${imds_code}\" = 401' scripts/validate-ami-import.sh
+if grep -Eq -- '--key-name|KeyName=' scripts/validate-ami-import.sh; then
+    echo "disposable AMI boot validation must not create or attach an SSH key pair" >&2
+    exit 1
+fi
 if grep -Fq 'aws ec2 import-image' scripts/validate-ami-import.sh; then
     echo "AMI workflow must not use OS-detecting import-image for AlmaLinux" >&2
     exit 1
@@ -108,6 +123,11 @@ grep -Fq 'resource "aws_iam_instance_profile" "node"' tofu/modules/instance-mana
 grep -Fq 'resource "aws_s3_bucket" "this"' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'identifiers = ["vmie.amazonaws.com"]' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'variable = "iam:PassedToService"' tofu/modules/ami-import-validation/main.tf
+grep -Fq 'sid     = "CreateTaggedValidationInstance"' tofu/modules/ami-import-validation/main.tf
+grep -Fq 'variable = "ec2:MetadataHttpTokens"' tofu/modules/ami-import-validation/main.tf
+grep -Fq 'values   = ["required"]' tofu/modules/ami-import-validation/main.tf
+grep -Fq 'sid       = "PassValidationInstanceRole"' tofu/modules/ami-import-validation/main.tf
+grep -Fq 'document/AWS-RunShellScript' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'resource "aws_secretsmanager_secret" "controller_runtime"' tofu/modules/runtime-secrets/main.tf
 grep -Fq 'enable_key_rotation     = true' tofu/modules/runtime-secrets/main.tf
 grep -Fq 'variable = "kms:ViaService"' tofu/modules/runtime-secrets/main.tf
@@ -115,6 +135,8 @@ grep -Fq '{{resolve:secretsmanager:' tofu/modules/runtime-secrets/outputs.tf
 grep -Fq 'default     = "amd64"' tofu/environments/aws/variables.tf
 grep -Fq 'default     = "t3a.small"' tofu/environments/aws/variables.tf
 grep -Fq 'default     = "t3a.large"' tofu/environments/aws/variables.tf
+grep -Fq 'enable_ami_launch_validation' tofu/environments/aws/variables.tf
+grep -Fq 'run_aws_launch:' .github/workflows/ami.yml
 if grep -R -n -E '0\.0\.0\.0/0.*(22|8000)|(22|8000).*0\.0\.0\.0/0' tofu; then
     echo "SSH and the Coolify bootstrap port must not be globally accessible" >&2
     exit 1
