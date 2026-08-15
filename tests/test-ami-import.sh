@@ -11,8 +11,9 @@ release_log="${mock_dir}/release.log"
 release_output="${mock_dir}/release.output"
 rerun_log="${mock_dir}/rerun.log"
 rerun_output="${mock_dir}/rerun.output"
+switch_log="${mock_dir}/switch.log"
 kms_key_arn=arn:aws:kms:us-east-2:123456789012:key/11111111-2222-3333-4444-555555555555
-touch "${artifact}" "${direct_log}" "${release_log}" "${release_output}" "${rerun_log}" "${rerun_output}"
+touch "${artifact}" "${direct_log}" "${release_log}" "${release_output}" "${rerun_log}" "${rerun_output}" "${switch_log}"
 
 AWS_MOCK_LOG="${direct_log}" \
 AWS_MOCK_SNAPSHOT_ID=snap-123abc \
@@ -123,4 +124,32 @@ if grep -Eq '(^| )(coldsnap|ec2 register-image|ec2 run-instances|ec2 deregister-
     exit 1
 fi
 
-echo "mocked EBS Direct API, retained release, and T3a launch assertions passed"
+AWS_MOCK_LOG="${switch_log}" \
+AWS_MOCK_SNAPSHOT_ID=snap-5a17c4 \
+AWS_REGION=us-east-2 \
+AMI_LAUNCH_VALIDATION=true \
+AMI_LIFECYCLE=disposable \
+AMI_SNAPSHOT_KMS_KEY_ARN="${kms_key_arn}" \
+AMI_SOURCE_REVISION=0123456789abcdef0123456789abcdef01234567 \
+AMI_SSM_REBOOT_WAIT_SECONDS=0 \
+AMI_SWITCH_TARGET_REF=123456789012.dkr.ecr.us-east-2.amazonaws.com/lucidity/bootc/worker:sha-0123456789abcdef0123456789abcdef01234567 \
+AMI_TEST_INSTANCE_PROFILE_NAME=mock-worker-profile \
+AMI_TEST_INSTANCE_TYPE=t3a.small \
+AMI_TEST_SECURITY_GROUP_ID=sg-test \
+AMI_TEST_SUBNET_ID=subnet-test \
+COLDSNAP_COMMAND="${repo_root}/tests/fixtures/coldsnap" \
+GITHUB_RUN_ID=mock-switch \
+PATH="${repo_root}/tests/fixtures:${PATH}" \
+    "${repo_root}/scripts/validate-ami-import.sh" "${artifact}"
+
+[[ $(grep -c 'ssm send-command' "${switch_log}") -ge 2 ]] || {
+    echo "switch benchmark must stage the target and validate it after reboot" >&2
+    exit 1
+}
+grep -Fq "bootc switch '123456789012.dkr.ecr.us-east-2.amazonaws.com/lucidity/bootc/worker:sha-0123456789abcdef0123456789abcdef01234567'" "${switch_log}"
+grep -Fq 'lucidity-bootc-switch-benchmark-reboot' "${switch_log}"
+grep -Fq 'ec2 terminate-instances' "${switch_log}"
+grep -Fq 'ec2 deregister-image' "${switch_log}"
+grep -Fq 'ec2 delete-snapshot' "${switch_log}"
+
+echo "mocked EBS Direct API, retained release, switch benchmark, and T3a launch assertions passed"

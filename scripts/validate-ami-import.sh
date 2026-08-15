@@ -11,6 +11,7 @@ ami_lifecycle=${AMI_LIFECYCLE:-disposable}
 ami_role=${AMI_ROLE:-worker}
 source_revision=${AMI_SOURCE_REVISION:-}
 expected_bootc_image_ref=${AMI_EXPECTED_BOOTC_IMAGE_REF:-}
+switch_target_ref=${AMI_SWITCH_TARGET_REF:-}
 launch_validation=${AMI_LAUNCH_VALIDATION:-false}
 launch_instance_type=${AMI_TEST_INSTANCE_TYPE:-t3a.small}
 launch_subnet=${AMI_TEST_SUBNET_ID:-}
@@ -23,6 +24,15 @@ launch_instance_profile=${AMI_TEST_INSTANCE_PROFILE_NAME:-}
 [[ -n ${region} ]] || { echo "AWS_REGION is required" >&2; exit 2; }
 [[ ${ami_lifecycle} == disposable || ${ami_lifecycle} == retained ]] || { echo "AMI_LIFECYCLE must be disposable or retained" >&2; exit 2; }
 [[ ${ami_role} == controller || ${ami_role} == worker ]] || { echo "AMI_ROLE must be controller or worker" >&2; exit 2; }
+if [[ -n ${switch_target_ref} ]]; then
+    [[ ${ami_lifecycle} == disposable ]] || { echo "AMI_SWITCH_TARGET_REF is restricted to disposable validation" >&2; exit 2; }
+    [[ ${launch_validation} == true ]] || { echo "AMI_SWITCH_TARGET_REF requires the disposable EC2 launch gate" >&2; exit 2; }
+    [[ ${source_revision} =~ ^[0-9a-f]{40}$ ]] || { echo "AMI_SOURCE_REVISION must be a full lowercase Git commit SHA for switch benchmarks" >&2; exit 2; }
+    [[ ${switch_target_ref} =~ ^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[a-z0-9]+([._/-][a-z0-9]+)*:sha-${source_revision}$ ]] || {
+        echo "AMI_SWITCH_TARGET_REF must be the benchmark commit's fully qualified private ECR reference" >&2
+        exit 2
+    }
+fi
 if [[ ${ami_lifecycle} == retained ]]; then
     [[ ${launch_validation} == true ]] || { echo "retained AMIs require the disposable EC2 launch gate" >&2; exit 2; }
     [[ ${source_revision} =~ ^[0-9a-f]{40}$ ]] || { echo "AMI_SOURCE_REVISION must be a full lowercase Git commit SHA for retained AMIs" >&2; exit 2; }
@@ -43,6 +53,9 @@ if [[ ${launch_validation} == true ]]; then
     [[ -n ${launch_security_group} ]] || { echo "AMI_TEST_SECURITY_GROUP_ID is required for launch validation" >&2; exit 2; }
     [[ -n ${launch_instance_profile} ]] || { echo "AMI_TEST_INSTANCE_PROFILE_NAME is required for launch validation" >&2; exit 2; }
 fi
+
+ssm_reboot_wait_seconds=${AMI_SSM_REBOOT_WAIT_SECONDS:-20}
+[[ ${ssm_reboot_wait_seconds} =~ ^[0-9]+$ ]] || { echo "AMI_SSM_REBOOT_WAIT_SECONDS must be a non-negative integer" >&2; exit 2; }
 
 for command in aws jq; do
     command -v "${command}" >/dev/null 2>&1 || { echo "${command} is required" >&2; exit 1; }
@@ -358,9 +371,69 @@ if [[ ${launch_validation} == true ]]; then
     done
     [[ ${ssm_online} == true ]] || { echo "validation instance did not become available through SSM" >&2; exit 1; }
 
+    if [[ -n ${switch_target_ref} ]]; then
+        switch_registry=${switch_target_ref%%/*}
+        switch_started_at=$(date +%s)
+        switch_commands=$(jq -cn \
+            --arg registry "${switch_registry}" \
+            --arg target "${switch_target_ref}" \
+            '{commands:[
+                "set -eu",
+                "install -d -m 0700 /run/ostree",
+                ("printf \u0027%s\\n\u0027 \u0027{\\\"auths\\\":{\\\"" + $registry + "\\\":{}},\\\"credHelpers\\\":{\\\"" + $registry + "\\\":\\\"ecr-login\\\"}}\u0027 > /run/ostree/auth.json"),
+                "chmod 0600 /run/ostree/auth.json",
+                ("bootc switch \u0027" + $target + "\u0027"),
+                "systemd-run --unit=lucidity-bootc-switch-benchmark-reboot --on-active=10s /usr/bin/systemctl reboot"
+            ]}')
+        command_response=$(aws ssm send-command \
+            --region "${region}" \
+            --document-name AWS-RunShellScript \
+            --instance-ids "${instance_id}" \
+            --comment "lucidity bootc switch benchmark ${run_id}" \
+            --parameters "${switch_commands}" \
+            --timeout-seconds 3600 \
+            --output json)
+        command_id=$(jq -r '.Command.CommandId // empty' <<< "${command_response}")
+        [[ -n ${command_id} ]] || { echo "SSM did not return a bootc switch command ID" >&2; exit 1; }
+
+        switch_staged=false
+        for _ in {1..720}; do
+            set +e
+            invocation=$(aws ssm get-command-invocation \
+                --region "${region}" \
+                --command-id "${command_id}" \
+                --instance-id "${instance_id}" \
+                --output json 2>/dev/null)
+            invocation_status=$?
+            set -e
+            if ((invocation_status != 0)); then
+                sleep 5
+                continue
+            fi
+            command_status=$(jq -r '.Status' <<< "${invocation}")
+            case "${command_status}" in
+                Success)
+                    switch_staged=true
+                    jq -r '.StandardOutputContent' <<< "${invocation}"
+                    break
+                    ;;
+                Pending|InProgress|Delayed) sleep 5 ;;
+                *)
+                    jq -r '.StandardOutputContent, .StandardErrorContent' <<< "${invocation}" >&2
+                    echo "SSM bootc switch failed with status ${command_status}" >&2
+                    exit 1
+                    ;;
+            esac
+        done
+        [[ ${switch_staged} == true ]] || { echo "SSM bootc switch did not complete within the polling window" >&2; exit 1; }
+        switch_staged_at=$(date +%s)
+        sleep "${ssm_reboot_wait_seconds}"
+    fi
+
     ssm_commands=$(jq -cn \
         --arg lifecycle "${ami_lifecycle}" \
         --arg expected_bootc_image_ref "${expected_bootc_image_ref}" \
+        --arg switch_target_ref "${switch_target_ref}" \
         '{commands:[
             "set -eu",
             "test \"$(uname -m)\" = x86_64",
@@ -371,7 +444,15 @@ if [[ ${launch_validation} == true ]]; then
             "docker info >/dev/null",
             "imds_code=$(curl --silent --output /dev/null --write-out %{http_code} --max-time 3 http://169.254.169.254/latest/meta-data/ || true); test \"${imds_code}\" = 401"
         ]} |
-        if $lifecycle == "retained" then
+        if $switch_target_ref != "" then
+            .commands += [
+                ("test \"$(bootc status --format=json --format-version=1 --booted | jq -r .status.booted.image.image.image)\" = \"" + $switch_target_ref + "\""),
+                "echo LUCIDITY_SWITCH_TARGET_BOOTED",
+                "systemctl is-active --quiet coolify-bootc-ecr-auth.service",
+                "test \"$(jq -r '.credHelpers[]' /run/ostree/auth.json)\" = ecr-login",
+                "bootc upgrade --check"
+            ]
+        elif $lifecycle == "retained" then
             .commands += [
                 ("test \"$(bootc status --format=json --format-version=1 --booted | jq -r .status.booted.image.image.image)\" = \"" + $expected_bootc_image_ref + "\""),
                 "systemctl is-active --quiet coolify-bootc-ecr-auth.service",
@@ -379,46 +460,85 @@ if [[ ${launch_validation} == true ]]; then
                 "bootc upgrade --check"
             ]
         else . end')
-    command_response=$(aws ssm send-command \
-        --region "${region}" \
-        --document-name AWS-RunShellScript \
-        --instance-ids "${instance_id}" \
-        --comment "lucidity bootc AMI validation ${run_id}" \
-        --parameters "${ssm_commands}" \
-        --output json)
-    command_id=$(jq -r '.Command.CommandId // empty' <<< "${command_response}")
-    [[ -n ${command_id} ]] || { echo "SSM did not return a command ID" >&2; exit 1; }
-
     command_succeeded=false
-    for _ in {1..60}; do
-        set +e
-        invocation=$(aws ssm get-command-invocation \
+    validation_attempts=1
+    [[ -n ${switch_target_ref} ]] && validation_attempts=90
+    for ((validation_attempt = 1; validation_attempt <= validation_attempts; validation_attempt++)); do
+        command_response=$(aws ssm send-command \
             --region "${region}" \
-            --command-id "${command_id}" \
-            --instance-id "${instance_id}" \
-            --output json 2>/dev/null)
-        invocation_status=$?
-        set -e
-        if ((invocation_status != 0)); then
-            sleep 5
+            --document-name AWS-RunShellScript \
+            --instance-ids "${instance_id}" \
+            --comment "lucidity bootc AMI validation ${run_id}" \
+            --parameters "${ssm_commands}" \
+            --output json 2>/dev/null || true)
+        if [[ -n ${command_response} ]]; then
+            command_id=$(jq -r '.Command.CommandId // empty' <<< "${command_response}")
+        else
+            command_id=""
+        fi
+        if [[ -z ${command_id} ]]; then
+            [[ -n ${switch_target_ref} ]] || { echo "SSM did not return a command ID" >&2; exit 1; }
+            sleep 10
             continue
         fi
-        command_status=$(jq -r '.Status' <<< "${invocation}")
-        case "${command_status}" in
-            Success)
-                command_succeeded=true
-                jq -r '.StandardOutputContent' <<< "${invocation}"
-                break
-                ;;
-            Pending|InProgress|Delayed) sleep 5 ;;
-            *)
-                jq -r '.StandardOutputContent, .StandardErrorContent' <<< "${invocation}" >&2
-                echo "SSM guest validation failed with status ${command_status}" >&2
-                exit 1
-                ;;
-        esac
+
+        command_finished=false
+        for _ in {1..60}; do
+            set +e
+            invocation=$(aws ssm get-command-invocation \
+                --region "${region}" \
+                --command-id "${command_id}" \
+                --instance-id "${instance_id}" \
+                --output json 2>/dev/null)
+            invocation_status=$?
+            set -e
+            if ((invocation_status != 0)); then
+                sleep 5
+                continue
+            fi
+            command_status=$(jq -r '.Status' <<< "${invocation}")
+            case "${command_status}" in
+                Success)
+                    command_succeeded=true
+                    command_finished=true
+                    jq -r '.StandardOutputContent' <<< "${invocation}"
+                    break
+                    ;;
+                Pending|InProgress|Delayed) sleep 5 ;;
+                *)
+                    command_finished=true
+                    if [[ -z ${switch_target_ref} ]] || grep -Fq LUCIDITY_SWITCH_TARGET_BOOTED <<< "$(jq -r '.StandardOutputContent' <<< "${invocation}")"; then
+                        jq -r '.StandardOutputContent, .StandardErrorContent' <<< "${invocation}" >&2
+                        echo "SSM guest validation failed with status ${command_status}" >&2
+                        exit 1
+                    fi
+                    break
+                    ;;
+            esac
+        done
+        [[ ${command_succeeded} == true ]] && break
+        [[ ${command_finished} == true || -n ${switch_target_ref} ]] || break
+        sleep 10
     done
     [[ ${command_succeeded} == true ]] || { echo "SSM guest validation did not complete within the polling window" >&2; exit 1; }
+    if [[ -n ${switch_target_ref} ]]; then
+        switch_validated_at=$(date +%s)
+        switch_stage_seconds=$((switch_staged_at - switch_started_at))
+        switch_reboot_validation_seconds=$((switch_validated_at - switch_staged_at))
+        switch_total_seconds=$((switch_validated_at - switch_started_at))
+        echo "Bootc switch benchmark: stage=${switch_stage_seconds}s reboot-and-validation=${switch_reboot_validation_seconds}s total=${switch_total_seconds}s"
+        if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then
+            {
+                echo "## CentOS bootc to AlmaLinux worker switch benchmark"
+                echo
+                echo "- Target: \`${switch_target_ref}\`"
+                echo "- Switch pull and stage: ${switch_stage_seconds}s"
+                echo "- Reboot and guest validation: ${switch_reboot_validation_seconds}s"
+                echo "- Switch through validated guest: ${switch_total_seconds}s"
+                echo "- Benchmark AMI, snapshot, and T3a instance: disposable and removed during cleanup"
+            } >> "${GITHUB_STEP_SUMMARY}"
+        fi
+    fi
     echo "SSM validated the disposable bootc guest ${instance_id}; cleanup will terminate it"
 fi
 
