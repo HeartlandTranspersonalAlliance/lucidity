@@ -2,12 +2,93 @@
 
 This stack creates the AWS resources needed to publish lucidity bootc OCI images:
 
-- immutable controller and worker ECR repositories with scan-on-push and bounded retention;
+- a production VPC spanning three Availability Zones by default;
+- public and isolated private subnets, with AZ-local NAT Gateways available but disabled by default;
+- an Internet Gateway, AZ-local route tables, and VPC DNS support;
+- web, controller, application, database, and optional administrator SSH security groups;
+- VPC Flow Logs delivered to a 90-day CloudWatch Logs group;
+- one empty controller-runtime Secrets Manager secret encrypted by a dedicated rotating KMS key;
+- a controller EC2 instance profile restricted to that secret and KMS key;
+- immutable controller and worker ECR version tags, one controlled mutable `stable` channel, scan-on-push, and bounded retention;
+- a private, auto-expiring S3 bucket and project-scoped IAM roles for disposable GitHub AMI import validation;
 - an account-level GitHub Actions OIDC provider, unless an existing provider ARN is supplied;
 - a repository-scoped IAM role that only trusts `main` in `HeartlandTranspersonalAlliance/lucidity`;
 - least-privilege permissions to authenticate to ECR and push to these two repositories.
 
-It does not create EC2 instances, networking, AMIs, state storage, or runtime secrets. Those remain separate milestones.
+It does not create EC2 instances, AMIs, state storage, or secret values. Networking
+and the runtime secret module are implemented but disabled during the initial image-
+pipeline bootstrap.
+
+The initial compute contract is AMD64 with `t3a.small` for the controller and
+`t3a.large` for the worker. These values are outputs for the future launch-template
+milestone and do not create instances yet. ARM64 remains configurable but deferred.
+
+The default `allowed_web_cidrs` value is `0.0.0.0/0` because application HTTPS must
+be reachable from the internet. Administrator SSH is disabled by default, and port
+8000 has no ingress until `controller_bootstrap_cidrs` is explicitly set. Review all
+CIDRs before applying.
+
+The initial controller and worker will use public subnets and stable Elastic IPs, so
+`enable_nat_gateways` defaults to `false`. The private subnets remain isolated. Enable
+NAT only when accepting the fixed hourly and data-processing cost required by a future
+private workload. Elastic IPs are created with the EC2 milestone rather than now so
+unused addresses do not accrue charges.
+
+## Controlled bootc channel
+
+ECR rejects overwrites for version and commit tags. The exact `stable` tag is excluded
+from immutability so a tested digest can be promoted without making every repository
+tag mutable. Production hosts may follow `stable`; release records and rollback must
+retain the immutable version tag and digest that `stable` referenced.
+
+## Runtime secret boundary
+
+OpenTofu creates the `lucidity/production/controller-runtime` secret container but
+deliberately creates no `aws_secretsmanager_secret_version`. Populate its JSON value
+through an out-of-band operator workflow after apply. Never put that value in HCL,
+tfvars, user data, an AMI, CI logs, or OpenTofu state.
+
+The future controller launch template must attach `controller_instance_profile_name`.
+That role can describe and read only this secret and can decrypt only through Secrets
+Manager in the configured region. Runtime consumers must use the output pattern:
+
+```text
+{{resolve:secretsmanager:lucidity/production/controller-runtime:SecretString:json-key}}
+```
+
+Resolve that reference with the approved `asm-exec` flow on the instance. This
+repository does not yet contain an approved `asm-exec` package or bootstrap unit, so
+runtime consumption remains an explicit blocker for the EC2 milestone.
+
+At the pricing reviewed during implementation, one secret plus one customer-managed
+KMS key costs about USD 1.40 per month before negligible API request charges. AWS KMS
+currently adds monthly charges after the first two automatic rotations, which can
+raise that baseline to about USD 2.40 and USD 3.40. Check the current
+[Secrets Manager pricing](https://aws.amazon.com/secrets-manager/pricing/) and
+[KMS pricing](https://aws.amazon.com/kms/pricing/) before apply.
+
+## AMI compatibility validation
+
+OpenTofu creates an empty private S3 import bucket, the project-scoped VM Import Export
+service role, and a GitHub OIDC role trusted only for this repository's `main` branch.
+Objects under `validation/` expire after one day if workflow cleanup fails.
+
+Pull requests run `.github/workflows/ami.yml` without AWS credentials to build and
+validate the raw AMD64 artifact. After applying the foundation from reviewed `main`,
+configure these non-secret GitHub repository variables from the OpenTofu outputs:
+
+| GitHub variable | OpenTofu output |
+|---|---|
+| `AWS_AMI_IMPORT_BUCKET` | `ami_import_bucket_name` |
+| `AWS_AMI_IMPORT_ROLE_ARN` | `github_ami_validation_role_arn` |
+| `AWS_VMIMPORT_ROLE_NAME` | `vmimport_role_name` |
+
+Then manually run **Validate AMI compatibility** with `run_aws_import` enabled. The
+workflow uploads the raw artifact, specifies AMD64, UEFI, Linux, and the generic
+`RunInstances` usage operation, waits for VM Import/Export, validates the returned AMI,
+and removes the AMI, EBS snapshots, and S3 object. A successful import proves AWS
+accepts the artifact metadata; a later disposable T3a launch must still prove boot and
+guest behavior.
 
 ## Validate without AWS credentials
 
@@ -21,7 +102,9 @@ The command checks all HCL formatting, initializes providers without a backend, 
 
 ## Bootstrap the AWS resources
 
-The first apply must use an operator identity that can create ECR repositories, the IAM role and policy, and, if needed, the account-level GitHub OIDC provider. The publishing role cannot create itself.
+The first apply must use an operator identity that can create VPC, EC2 networking,
+CloudWatch Logs, Secrets Manager, KMS, ECR, and IAM resources and, if needed, the account-level GitHub OIDC
+provider. The publishing role cannot create itself.
 
 ```bash
 cp tofu/environments/aws/terraform.tfvars.example tofu/environments/aws/terraform.tfvars
@@ -29,6 +112,17 @@ tofu -chdir=tofu/environments/aws init
 tofu -chdir=tofu/environments/aws plan
 tofu -chdir=tofu/environments/aws apply
 ```
+
+With the example variables, the initial apply creates only the low-idle-cost image
+pipeline foundation:
+
+- ECR repositories and GitHub publishing identity;
+- the private AMI import bucket;
+- VM Import Export and GitHub AMI validation roles.
+
+It deliberately leaves `enable_network` and `enable_runtime_secrets` false. After the
+disposable AWS import succeeds and EC2 deployment is ready, set both to true and apply
+again. Keep `enable_nat_gateways` false for the selected direct-public design.
 
 If `token.actions.githubusercontent.com` is already configured in the account, set `github_oidc_provider_arn` to its ARN. IAM permits only one provider for that URL in an account.
 

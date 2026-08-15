@@ -1,0 +1,98 @@
+name: Validate AMI compatibility
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/ami.yml
+      - Containerfile
+      - ci/Containerfile
+      - image/**
+      - roles/**
+      - scripts/build.sh
+      - scripts/build-disk.sh
+      - scripts/validate-ami-import.sh
+      - scripts/validate-disk.sh
+  workflow_dispatch:
+    inputs:
+      run_aws_import:
+        description: Upload the raw artifact and perform a disposable AWS VM Import/Export validation
+        required: true
+        type: boolean
+        default: false
+
+concurrency:
+  group: ami-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-east-2
+  CI_TOOLS_IMAGE: localhost/coolify-aws-ci-tools:ami
+  IMAGE: localhost/coolify-bootc-worker:ami-validation
+
+jobs:
+  worker-ami:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Report runner capacity
+        run: |
+          df -h /
+          docker system df
+
+      - name: Build pinned image tooling
+        run: |
+          source image/image-builder.env
+          docker build \
+            --build-arg "IMAGE_BUILDER_IMAGE=${IMAGE_BUILDER_IMAGE}" \
+            --tag "${CI_TOOLS_IMAGE}" \
+            --file ci/Containerfile \
+            .
+
+      - name: Build AMD64 worker bootc image
+        env:
+          CONTAINER_ENGINE: docker
+          IMAGE_NAME: ${{ env.IMAGE }}
+          IMAGE_VERSION: ami-validation
+        run: ./scripts/build.sh worker
+
+      - name: Build and validate raw AMI artifact
+        env:
+          CONTAINER_ENGINE: docker
+          IMAGE_NAME: ${{ env.IMAGE }}
+          VM_TOOL_IMAGE: ${{ env.CI_TOOLS_IMAGE }}
+        run: |
+          ./scripts/build-disk.sh worker ami
+          ./scripts/validate-disk.sh image-output/worker/coolify-worker-ami.raw
+
+      - name: Require configured AWS validation identifiers
+        if: github.event_name == 'workflow_dispatch' && inputs.run_aws_import
+        env:
+          IMPORT_BUCKET: ${{ vars.AWS_AMI_IMPORT_BUCKET }}
+          IMPORT_ROLE_ARN: ${{ vars.AWS_AMI_IMPORT_ROLE_ARN }}
+          VMIMPORT_ROLE: ${{ vars.AWS_VMIMPORT_ROLE_NAME }}
+        run: |
+          test -n "${IMPORT_BUCKET}" || { echo "AWS_AMI_IMPORT_BUCKET repository variable is required" >&2; exit 1; }
+          test -n "${IMPORT_ROLE_ARN}" || { echo "AWS_AMI_IMPORT_ROLE_ARN repository variable is required" >&2; exit 1; }
+          test -n "${VMIMPORT_ROLE}" || { echo "AWS_VMIMPORT_ROLE_NAME repository variable is required" >&2; exit 1; }
+
+      - name: Configure short-lived AWS credentials
+        if: github.event_name == 'workflow_dispatch' && inputs.run_aws_import
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_AMI_IMPORT_ROLE_ARN }}
+          role-duration-seconds: 10800
+          role-session-name: lucidity-ami-${{ github.run_id }}
+
+      - name: Validate disposable AWS VM import
+        if: github.event_name == 'workflow_dispatch' && inputs.run_aws_import
+        env:
+          AMI_IMPORT_BUCKET: ${{ vars.AWS_AMI_IMPORT_BUCKET }}
+          VMIMPORT_ROLE_NAME: ${{ vars.AWS_VMIMPORT_ROLE_NAME }}
+        run: ./scripts/validate-ami-import.sh image-output/worker/coolify-worker-ami.raw

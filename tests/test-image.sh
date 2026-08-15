@@ -19,6 +19,7 @@ required_files=(
     scripts/build.sh
     scripts/build-disk.sh
     scripts/validate-disk.sh
+    scripts/validate-ami-import.sh
     scripts/validate-image.sh
     scripts/vm-init.sh
     scripts/vm-start.sh
@@ -27,6 +28,18 @@ required_files=(
     scripts/vm-validate-update.sh
     scripts/vm-stop.sh
     image/image-builder.env
+    tofu/modules/ami-import-validation/main.tf
+    tofu/modules/ami-import-validation/outputs.tf
+    tofu/modules/ami-import-validation/variables.tf
+    tofu/modules/ami-import-validation/versions.tf
+    tofu/modules/network/main.tf
+    tofu/modules/network/outputs.tf
+    tofu/modules/network/variables.tf
+    tofu/modules/network/versions.tf
+    tofu/modules/runtime-secrets/main.tf
+    tofu/modules/runtime-secrets/outputs.tf
+    tofu/modules/runtime-secrets/variables.tf
+    tofu/modules/runtime-secrets/versions.tf
 )
 
 for file in "${required_files[@]}"; do
@@ -60,6 +73,37 @@ grep -Fq '/usr/lib/coolify-aws/image-version' Containerfile
 grep -Fq '=~ ^[[:alnum:].:-]+$' scripts/vm-init.sh
 grep -Fq '=~ ^[[:alnum:].:-]+$' scripts/vm-validate-update.sh
 grep -Fq 'CONTAINER_ENGINE' scripts/build-disk.sh
+grep -Fq "if [[ \${format} == qcow2 ]]" scripts/validate-disk.sh
+grep -Fq -- '--usage-operation RunInstances' scripts/validate-ami-import.sh
+grep -Fq -- '--architecture x86_64' scripts/validate-ami-import.sh
+grep -Fq 'trap cleanup EXIT' scripts/validate-ami-import.sh
+grep -Fq 'image-output/worker/coolify-worker-ami.raw' .github/workflows/ami.yml
+if grep -Fq 'image-output/worker/coolify-worker-ami.ami' .github/workflows/ami.yml; then
+    echo "AMI workflow must use the raw artifact emitted by build-disk.sh" >&2
+    exit 1
+fi
+grep -Fq 'resource "aws_nat_gateway" "this"' tofu/modules/network/main.tf
+grep -Fq 'default     = false' tofu/modules/network/variables.tf
+grep -Fq 'image_tag_mutability = length(var.mutable_channel_tags) > 0 ? "IMMUTABLE_WITH_EXCLUSION" : "IMMUTABLE"' tofu/modules/ecr/main.tf
+grep -Fq 'resource "aws_flow_log" "this"' tofu/modules/network/main.tf
+grep -Fq 'resource "aws_s3_bucket" "this"' tofu/modules/ami-import-validation/main.tf
+grep -Fq 'identifiers = ["vmie.amazonaws.com"]' tofu/modules/ami-import-validation/main.tf
+grep -Fq 'variable = "iam:PassedToService"' tofu/modules/ami-import-validation/main.tf
+grep -Fq 'resource "aws_secretsmanager_secret" "controller_runtime"' tofu/modules/runtime-secrets/main.tf
+grep -Fq 'enable_key_rotation     = true' tofu/modules/runtime-secrets/main.tf
+grep -Fq 'variable = "kms:ViaService"' tofu/modules/runtime-secrets/main.tf
+grep -Fq '{{resolve:secretsmanager:' tofu/modules/runtime-secrets/outputs.tf
+grep -Fq 'default     = "amd64"' tofu/environments/aws/variables.tf
+grep -Fq 'default     = "t3a.small"' tofu/environments/aws/variables.tf
+grep -Fq 'default     = "t3a.large"' tofu/environments/aws/variables.tf
+if grep -R -n -E '0\.0\.0\.0/0.*(22|8000)|(22|8000).*0\.0\.0\.0/0' tofu; then
+    echo "SSH and the Coolify bootstrap port must not be globally accessible" >&2
+    exit 1
+fi
+if rg -n --glob '*.tf' 'aws_secretsmanager_secret_version|secret_string\s*=' tofu; then
+    echo "OpenTofu must provision secret containers and references, never secret values" >&2
+    exit 1
+fi
 [[ $(printf '%s\n' README.md tofu/environments/aws/main.tf roles/controller/usr/example | ci/worker-changes.sh) == false ]]
 [[ $(printf '%s\n' README.md roles/worker/usr/example | ci/worker-changes.sh) == true ]]
 [[ $(printf '%s\n' .github/workflows/validate.yml | ci/worker-changes.sh) == true ]]

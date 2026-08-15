@@ -35,3 +35,20 @@ variable "retain_tagged_images" {
     error_message = "At least two tagged images must be retained for bootc rollback."
   }
 }
+
+variable "mutable_channel_tags" {
+  description = "Exact bootc channel tags permitted to move to a newly tested immutable image."
+  type        = set(string)
+  default     = ["stable"]
+
+  validation {
+    condition = (
+      length(var.mutable_channel_tags) <= 5 &&
+      alltrue([
+        for tag in var.mutable_channel_tags :
+        can(regex("^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$", tag))
+      ])
+    )
+    error_message = "Use at most five exact ECR-compatible mutable channel tags."
+  }
+}

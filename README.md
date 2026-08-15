@@ -46,11 +46,14 @@ Implemented:
 - two-version registry-backed bootc update and rollback validation with Docker data preserved;
 - bootc-native unattended OS updates scheduled from 11:00 UTC daily;
 - pull-request validation that builds and runs `bootc container lint`;
-- Terraform-compatible OpenTofu modules for immutable ECR repositories and branch-restricted GitHub Actions OIDC publishing.
+- Terraform-compatible OpenTofu modules for immutable ECR repositories and branch-restricted GitHub Actions OIDC publishing;
+- a three-AZ VPC with public/private subnets, optional NAT Gateways, tiered security groups, and VPC Flow Logs;
+- an empty controller runtime secret, dedicated rotating KMS key, and least-privilege EC2 instance profile, with no secret value in OpenTofu state.
+- a private, auto-expiring AMI import bucket and least-privilege GitHub/VM Import roles for disposable compatibility tests.
 
 The upstream base currently makes `bootc` and `rpm-ostree` depend on Podman, so Podman remains installed. It is a bootc host dependency/tool, not the production application runtime; Coolify workloads use Docker Engine.
 
-Next milestones are AWS networking, authenticated ECR image publication, persistent controller bootstrap, and EC2 AMI registration. No untested AWS deployment code is presented as complete.
+Next milestones are authenticated ECR image publication, disposable AWS AMI import validation, persistent controller bootstrap, and EC2 launch templates. No untested AWS deployment code is presented as complete.
 
 ## Why bootc
 
@@ -74,7 +77,7 @@ Containerfile                 shared and role-specific image stages
 roles/common/                 Docker, SSH, systemd, and filesystem policy
 roles/controller/             controller-only persistent Nix mount foundation
 roles/worker/                 worker-only systemd configuration
-tofu/                         ECR and GitHub OIDC OpenTofu bootstrap
+tofu/                         AWS network, runtime identity, secrets, ECR, and OIDC bootstrap
 scripts/build.sh              local image build
 scripts/bootstrap-worker.sh   idempotent public-key provisioning
 scripts/validate-image.sh     bootc and package validation
@@ -243,24 +246,31 @@ Automatic OS reboots are enabled for changed bootc images in the daily update wi
 
 ## AWS direction
 
-The AWS layer will use configurable architecture, region, instance types, encrypted gp3 volumes, separate controller/worker security groups, instance profiles, and public plus private VPC addressing. GitHub Actions will publish to ECR through OIDC—not long-lived AWS keys. AMIs will be generated separately from OCI images with upstream bootc tooling and explicitly selected by OpenTofu.
+The AWS layer uses configurable architecture, region, and instance types. The initial target is AMD64 with `t3a.small` for the controller and `t3a.large` for the worker; ARM64 is deferred until the first AWS deployment path is proven. GitHub Actions will publish to ECR through OIDC, not long-lived AWS keys. AMIs will be generated separately from OCI images with upstream bootc tooling and explicitly selected by OpenTofu.
+
+Networking spans three Availability Zones by default and provides public and isolated private subnets, DNS support, tiered security groups, and 90-day VPC Flow Logs. The initial two-node deployment puts the controller and worker in public subnets with one Elastic IP each. It uses private VPC addresses for controller-to-worker SSH and exposes only the required public service ports. NAT Gateways and an ALB are not justified for the expected five-to-ten-person, low-traffic workload and remain disabled.
 
 OpenTofu is the infrastructure-as-code CLI for this project. Configuration remains Terraform-compatible where practical so the AWS provider and reusable modules retain broad ecosystem compatibility. Terraform is reserved for a documented incompatibility that cannot be resolved with OpenTofu. CI-only values belong in GitHub Secrets, AWS-hosted runtime secrets belong in AWS Secrets Manager, and provider-neutral or self-hosted secrets may use OpenBao.
 
-The cost-sensitive baseline has:
+The AWS stack creates one empty bundled controller-runtime secret, a dedicated rotating KMS key, and a controller EC2 instance profile scoped to that secret and key. OpenTofu never receives the secret value. The future EC2 bootstrap must resolve individual JSON keys at runtime through the repository-mandated `asm-exec` dynamic-reference flow. An approved `asm-exec` source is not yet present, so secret consumption is not claimed as implemented.
 
-- no NAT Gateway;
+OpenTofu cannot safely replace a secret store because a managed secret value would enter its state. Running OpenBao only for this deployment would add more state, backup work, and availability risk than the single AWS secret warrants, so Secrets Manager remains the initial choice. OpenBao can replace it later if provider independence becomes an operational requirement.
+
+The infrastructure intentionally has:
+
+- direct public EC2 ingress with stable Elastic IPs;
+- NAT Gateways disabled by default;
 - no EKS;
 - no ECS or Fargate;
 - no RDS by default;
 - no ALB by default;
 - no Route 53 requirement.
 
-Those services can be added later only when a concrete operational requirement justifies their cost and complexity. External DNS is expected to point the Coolify hostname at the controller and application hostnames at the relevant worker.
+Those services can be added later only when a concrete operational requirement justifies their cost and complexity. External DNS will point the controller hostname to its Elastic IP and application hostnames to the worker Elastic IP.
 
-ARM64/Graviton is preferred when every required application image is multi-architecture. AMD64 remains available for maximum third-party image compatibility. Production x86 emulation on ARM is not enabled implicitly.
+AMD64 is preferred for the first deployment and maximum third-party image compatibility. ARM64/Graviton remains a future optimization when every required application image is multi-architecture. Production x86 emulation on ARM is not enabled implicitly.
 
-The first AWS foundation is implemented under [`tofu/`](tofu/README.md). It creates immutable, scanned controller and worker ECR repositories plus a least-privilege publishing role whose OIDC trust is restricted to this repository's `main` branch. The stack deliberately does not deploy images or require AWS credentials during CI validation. An authorized operator must perform the initial bootstrap apply, then the resulting role ARN can be used by a later publishing workflow without storing AWS access keys in GitHub.
+The AWS foundation is implemented under [`tofu/`](tofu/README.md). Its first apply creates immutable scanned ECR repositories, branch-restricted GitHub identities, and disposable AMI import resources. Networking and the empty encrypted controller secret are feature-gated until the AMI is accepted and EC2 deployment begins. The stack deliberately does not deploy instances or require AWS credentials during pull-request artifact validation. An authorized operator must perform the initial bootstrap apply, then manual import validation can use OIDC without storing AWS access keys in GitHub.
 
 See [proposal.md](proposal.md) for the complete staged implementation and acceptance criteria.
 

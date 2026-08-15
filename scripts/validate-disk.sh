@@ -48,5 +48,9 @@ virtual_size=$(jq -r '.["virtual-size"]' <<< "${info}")
     exit 1
 }
 
-qemu_img check
+if [[ ${format} == qcow2 ]]; then
+    qemu_img check
+else
+    echo "qemu-img consistency checks are unsupported for raw images; format and size checks passed"
+fi
 echo "disk validation passed: ${artifact} (${format}, ${virtual_size} bytes virtual)"
