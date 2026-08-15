@@ -3,10 +3,11 @@ data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
 
 locals {
-  account_id      = data.aws_caller_identity.current.account_id
-  bucket_name     = "${var.project_name}-ami-import-${local.account_id}-${var.aws_region}"
-  github_subject  = "repo:${var.github_repository}:ref:refs/heads/${var.github_branch}"
-  resource_prefix = "${var.project_name}-${var.environment}"
+  account_id              = data.aws_caller_identity.current.account_id
+  bucket_name             = "${var.project_name}-ami-import-${local.account_id}-${var.aws_region}"
+  github_repository_parts = split("/", var.github_repository)
+  github_subject          = "repo:${local.github_repository_parts[0]}@${var.github_repository_owner_id}/${local.github_repository_parts[1]}@${var.github_repository_id}:ref:refs/heads/${var.github_branch}"
+  resource_prefix         = "${var.project_name}-${var.environment}"
   common_tags = merge(
     {
       Environment = var.environment
@@ -240,9 +241,10 @@ data "aws_iam_policy_document" "github" {
       "ec2:DeleteSnapshot",
       "ec2:DeregisterImage",
       "ec2:DescribeImages",
-      "ec2:DescribeImportImageTasks",
+      "ec2:DescribeImportSnapshotTasks",
       "ec2:DescribeSnapshots",
-      "ec2:ImportImage",
+      "ec2:ImportSnapshot",
+      "ec2:RegisterImage",
     ]
     resources = ["*"]
   }

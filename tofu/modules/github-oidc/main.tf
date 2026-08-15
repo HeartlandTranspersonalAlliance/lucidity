@@ -1,5 +1,6 @@
 locals {
-  github_oidc_subject = "repo:${var.github_repository}:ref:refs/heads/${var.github_branch}"
+  github_repository_parts = split("/", var.github_repository)
+  github_oidc_subject     = "repo:${local.github_repository_parts[0]}@${var.github_repository_owner_id}/${local.github_repository_parts[1]}@${var.github_repository_id}:ref:refs/heads/${var.github_branch}"
   oidc_provider_arn = coalesce(
     var.oidc_provider_arn,
     try(aws_iam_openid_connect_provider.github[0].arn, null)

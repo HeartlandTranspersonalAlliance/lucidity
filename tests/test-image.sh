@@ -84,8 +84,15 @@ grep -Fq 'systemctl is-enabled --quiet amazon-ssm-agent.service' scripts/validat
 grep -Fq 'grep -Eq "^SELINUX=enforcing$" /etc/selinux/config' scripts/validate-image.sh
 grep -Fq 'getenforce) == Enforcing' scripts/vm-validate.sh
 grep -Fq "if [[ \${format} == qcow2 ]]" scripts/validate-disk.sh
-grep -Fq -- '--usage-operation RunInstances' scripts/validate-ami-import.sh
+grep -Fq 'aws ec2 import-snapshot' scripts/validate-ami-import.sh
+grep -Fq 'aws ec2 register-image' scripts/validate-ami-import.sh
 grep -Fq -- '--architecture x86_64' scripts/validate-ami-import.sh
+grep -Fq -- '--boot-mode uefi' scripts/validate-ami-import.sh
+grep -Fq -- '--imds-support v2.0' scripts/validate-ami-import.sh
+if grep -Fq 'aws ec2 import-image' scripts/validate-ami-import.sh; then
+    echo "AMI workflow must not use OS-detecting import-image for AlmaLinux" >&2
+    exit 1
+fi
 grep -Fq 'trap cleanup EXIT' scripts/validate-ami-import.sh
 grep -Fq 'image-output/worker/coolify-worker-ami.raw' .github/workflows/ami.yml
 if grep -Fq 'image-output/worker/coolify-worker-ami.ami' .github/workflows/ami.yml; then

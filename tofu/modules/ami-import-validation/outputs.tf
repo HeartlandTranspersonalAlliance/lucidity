@@ -14,6 +14,6 @@ output "github_subject" {
 }
 
 output "vmimport_role_name" {
-  description = "VM Import Export service role name passed to ec2:ImportImage."
+  description = "VM Import Export service role name passed to ec2:ImportSnapshot."
   value       = aws_iam_role.vmimport.name
 }

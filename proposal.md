@@ -916,6 +916,19 @@ Automate this only after the container image itself works reliably.
 
 If automated AMI registration requires S3 upload/import, implement that cleanly and document cleanup of temporary artifacts.
 
+AWS does not currently publish a pre-generated Fedora or CentOS bootc AMI, and
+the RHEL image-mode workflow also expects operators to generate their own AMI.
+Keep the distribution-owned bootc container as the source of truth rather than
+depending on an unverified public AMI.
+
+AWS VM Import/Export does not list AlmaLinux in its supported OS matrix, and a
+real `import-image` validation rejected the AlmaLinux 10 bootc disk during OS
+detection. Import the raw disk as an encrypted EBS snapshot instead, then
+register the snapshot explicitly as an AMD64, UEFI, HVM, ENA-enabled,
+IMDSv2-only AMI. This preserves the AlmaLinux identity without pretending it is
+RHEL or Rocky Linux. A successful registration is not proof of bootability;
+the disposable T3a launch test remains mandatory.
+
 ---
 
 # 24. Do not overuse EC2 Image Builder
@@ -1458,8 +1471,9 @@ Register AMIs.
 On pull requests, build and validate the raw AMD64 AMI artifact without AWS
 credentials. After the foundation is applied on `main`, manually dispatch the same
 workflow with AWS import enabled. It uploads to the lifecycle-controlled private S3
-bucket, runs VM Import/Export using the project-scoped service role, verifies the AMI
-metadata, then deletes the AMI, snapshots, and object.
+bucket, imports the raw disk as an encrypted EBS snapshot using the project-scoped
+VM Import/Export role, explicitly registers and verifies the AMI metadata, then
+deletes the AMI, snapshot, and object.
 
 Validate actual EC2 boot.
 
