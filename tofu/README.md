@@ -10,14 +10,15 @@ This stack creates the AWS resources needed to publish lucidity bootc OCI images
 - one empty controller-runtime Secrets Manager secret encrypted by a dedicated rotating KMS key;
 - SSM-enabled controller and worker instance profiles, with the controller optionally restricted to that secret and KMS key;
 - immutable controller and worker ECR version tags, one controlled mutable `stable` channel, scan-on-push, and bounded retention;
-- a rotating AMI snapshot KMS key, EBS Direct API permissions, and a private auto-expiring VM Import fallback for disposable GitHub AMI validation;
+- a rotating AMI snapshot KMS key, EBS Direct API permissions for disposable validation and retained releases, and a private auto-expiring VM Import validation fallback;
+- hardened, versioned EC2 launch templates gated on explicit self-owned controller and worker AMI IDs;
 - an account-level GitHub Actions OIDC provider, unless an existing provider ARN is supplied;
 - a repository-scoped IAM role that only trusts `main` for the immutable owner and repository IDs of `HeartlandTranspersonalAlliance/lucidity`;
 - least-privilege permissions to authenticate to ECR and push to these two repositories.
 
-It does not create EC2 instances, AMIs, state storage, or secret values. Networking,
-instance management, and the runtime secret module are implemented but disabled during
-the initial image-pipeline bootstrap.
+It does not create EC2 instances, AMIs, state storage, or secret values. The GitHub
+workflow creates retained AMIs only after an explicit manual release dispatch. Networking,
+instance management, runtime secrets, and launch templates remain independently gated.
 
 The initial compute contract is AMD64 with `t3a.small` for the controller and
 `t3a.large` for the worker. These values are outputs for the future launch-template
@@ -58,8 +59,10 @@ tfvars, user data, an AMI, CI logs, or OpenTofu state.
 The future controller launch template must attach `controller_instance_profile_name`.
 Its SSM-enabled role can describe and read only this secret and can decrypt only
 through Secrets Manager in the configured region. The worker uses
-`worker_instance_profile_name` and receives no secret permission. Runtime consumers
-must use the output pattern:
+`worker_instance_profile_name` and receives no secret permission. Each role can obtain
+an ECR authorization token and pull layers only from its matching private bootc
+repository; this supports the ephemeral bootc ECR credential helper without granting
+cross-role repository access. Runtime secret consumers must use the output pattern:
 
 ```text
 {{resolve:secretsmanager:lucidity/production/controller-runtime:SecretString:json-key}}
@@ -107,8 +110,25 @@ The default `ebs-direct` mode resolves pinned `coldsnap 0.10.0` from `flake.lock
 uploads the raw artifact directly to an encrypted EBS snapshot with 64 concurrent
 workers. It registers a disposable AMD64, UEFI, HVM, ENA-enabled, IMDSv2-only AMI,
 validates the returned metadata and configured KMS key, then removes the AMI and EBS
-snapshot. This bypasses the observed 14-minute VM Import phase; measure the first live
-run before treating the projected latency reduction as proven.
+snapshot. Merged-main run `31899706447` proved the optimized path on 2026-08-15: the
+12 GiB raw disk upload completed in about 33 seconds, the AMI was ready to launch about
+48 seconds after upload began, and the entire upload, registration, T3a/SSM guest gate,
+and cleanup step took 4 minutes 54 seconds. The earlier VM Import phase alone took
+about 14 minutes.
+
+For a production worker release, choose `ami_lifecycle=retained`, keep
+`snapshot_upload_mode=ebs-direct`, and enable both AWS validation and the launch gate.
+First ensure **Publish bootc images** has published the current `main` worker candidate
+as `sha-<full-commit>`. The AMI workflow pulls that immutable private ECR reference and
+uses it as the disk's bootc source, so the installed host tracks a real production
+registry rather than the disposable `localhost` reference. It names and tags the AMI
+with the same commit SHA, launches a disposable T3a guest through SSM, and marks the
+release validated only after every guest assertion passes. On failure it deregisters
+the candidate and deletes its snapshot. On success it terminates the test instance but
+retains the encrypted snapshot and AMI, and prints the exact AMI ID for explicit
+OpenTofu selection. Rerunning the same commit reuses the already validated immutable
+release instead of creating a duplicate. VM Import is not accepted for retained
+releases.
 
 Select `snapshot_upload_mode=vmimport` to use the lifecycle-controlled S3 bucket and
 project-scoped VM Import/Export role as a compatibility fallback. That path exists
@@ -139,23 +159,33 @@ terminates the instance before deregistering the AMI and deleting its encrypted
 snapshot. Keep `enable_ami_launch_validation` disabled outside an intentional gate
 run.
 
-### CodeBuild-hosted runner boundary
+### GitHub-hosted runner boundary
 
-Moving the AMI worker job to a
-[CodeBuild-hosted GitHub Actions runner](https://docs.aws.amazon.com/codebuild/latest/userguide/action-runner.html)
-is a sensible
-second optimization because that job is privileged, disk-heavy, AWS-authenticated,
-and uploads a large artifact into AWS. Start with on-demand CodeBuild compute and a
-measured comparison of queue time, build time, direct snapshot upload throughput, and
-total cost. A custom image can preinstall the pinned build and upload tools once the
-benchmark justifies the maintenance cost.
+The delivery pipeline remains on GitHub-hosted runners. CodeBuild runners are
+intentionally excluded. EBS Direct removes the slow VM Import phase without adding a
+second runner control plane, GitHub connection, build project, or custom runner image.
+Any future speed work should first tune the pinned uploader's bounded concurrency and
+measure build, upload, snapshot completion, and boot-gate durations independently.
 
-Do not move lightweight shell checks, static validation, or ordinary controller OCI
-builds merely to maximize the number of AWS-hosted jobs. Those jobs gain little from
-AWS-local network placement and would add GitHub connection, runner project, IAM, and
-image maintenance. The CodeBuild GitHub connection requires an operator-authorized
-GitHub App or CodeConnections OAuth handshake, so it remains a separate reviewed
-OpenTofu change after the EBS Direct API timing is known.
+## Explicit launch-template AMI selection
+
+Launch templates are disabled by default and never discover the newest AMI. After both
+roles have retained, boot-validated AMIs, set `controller_ami_id` and `worker_ami_id`
+to those exact IDs, enable networking and instance management, then set
+`enable_ec2_launch_templates=true`. OpenTofu verifies both AMIs are self-owned,
+available AMD64 UEFI HVM EBS images with ENA and IMDSv2 support.
+
+The templates use the proposal defaults: `t3a.small` with 40 GiB gp3 for the
+controller and `t3a.large` with 80 GiB gp3 for the worker. Root volumes are encrypted
+with the AMI snapshot KMS key, CPU credits are standard, detailed monitoring is on,
+IMDSv2 is required with container-compatible hop limit 2, and no key pair, subnet,
+public address, or user data is embedded. Consumers must pin the numeric template
+version from `ec2_launch_template_latest_versions`; changing a template does not roll
+running instances automatically.
+
+The controller bootstrap is still incomplete, so do not enable these templates or
+launch production EC2 instances yet. Defining this boundary now makes AMI selection
+reviewable without pretending the controller milestone is complete.
 
 ## ECR candidate publication
 

@@ -24,8 +24,10 @@ esac
 "${engine}" run --rm --entrypoint /bin/bash "${image}" -Eeuo pipefail -c '
     docker --version
     docker compose version
+    docker-credential-ecr-login -v | grep -Eq "^Version:[[:space:]]+0.12.0$"
     rpm -q amazon-ssm-agent bootc rpm-ostree openssh-server container-selinux cloud-init NetworkManager policycoreutils selinux-policy-targeted
     systemctl is-enabled --quiet amazon-ssm-agent.service
+    systemctl is-enabled --quiet coolify-bootc-ecr-auth.service
     grep -Eq "^SELINUX=enforcing$" /etc/selinux/config
     grep -Eq "^SELINUXTYPE=targeted$" /etc/selinux/config
     test -d /nix

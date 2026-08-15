@@ -934,6 +934,15 @@ available as a manual fallback. A successful registration is not proof of bootab
 the disposable T3a launch test remains mandatory for each materially changed disk
 pipeline.
 
+Use the same EBS Direct registration implementation for retained releases rather
+than adding a second AMI builder. A retained release is allowed only from `main`, must
+build its disk from the corresponding immutable private ECR `sha-<full-commit>`
+candidate, carry that commit and role as tags, and pass the disposable T3a/SSM
+guest gate before its AMI and encrypted snapshot are preserved. Failed candidates are
+deleted. A rerun for an already validated role and commit reuses the immutable AMI.
+The resulting AMI ID is an operator-reviewed OpenTofu input, never a newest-image
+lookup or an automatic deployment trigger.
+
 The merged `main` workflow completed this registration gate in GitHub Actions run
 `31859796836` on 2026-08-14. AWS completed import task
 `import-snap-9315bf3af20f6870t`, the workflow registered and validated the temporary
@@ -943,6 +952,12 @@ on 2026-08-15 through SSM-only access. It verified AMD64, enforcing SELinux, boo
 Docker, SSM Agent, and IMDSv2 enforcement; a second AWS MCP audit confirmed that no
 tagged instance, AMI, snapshot, or validation object remained. Milestone 8 is
 complete for the current AMD64 worker pipeline.
+
+After the EBS Direct KMS permission was corrected, merged-main run `31899706447`
+completed the same registration and T3a/SSM boot gate on 2026-08-15. Its 12 GiB raw
+upload completed in about 33 seconds and the AMI was launchable about 48 seconds after
+upload began. The complete AWS validation and cleanup step took 4 minutes 54 seconds,
+compared with roughly 14 minutes for the earlier VM Import phase alone.
 
 ---
 
@@ -1505,6 +1520,11 @@ an encrypted EBS snapshot with bounded parallel workers, explicitly registers an
 verifies the AMI metadata, then deletes the AMI and snapshot. The lifecycle-controlled
 private S3 bucket and project-scoped VM Import/Export role remain available through
 the `vmimport` fallback, which also deletes its temporary object.
+
+For production delivery, an explicit retained mode uses only EBS Direct and requires
+the launch gate. It retains the validated encrypted snapshot and immutable AMI, records
+the full source revision, and returns the exact AMI ID without changing any running
+instance. Launch-template inputs remain a separate reviewed deployment decision.
 
 Validate actual EC2 boot.
 

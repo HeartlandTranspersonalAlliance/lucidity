@@ -15,6 +15,8 @@ required_files=(
     roles/common/etc/selinux/config
     roles/common/etc/ssh/sshd_config.d/40-coolify-aws.conf
     roles/common/usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-coolify-aws.conf
+    roles/common/usr/lib/systemd/system/coolify-bootc-ecr-auth.service
+    roles/common/usr/libexec/coolify-aws/configure-bootc-ecr-auth
     roles/worker/usr/lib/systemd/system/coolify-worker-authorized-keys.service
     scripts/build.sh
     scripts/build-disk.sh
@@ -28,6 +30,7 @@ required_files=(
     scripts/vm-validate-update.sh
     scripts/vm-stop.sh
     tests/fixtures/aws
+    tests/fixtures/bootc
     tests/fixtures/coldsnap
     tests/test-ami-import.sh
     image/image-builder.env
@@ -39,6 +42,10 @@ required_files=(
     tofu/modules/instance-management/outputs.tf
     tofu/modules/instance-management/variables.tf
     tofu/modules/instance-management/versions.tf
+    tofu/modules/ec2-launch-templates/main.tf
+    tofu/modules/ec2-launch-templates/outputs.tf
+    tofu/modules/ec2-launch-templates/variables.tf
+    tofu/modules/ec2-launch-templates/versions.tf
     tofu/modules/network/main.tf
     tofu/modules/network/outputs.tf
     tofu/modules/network/variables.tf
@@ -85,6 +92,12 @@ if grep -Fq '/latest/linux_amd64/amazon-ssm-agent.rpm' Containerfile; then
     exit 1
 fi
 grep -Fq 'systemctl is-enabled --quiet amazon-ssm-agent.service' scripts/validate-image.sh
+grep -Fq 'systemctl is-enabled --quiet coolify-bootc-ecr-auth.service' scripts/validate-image.sh
+grep -Fq 'docker-credential-ecr-login' Containerfile
+grep -Fq 'c874cc88850330fd7a93452c7c654737fa37f06916153cf818e49088197a5e4c' Containerfile
+grep -Fq '/run/ostree' roles/common/usr/libexec/coolify-aws/configure-bootc-ecr-auth
+grep -Fq 'credHelpers' roles/common/usr/libexec/coolify-aws/configure-bootc-ecr-auth
+grep -Fq 'Before=bootc-fetch-apply-updates.service' roles/common/usr/lib/systemd/system/coolify-bootc-ecr-auth.service
 grep -Fq 'grep -Eq "^SELINUX=enforcing$" /etc/selinux/config' scripts/validate-image.sh
 grep -Fq 'getenforce) == Enforcing' scripts/vm-validate.sh
 grep -Fq "if [[ \${format} == qcow2 ]]" scripts/validate-disk.sh
@@ -123,6 +136,7 @@ grep -Fq 'default     = false' tofu/modules/network/variables.tf
 grep -Fq 'image_tag_mutability = length(var.mutable_channel_tags) > 0 ? "IMMUTABLE_WITH_EXCLUSION" : "IMMUTABLE"' tofu/modules/ecr/main.tf
 grep -Fq 'resource "aws_flow_log" "this"' tofu/modules/network/main.tf
 grep -Fq 'AmazonSSMManagedInstanceCore' tofu/modules/instance-management/main.tf
+grep -Fq 'resource "aws_iam_role_policy" "ecr_pull"' tofu/modules/instance-management/main.tf
 grep -Fq 'resource "aws_iam_instance_profile" "node"' tofu/modules/instance-management/main.tf
 grep -Fq 'resource "aws_s3_bucket" "this"' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'resource "aws_kms_key" "ami_snapshot"' tofu/modules/ami-import-validation/main.tf
@@ -132,6 +146,9 @@ grep -Fq 'ebs:CompleteSnapshot' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'kms:GenerateDataKey' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'kms:GenerateDataKeyWithoutPlaintext' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'kms:GrantIsForAWSResource' tofu/modules/ami-import-validation/main.tf
+grep -Fq 'values   = ["ami-release", "ami-validation"]' tofu/modules/ami-import-validation/main.tf
+grep -Fq 'ecr:GetAuthorizationToken' tofu/modules/ami-import-validation/main.tf
+grep -Fq 'ecr:GetDownloadUrlForLayer' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'identifiers = ["vmie.amazonaws.com"]' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'variable = "iam:PassedToService"' tofu/modules/ami-import-validation/main.tf
 grep -Fq 'sid     = "CreateTaggedValidationInstance"' tofu/modules/ami-import-validation/main.tf
@@ -182,6 +199,16 @@ grep -Fq 'enable_ami_launch_validation' tofu/environments/aws/variables.tf
 grep -Fq 'run_aws_launch:' .github/workflows/ami.yml
 grep -Fq 'run_aws_validation:' .github/workflows/ami.yml
 grep -Fq 'snapshot_upload_mode:' .github/workflows/ami.yml
+grep -Fq 'ami_lifecycle:' .github/workflows/ami.yml
+# This is a literal GitHub Actions expression.
+# shellcheck disable=SC2016
+grep -Fq 'AMI_LIFECYCLE: ${{ inputs.ami_lifecycle }}' .github/workflows/ami.yml
+grep -Fq "docker pull \"\${WORKER_IMAGE_REF}\"" .github/workflows/ami.yml
+grep -Fq 'AWS_ECR_WORKER_REPOSITORY_URL' .github/workflows/ami.yml
+grep -Fq "worker_image_ref=\"\${ECR_REPOSITORY_URL}:sha-\${GITHUB_SHA}\"" .github/workflows/ami.yml
+grep -Fq 'retained AMIs require the disposable EC2 launch gate' scripts/validate-ami-import.sh
+grep -Fq 'artifact_purpose=ami-release' scripts/validate-ami-import.sh
+grep -Fq 'completed_successfully=true' scripts/validate-ami-import.sh
 grep -Fq 'nix build --no-link --print-out-paths .#coldsnap' .github/workflows/ami.yml
 grep -Fq 'coldsnap = pkgs.coldsnap;' flake.nix
 if rg -n --glob '*.tf' '0\.0\.0\.0/0.*(22|8000)|(22|8000).*0\.0\.0\.0/0' tofu; then
@@ -194,6 +221,32 @@ if rg -n 'controller_bootstrap|administrator_ssh|security_group" "ssh"|ip_protoc
 fi
 if rg -n --glob '*.tf' 'aws_secretsmanager_secret_version|secret_string\s*=' tofu; then
     echo "OpenTofu must provision secret containers and references, never secret values" >&2
+    exit 1
+fi
+
+auth_test_dir=$(mktemp -d)
+trap 'rm -rf "${auth_test_dir}"' EXIT
+BOOTC_AUTH_DIR="${auth_test_dir}" \
+MOCK_BOOTC_IMAGE=467590374785.dkr.ecr.us-east-2.amazonaws.com/lucidity/bootc/worker:sha-0123456789abcdef0123456789abcdef01234567 \
+PATH="${repo_root}/tests/fixtures:${PATH}" \
+    roles/common/usr/libexec/coolify-aws/configure-bootc-ecr-auth
+jq -e '.auths["467590374785.dkr.ecr.us-east-2.amazonaws.com"] == {}' "${auth_test_dir}/auth.json" >/dev/null
+jq -e '.credHelpers["467590374785.dkr.ecr.us-east-2.amazonaws.com"] == "ecr-login"' "${auth_test_dir}/auth.json" >/dev/null
+[[ $(stat -c '%a' "${auth_test_dir}/auth.json") == 600 ]]
+BOOTC_AUTH_DIR="${auth_test_dir}" \
+MOCK_BOOTC_IMAGE=localhost/coolify-bootc-worker:test \
+PATH="${repo_root}/tests/fixtures:${PATH}" \
+    roles/common/usr/libexec/coolify-aws/configure-bootc-ecr-auth
+[[ ! -e ${auth_test_dir}/auth.json ]]
+grep -Fq 'resource "aws_launch_template" "node"' tofu/modules/ec2-launch-templates/main.tf
+grep -Fq 'owners = ["self"]' tofu/modules/ec2-launch-templates/main.tf
+grep -Fq 'http_tokens                 = "required"' tofu/modules/ec2-launch-templates/main.tf
+grep -Fq 'http_put_response_hop_limit = 2' tofu/modules/ec2-launch-templates/main.tf
+grep -Fq 'cpu_credits = "standard"' tofu/modules/ec2-launch-templates/main.tf
+grep -Fq 'volume_type           = "gp3"' tofu/modules/ec2-launch-templates/main.tf
+grep -Fq 'update_default_version = false' tofu/modules/ec2-launch-templates/main.tf
+if rg -n 'key_name|associate_public_ip_address|user_data' tofu/modules/ec2-launch-templates; then
+    echo "launch templates must not embed key pairs, networking placement, or user data" >&2
     exit 1
 fi
 [[ $(printf '%s\n' README.md tofu/environments/aws/main.tf roles/controller/usr/example | ci/worker-changes.sh) == false ]]

@@ -41,6 +41,36 @@ resource "aws_iam_role_policy_attachment" "ssm" {
   role       = aws_iam_role.node[each.key].name
 }
 
+data "aws_iam_policy_document" "ecr_pull" {
+  for_each = local.node_roles
+
+  statement {
+    sid       = "AuthenticateToEcr"
+    effect    = "Allow"
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "PullBootcImage"
+    effect = "Allow"
+    actions = [
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:BatchGetImage",
+      "ecr:GetDownloadUrlForLayer",
+    ]
+    resources = [var.ecr_repository_arns[each.key]]
+  }
+}
+
+resource "aws_iam_role_policy" "ecr_pull" {
+  for_each = local.node_roles
+
+  name   = "${local.resource_prefix}-${each.key}-ecr-pull"
+  role   = aws_iam_role.node[each.key].id
+  policy = data.aws_iam_policy_document.ecr_pull[each.key].json
+}
+
 resource "aws_iam_role_policy_attachment" "controller_additional" {
   for_each = var.controller_policy_arns
 

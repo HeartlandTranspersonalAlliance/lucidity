@@ -6,6 +6,15 @@ enable_network         = false
 enable_runtime_secrets = false
 enable_instance_management = false
 enable_ami_launch_validation = false
+enable_ec2_launch_templates  = false
+
+# After both roles have retained, boot-validated AMIs and the controller bootstrap is
+# complete, pin the exact IDs and enable launch templates. Never select "newest".
+# controller_ami_id = "ami-0123456789abcdef0"
+# worker_ami_id     = "ami-0fedcba9876543210"
+
+controller_root_volume_size_gib = 40
+worker_root_volume_size_gib     = 80
 
 # A deleted controller runtime secret remains recoverable for 30 days.
 secret_recovery_window_in_days = 30

@@ -14,6 +14,19 @@ variable "controller_policy_arns" {
   default     = []
 }
 
+variable "ecr_repository_arns" {
+  description = "Private bootc ECR repository ARNs keyed by controller and worker role."
+  type        = map(string)
+
+  validation {
+    condition = (
+      length(var.ecr_repository_arns) == 2 &&
+      alltrue([for role in ["controller", "worker"] : can(regex(":repository/", var.ecr_repository_arns[role]))])
+    )
+    error_message = "ECR repository ARNs must contain explicit controller and worker entries."
+  }
+}
+
 variable "tags" {
   description = "Additional tags applied to supported IAM resources."
   type        = map(string)
