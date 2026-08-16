@@ -277,6 +277,14 @@ grep -Fq 'coldsnap = pkgs.coldsnap;' flake.nix
 grep -Fq 'syft = pkgs.syft;' flake.nix
 grep -Fxq '0.1.0' VERSION
 grep -Fq 'name: Release bootc AMI' .github/workflows/release.yml
+# This is a literal workflow shell variable.
+# shellcheck disable=SC2016
+grep -Fq 'git rev-parse --verify --quiet "refs/tags/${tag}^{commit}"' .github/workflows/release.yml
+missing_release_tag_commit=$(git rev-parse --verify --quiet 'refs/tags/v999999.999999.999999^{commit}' || true)
+[[ -z ${missing_release_tag_commit} ]] || {
+    echo "a missing release tag must resolve to an empty commit" >&2
+    exit 1
+}
 grep -Fq 'gh workflow run publish.yml --ref main' .github/workflows/release.yml
 grep -Fq 'aws ecr put-image' .github/workflows/release.yml
 grep -Fq 'nix build .#syft --no-link --print-out-paths' .github/workflows/release.yml

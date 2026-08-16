@@ -85,7 +85,7 @@ jobs:
             esac
           fi
           tag="v${version}"
-          tag_commit=$(git rev-parse "refs/tags/${tag}^{commit}" 2>/dev/null || true)
+          tag_commit=$(git rev-parse --verify --quiet "refs/tags/${tag}^{commit}" || true)
           if release_state=$(gh release view "${tag}" --json isDraft,targetCommitish 2>/dev/null); then
             [[ $(jq -r .isDraft <<< "${release_state}") == true ]] || { echo "published GitHub release ${tag} already exists" >&2; exit 1; }
             [[ $(jq -r .targetCommitish <<< "${release_state}") == "${source_sha}" ]] || { echo "draft ${tag} targets a different commit" >&2; exit 1; }
