@@ -48,13 +48,14 @@ ssh_base=(
     -o UserKnownHostsFile=/dev/null
     -p "${ssh_port}"
 )
-admin_ssh=("${ssh_base[@]}" -i "${admin_identity}" root@127.0.0.1)
+admin_login=("${ssh_base[@]}" -i "${admin_identity}" admin@127.0.0.1)
+admin_ssh=("${admin_login[@]}" sudo -n)
 
 wait_for_ssh() {
     local identity=$1
     local attempt
     for ((attempt = 1; attempt <= wait_attempts; attempt++)); do
-        if "${ssh_base[@]}" -i "${identity}" root@127.0.0.1 true >/dev/null 2>&1; then
+        if "${ssh_base[@]}" -i "${identity}" admin@127.0.0.1 true >/dev/null 2>&1; then
             return 0
         fi
         if ! "${container_engine}" container inspect "${vm_name}" >/dev/null 2>&1; then
@@ -136,12 +137,27 @@ report_nix_install_failure() {
         _AUDIT_TYPE_NAME=AVC >&2 || true
 }
 
+report_worker_storage_failure() {
+    echo "Coolify worker storage validation failed" >&2
+    "${admin_ssh[@]}" systemctl --no-pager --full status \
+        coolify-worker-storage.service \
+        coolify-worker-authorized-keys.service >&2 || true
+    "${admin_ssh[@]}" journalctl --no-pager -n 200 \
+        -u coolify-worker-storage.service \
+        -u coolify-worker-authorized-keys.service >&2 || true
+    "${admin_ssh[@]}" findmnt --target /data/coolify >&2 || true
+    "${admin_ssh[@]}" stat -c '%n %d:%i %C' \
+        /data/coolify /var/lib/coolify >&2 || true
+}
+
 assert_common_host() {
     "${admin_ssh[@]}" bash -Eeuo pipefail -s <<'REMOTE'
 systemctl is-active --quiet docker.service
 systemctl is-active --quiet sshd.service
 systemctl is-active --quiet determinate-nix-install.service
 systemctl is-active --quiet nix-daemon.service
+systemctl is-active --quiet lucidity-nix-profile.service
+systemctl is-active --quiet lucidity-admin-authorized-key.service
 systemctl is-enabled --quiet bootc-fetch-apply-updates.timer
 [[ $(getenforce) == Enforcing ]]
 mountpoint --quiet /nix
@@ -152,11 +168,11 @@ docker compose version >/dev/null
 bootc status >/dev/null
 nix_bin=/nix/var/nix/profiles/default/bin/nix
 "${nix_bin}" --version
-"${nix_bin}" build \
-    --no-write-lock-file \
-    --out-link /var/lib/coolify-aws/nix-smoke-result \
-    /usr/share/coolify-aws/nix-smoke
-[[ $(</var/lib/coolify-aws/nix-smoke-result) == "Determinate Nix guest build passed" ]]
+[[ $("${nix_bin}" eval --raw --expr 'toString (1 + 1)') == 2 ]]
+[[ -x /var/usrlocal/bin/lucidity ]]
+/var/usrlocal/bin/lucidity --help >/dev/null
+[[ -L /nix/var/nix/profiles/lucidity ]]
+[[ -e /var/home/admin/.nix-profile ]]
 if journalctl -b --no-pager | grep -Eiq 'avc:[[:space:]]+denied.*(/nix|nix-daemon)'; then
     echo "SELinux denied Determinate Nix access" >&2
     exit 1
@@ -168,13 +184,9 @@ assert_controller() {
     "${admin_ssh[@]}" bash -Eeuo pipefail -s <<'REMOTE'
 systemctl is-active --quiet coolify-controller-storage.service
 systemctl is-active --quiet coolify-controller-bootstrap.service
+systemctl is-active --quiet openbao.service
 systemctl is-active --quiet aws-workload-credentials-provider-token.service
-systemctl is-enabled --quiet aws-workload-credentials-provider-sm.service
-if [[ -e /etc/coolify-controller/runtime-secrets.env ]]; then
-    systemctl is-active --quiet aws-workload-credentials-provider-sm.service
-else
-    ! systemctl is-failed --quiet aws-workload-credentials-provider-sm.service
-fi
+! systemctl is-failed --quiet aws-workload-credentials-provider-sm.service
 mountpoint --quiet /data/coolify
 matchpathcon -V /data/coolify >/dev/null
 [[ $(stat -c %C /data/coolify) == *:container_file_t:* ]]
@@ -195,6 +207,12 @@ REMOTE
 }
 
 wait_for_ssh "${admin_identity}"
+"${admin_login[@]}" true
+"${admin_login[@]}" sudo -n true
+if "${ssh_base[@]}" -i "${admin_identity}" root@127.0.0.1 true >/dev/null 2>&1; then
+    echo "administrator identity unexpectedly authenticated as root" >&2
+    exit 1
+fi
 if ! cloud_status=$("${admin_ssh[@]}" cloud-init status --wait); then
     printf '%s\n' "${cloud_status}" >&2
     "${admin_ssh[@]}" cloud-init status --long >&2 || true
@@ -210,8 +228,24 @@ assert_common_host
 if [[ ${role} == worker ]]; then
     coolify_ssh=("${ssh_base[@]}" -i "${coolify_identity}" root@127.0.0.1)
     "${coolify_ssh[@]}" true
-    "${admin_ssh[@]}" systemctl is-active --quiet coolify-worker-authorized-keys.service
-    echo "Worker VM initial validation passed: cloud-init, SSH, Docker, bootc, Determinate Nix, SELinux, and unattended updates"
+    if ! "${admin_ssh[@]}" systemctl is-active --quiet coolify-worker-storage.service; then
+        report_worker_storage_failure
+        exit 1
+    fi
+    if ! "${admin_ssh[@]}" systemctl is-active --quiet coolify-worker-authorized-keys.service; then
+        report_worker_storage_failure
+        exit 1
+    fi
+    if ! "${admin_ssh[@]}" bash -Eeuo pipefail -s <<'REMOTE'
+mountpoint --quiet /data/coolify
+[[ $(stat -c '%d:%i' /data/coolify) == "$(stat -c '%d:%i' /var/lib/coolify)" ]]
+[[ $(stat -c %C /data/coolify) == *:container_file_t:* ]]
+REMOTE
+    then
+        report_worker_storage_failure
+        exit 1
+    fi
+    echo "Worker VM initial validation passed: cloud-init, SSH, Docker, bootc, Determinate Nix, persistent Coolify storage, SELinux, and unattended updates"
     exit 0
 fi
 

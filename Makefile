@@ -7,7 +7,7 @@ TOFU_STATE_DIR ?= tofu/bootstrap/state
 
 include mk/quality.mk
 
-.PHONY: build build-controller build-worker style lint test validate validate-controller image-controller image-worker ami-controller ami-worker validate-disk-controller validate-disk-worker vm-init-controller vm-init-worker vm-start-controller vm-start-worker vm-validate-controller vm-validate-worker vm-registry-start-controller vm-registry-start-worker vm-update-rollback-controller vm-update-rollback-worker vm-registry-stop-controller vm-registry-stop-worker vm-stop-controller vm-stop-worker vm-clean-controller vm-clean-worker tofu-fmt tofu-fmt-check tofu-init tofu-validate tofu-test tofu-state-init tofu-state-validate tofu-state-test tofu-check clean
+.PHONY: build build-controller build-worker style lint test validate validate-controller image-controller image-worker ami-controller ami-worker validate-disk-controller validate-disk-worker vm-init-controller vm-init-worker vm-start-controller vm-start-worker vm-validate-controller vm-validate-worker vm-integration vm-registry-start-controller vm-registry-start-worker vm-update-rollback-controller vm-update-rollback-worker vm-registry-stop-controller vm-registry-stop-worker vm-stop-controller vm-stop-worker vm-clean-controller vm-clean-worker tofu-fmt tofu-fmt-check tofu-init tofu-validate tofu-test tofu-state-init tofu-state-validate tofu-state-test tofu-check clean
 
 build: build-worker
 
@@ -58,6 +58,9 @@ vm-validate-controller:
 
 vm-validate-worker:
 	./scripts/vm-validate.sh worker
+
+vm-integration:
+	./scripts/vm-integration.sh
 
 vm-registry-start-controller:
 	./scripts/vm-registry.sh start controller

@@ -50,6 +50,7 @@ required_files=(
     scripts/vm-init.sh
     scripts/vm-start.sh
     scripts/vm-validate.sh
+    scripts/vm-integration.sh
     scripts/vm-registry.sh
     scripts/vm-validate-update.sh
     scripts/vm-stop.sh
@@ -215,6 +216,19 @@ worker_version_line=$(awk '
 }
 grep -Fq '=~ ^[[:alnum:].:-]+$' scripts/vm-init.sh
 grep -Fq '=~ ^[[:alnum:].:-]+$' scripts/vm-validate-update.sh
+grep -Fq 'VM_HOST_FORWARD_PORT and VM_GUEST_FORWARD_PORT must both be set' scripts/vm-start.sh
+grep -Fq 'Controller-to-worker SSH passed' scripts/vm-integration.sh
+grep -Fq 'Coolify deployed and served the application from the worker' scripts/vm-integration.sh
+grep -Fq '"abilities" => ["read", "write", "deploy"]' scripts/vm-integration.sh
+grep -Fq 'busybox:1.37.0-musl@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23' scripts/vm-integration.sh
+# These are literal shell expressions in the implementation under test.
+# shellcheck disable=SC2016
+grep -Fq 'integration_password_base64=$(printf' scripts/vm-integration.sh
+# shellcheck disable=SC2016
+if grep -Fq '"${controller_ssh[@]}" docker exec' scripts/vm-integration.sh; then
+    echo "remote docker commands with spaced arguments must run inside a quoted remote script" >&2
+    exit 1
+fi
 grep -Fq 'CONTAINER_ENGINE' scripts/build-disk.sh
 grep -Fq 'controller|worker' scripts/build-disk.sh
 # These are literal shell expressions in the implementation under test.
@@ -570,6 +584,7 @@ fi
 [[ $(printf '%s\n' .github/workflows/ami-switch-benchmark.yml scripts/validate-ami-import.sh tests/test-ami-import.sh | ci/worker-changes.sh) == false ]]
 [[ $(printf '%s\n' Makefile | ci/worker-changes.sh) == true ]]
 [[ $(printf '%s\n' .github/workflows/validate.yml | ci/worker-changes.sh) == true ]]
+[[ $(printf '%s\n' .github/workflows/integration.yml scripts/vm-integration.sh | ci/worker-changes.sh) == false ]]
 [[ $(printf '%s\n' README.md tofu/environments/aws/main.tf roles/worker/usr/example | ci/controller-changes.sh) == false ]]
 [[ $(printf '%s\n' ci/controller-changes.sh ci/worker-changes.sh | ci/controller-changes.sh) == true ]]
 [[ $(printf '%s\n' tests/test-image.sh tests/test-ami-import.sh tests/fixtures/aws tests/fixtures/coldsnap | ci/controller-changes.sh) == false ]]
@@ -580,6 +595,7 @@ fi
 [[ $(printf '%s\n' .github/workflows/ami-switch-benchmark.yml scripts/validate-ami-import.sh tests/test-ami-import.sh | ci/controller-changes.sh) == false ]]
 [[ $(printf '%s\n' Makefile | ci/controller-changes.sh) == true ]]
 [[ $(printf '%s\n' .github/workflows/validate.yml | ci/controller-changes.sh) == true ]]
+[[ $(printf '%s\n' .github/workflows/integration.yml scripts/vm-integration.sh | ci/controller-changes.sh) == false ]]
 grep -Fq 'merge_group:' .github/workflows/validate.yml
 # These are literal GitHub Actions expressions in the workflow under test.
 # shellcheck disable=SC2016
@@ -599,6 +615,15 @@ grep -Fq "FULL_LIFECYCLE: \${{ github.event_name != 'pull_request' }}" .github/w
 # This is a literal shell expression in the workflow under test.
 # shellcheck disable=SC2016
 [[ $(grep -Fc 'if [[ ${FULL_LIFECYCLE} == true ]]; then' .github/workflows/validate.yml) == 2 ]]
+grep -Fq 'workflow_dispatch:' .github/workflows/integration.yml
+grep -Fq 'pull_request:' .github/workflows/integration.yml
+# This is a literal GitHub Actions expression in the workflow under test.
+# shellcheck disable=SC2016
+grep -Fq 'group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}' .github/workflows/integration.yml
+grep -Fq 'cancel-in-progress: true' .github/workflows/integration.yml
+grep -Fq 'make vm-integration' .github/workflows/integration.yml
+grep -Fq 'VM_HOST_FORWARD_PORT=8000 VM_GUEST_FORWARD_PORT=8000' .github/workflows/integration.yml
+grep -Fq 'VM_HOST_FORWARD_PORT=8081 VM_GUEST_FORWARD_PORT=8080' .github/workflows/integration.yml
 [[ $(grep -Fc 'make vm-update-rollback-' .github/workflows/validate.yml) == 2 ]]
 unexpected_sudo=$(grep -R -n -E '(^|[[:space:]])sudo[[:space:]]' .github/workflows | \
     grep -Ev 'sudo (tee /etc/udev/rules.d/99-kvm4all.rules|udevadm control --reload-rules|udevadm trigger --name-match=kvm)$' | \
@@ -608,8 +633,8 @@ if [[ -n ${unexpected_sudo} ]]; then
     printf '%s\n' "${unexpected_sudo}" >&2
     exit 1
 fi
-[[ $(grep -R -h -E 'sudo (tee /etc/udev/rules.d/99-kvm4all.rules|udevadm control --reload-rules|udevadm trigger --name-match=kvm)$' .github/workflows | wc -l) == 6 ]] || {
-    echo "the two KVM lifecycle jobs must each contain exactly three narrowly scoped sudo commands" >&2
+[[ $(grep -R -h -E 'sudo (tee /etc/udev/rules.d/99-kvm4all.rules|udevadm control --reload-rules|udevadm trigger --name-match=kvm)$' .github/workflows | wc -l) == 9 ]] || {
+    echo "the three KVM jobs must each contain exactly three narrowly scoped sudo commands" >&2
     exit 1
 }
 if grep -Eq '^IMAGE_BUILDER_IMAGE=.+:(latest|main)$' image/image-builder.env; then

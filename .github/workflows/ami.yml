@@ -106,6 +106,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      - name: Install locked Nix
+        uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
+
       - name: Report runner capacity
         run: |
           df -h /
@@ -189,7 +192,11 @@ jobs:
           fi
           aws ecr get-login-password --region "${AWS_REGION}" | sudo podman login --username AWS --password-stdin "${registry}"
           sudo podman pull "${IMAGE_REF}"
-          sudo env CONTAINER_ENGINE=podman ./scripts/validate-image.sh "${IMAGE_REF}"
+          sudo env \
+            PATH="${PATH}" \
+            CONTAINER_ENGINE=podman \
+            IMAGE_NAME="${IMAGE_REF}" \
+            nix run .#lucidity -- build "${AMI_ROLE}" --validate-only
           [[ $(sudo podman image inspect --format '{{.Os}}/{{.Architecture}}' "${IMAGE_REF}") == linux/amd64 ]] || {
             echo "retained AMI source is not linux/amd64" >&2
             exit 1
@@ -228,7 +235,7 @@ jobs:
           CONTAINER_ENGINE: docker
           IMAGE_NAME: ${{ env.IMAGE_REF }}
           IMAGE_VERSION: ami-validation
-        run: ./scripts/build.sh "${AMI_ROLE}"
+        run: nix run .#lucidity -- build "${AMI_ROLE}"
 
       - name: Build and validate raw AMI artifact
         env:
@@ -291,10 +298,6 @@ jobs:
             test -n "${TEST_SECURITY_GROUP}" || { echo "the ${AMI_ROLE} AMI test security-group repository variable is required" >&2; exit 1; }
             test -n "${TEST_SUBNET}" || { echo "AWS_AMI_TEST_SUBNET_ID repository variable is required" >&2; exit 1; }
           fi
-
-      - name: Install Determinate Nix for the pinned EBS uploader
-        if: inputs.run_aws_validation
-        uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
 
       - name: Resolve the pinned coldsnap binary
         if: inputs.run_aws_validation

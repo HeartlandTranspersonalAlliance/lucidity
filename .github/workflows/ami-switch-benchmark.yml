@@ -37,6 +37,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      - name: Install locked Nix
+        uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
+
       - name: Require configured benchmark identifiers
         env:
           AMI_ROLE_ARN: ${{ vars.AWS_AMI_IMPORT_ROLE_ARN }}
@@ -94,6 +97,7 @@ jobs:
       - name: Build management-enabled CentOS bootc bootstrap image
         run: |
           sudo env \
+            PATH="${PATH}" \
             BASE_IMAGE="${CENTOS_BOOTC_IMAGE}" \
             BUILD_CACHE_FROM="${BUILD_CACHE_FROM}" \
             BUILD_CACHE_TO="${BUILD_CACHE_TO}" \
@@ -101,8 +105,7 @@ jobs:
             IMAGE_NAME="${BOOTSTRAP_IMAGE}" \
             IMAGE_VERSION="benchmark-${GITHUB_SHA}" \
             REGISTRY_AUTH_FILE="${REGISTRY_AUTH_FILE}" \
-            ./scripts/build.sh benchmark-base
-          sudo env CONTAINER_ENGINE=podman ./scripts/validate-image.sh "${BOOTSTRAP_IMAGE}"
+            nix run .#lucidity -- build worker
 
       - name: Build pinned image tooling
         run: |
@@ -125,9 +128,6 @@ jobs:
             CONTAINER_ENGINE=podman \
             VM_TOOL_IMAGE="${CI_TOOLS_IMAGE}" \
             ./scripts/validate-disk.sh image-output/worker/lucidity-centos-bootstrap-ami.raw
-
-      - name: Install Determinate Nix for the pinned EBS uploader
-        uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
 
       - name: Resolve the pinned coldsnap binary
         run: |
