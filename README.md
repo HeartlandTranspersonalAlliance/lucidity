@@ -378,6 +378,11 @@ OpenTofu is the infrastructure-as-code CLI for this project. Configuration remai
 
 The AWS stack creates one empty bundled controller-runtime secret, a dedicated rotating KMS key, and a controller EC2 instance profile scoped to that secret and key. OpenTofu never receives the secret value. The controller image builds AWS Workload Credentials Provider 3.1.1 from checksum-pinned source and installs AWS's checksum-pinned `asm-exec`. The controller launch template's cloud-init data writes `/etc/coolify-controller/runtime-secrets.env` with seven dynamic references and mode `0600` before `cloud-final.service` completes; it contains no resolved secret. The bootstrap wrapper rejects plaintext and resolves those references only at runtime through the instance role. Populate all seven JSON values through an out-of-band operator workflow before launching production EC2.
 
+The optional monitoring-only AWS Budget covers the complete account, excludes credits
+and refunds, and emails 80 percent actual, 100 percent forecasted, and 100 percent
+actual annual thresholds. It has no automatic action. The default limit is 1,100 USD
+and must be reviewed with its recipient before enabling it.
+
 OpenTofu cannot safely replace a secret store because a managed secret value would enter its state. Running OpenBao only for this deployment would add more state, backup work, and availability risk than the single AWS secret warrants, so Secrets Manager remains the initial choice. OpenBao can replace it later if provider independence becomes an operational requirement.
 
 The infrastructure intentionally has:

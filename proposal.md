@@ -1267,6 +1267,13 @@ recipient must confirm and test the subscription after apply. Paid EC2 detailed
 monitoring is disabled because the one-minute status-check and five-minute CPU and
 credit metrics used by these alarms are already included in basic monitoring.
 
+An independent, explicitly enabled account-wide annual AWS cost budget provides the
+financial guardrail. The monitoring-only budget excludes credits and refunds from the
+measured amount and sends email at 80 percent actual, 100 percent forecasted, and 100
+percent actual spend. It intentionally uses no Budget Action, automatic instance stop,
+or IAM mutation. Account-wide scope ensures that untagged leaked resources remain
+visible; the reviewed annual limit defaults to 1,100 USD for the initial deployment.
+
 ---
 
 # 34. Automatic OS updates

@@ -1,6 +1,12 @@
 # This file contains identifiers and configuration only. Do not add credentials.
 aws_region = "us-east-2"
 
+# Monitoring-only AWS Budgets alerts are free and cover the complete account so that
+# untagged cost leaks are visible. Review the limit and email before enabling.
+enable_account_cost_budget = false
+account_annual_cost_limit_usd = 1100
+# account_cost_budget_notification_email = "operations@example.org"
+
 # Apply only ECR, GitHub OIDC, and disposable AMI snapshot validation initially.
 enable_network         = false
 enable_runtime_secrets = false

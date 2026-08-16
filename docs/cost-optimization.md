@@ -47,6 +47,13 @@ a complete IPv6 egress path.
 - EC2 basic monitoring supplies the one-minute
   status checks and five-minute CPU and credit metrics used by the alarms.
 - AWS Backup keeps 14 daily incremental recovery points in warm regional storage.
+- The optional account-wide AWS Budget alerts at 80 percent actual spend, 100 percent
+  forecasted spend, and 100 percent actual spend without enabling automated actions.
+
+Monitoring-only AWS Budgets and their notifications are free. Budget data is not
+real-time, and forecast alerts need enough usage history to become available, so the
+budget complements resource-health alarms rather than replacing them. Its account-wide
+scope catches untagged or accidentally created resources outside the lucidity stack.
 
 Review instance memory, CPU credits, gp3 consumption, backup storage, CloudWatch Logs,
 and internet egress after the first month. Resize only from measured peaks: the Matrix
@@ -61,3 +68,5 @@ worker's memory and disk budget.
 - [AWS public IPv4 pricing](https://aws.amazon.com/vpc/pricing/)
 - [AWS IPv6-to-IPv4 connectivity through DNS64 and NAT64](https://docs.aws.amazon.com/vpc/latest/userguide/nat-gateway-nat64-dns64.html)
 - [EC2 basic and detailed monitoring](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/manage-detailed-monitoring.html)
+- [AWS Budgets pricing](https://aws.amazon.com/aws-cost-management/aws-budgets/pricing/)
+- [AWS Budgets best practices](https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-best-practices.html)
