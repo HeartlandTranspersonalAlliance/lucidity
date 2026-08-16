@@ -153,6 +153,35 @@ variable "node_backup_retention_days" {
   }
 }
 
+variable "enable_node_monitoring" {
+  description = "Create encrypted email notifications for production node status, CPU, and CPU-credit alarms."
+  type        = bool
+  default     = false
+
+  validation {
+    condition = !var.enable_node_monitoring || (
+      var.enable_ec2_instances &&
+      var.node_alarm_notification_email != null
+    )
+    error_message = "Node monitoring requires production EC2 instances and a notification email."
+  }
+}
+
+variable "node_alarm_notification_email" {
+  description = "Email address that must confirm the encrypted SNS alarm subscription after apply."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition = (
+      var.node_alarm_notification_email == null ||
+      can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", var.node_alarm_notification_email))
+    )
+    error_message = "The node alarm notification endpoint must be null or a syntactically valid email address."
+  }
+}
+
 variable "controller_ami_id" {
   description = "Explicit retained controller AMI ID. No newest-image lookup or automatic rollout is performed."
   type        = string

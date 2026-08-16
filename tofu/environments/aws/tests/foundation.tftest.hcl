@@ -76,6 +76,18 @@ mock_provider "aws" {
     }
   }
 
+  mock_resource "aws_sns_topic" {
+    defaults = {
+      arn = "arn:aws:sns:us-east-2:123456789012:lucidity-production-node-alarms"
+    }
+  }
+
+  mock_resource "aws_sns_topic_subscription" {
+    defaults = {
+      arn = "arn:aws:sns:us-east-2:123456789012:lucidity-production-node-alarms:subscription-id"
+    }
+  }
+
   mock_resource "aws_subnet" {
     defaults = {
       id = "subnet-0123456789abcdef0"
@@ -174,7 +186,9 @@ run "default_registry_and_oidc_contract" {
       length(output.ec2_instance_ids) == 0 &&
       length(output.ec2_public_ips) == 0 &&
       output.node_backup_vault_arn == null &&
-      output.node_backup_plan_id == null
+      output.node_backup_plan_id == null &&
+      output.node_alarm_notification_topic_arn == null &&
+      length(output.node_alarm_names) == 0
     )
     error_message = "Launch templates and production nodes must remain absent until retained AMI IDs and deployment are explicitly selected."
   }
@@ -378,6 +392,37 @@ run "production_node_backup_contract" {
       toset(output.node_backup_settings.protected_roles) == toset(["controller", "worker"])
     )
     error_message = "Enabled production backups must expose the protected vault, plan, backup-only role, and 14-day retention."
+  }
+}
+
+run "production_node_monitoring_contract" {
+  command = plan
+
+  variables {
+    controller_ami_id             = "ami-01111111111111111"
+    enable_ec2_instances          = true
+    enable_ec2_launch_templates   = true
+    enable_instance_management    = true
+    enable_network                = true
+    enable_node_monitoring        = true
+    enable_runtime_secrets        = true
+    node_alarm_notification_email = "operations@example.org"
+    worker_ami_id                 = "ami-02222222222222222"
+  }
+
+  assert {
+    condition = (
+      output.node_alarm_notification_topic_arn == "arn:aws:sns:us-east-2:123456789012:lucidity-production-node-alarms" &&
+      output.node_alarm_email_subscription_arn == "arn:aws:sns:us-east-2:123456789012:lucidity-production-node-alarms:subscription-id" &&
+      output.node_alarm_notification_kms_key_arn == "arn:aws:kms:us-east-2:123456789012:key/11111111-2222-3333-4444-555555555555" &&
+      output.node_alarm_names.status_check.controller == "lucidity-production-controller-status-check" &&
+      output.node_alarm_names.high_cpu.worker == "lucidity-production-worker-high-cpu" &&
+      output.node_alarm_names.low_cpu_credit.controller == "lucidity-production-controller-low-cpu-credit" &&
+      output.node_alarm_settings.status_check.datapoints_to_alarm == 2 &&
+      output.node_alarm_settings.high_cpu.threshold_percent == 85 &&
+      output.node_alarm_settings.low_cpu_credit.threshold == 20
+    )
+    error_message = "Enabled node monitoring must create encrypted notifications and stable status, CPU, and credit alarms for both roles."
   }
 }
 

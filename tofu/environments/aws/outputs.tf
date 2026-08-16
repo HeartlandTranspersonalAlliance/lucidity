@@ -123,6 +123,31 @@ output "node_backup_settings" {
   value       = var.enable_node_backups ? module.node_backups[0].settings : null
 }
 
+output "node_alarm_names" {
+  description = "CloudWatch alarm names grouped by signal and node role, or an empty map until enabled."
+  value       = var.enable_node_monitoring ? module.node_monitoring[0].alarm_names : {}
+}
+
+output "node_alarm_notification_topic_arn" {
+  description = "Encrypted SNS topic receiving node alarm transitions, or null until enabled."
+  value       = var.enable_node_monitoring ? module.node_monitoring[0].notification_topic_arn : null
+}
+
+output "node_alarm_email_subscription_arn" {
+  description = "SNS email subscription status ARN, or null until monitoring is enabled."
+  value       = var.enable_node_monitoring ? module.node_monitoring[0].email_subscription_arn : null
+}
+
+output "node_alarm_notification_kms_key_arn" {
+  description = "Customer-managed KMS key encrypting alarm messages, or null until monitoring is enabled."
+  value       = var.enable_node_monitoring ? module.node_monitoring[0].notification_kms_key_arn : null
+}
+
+output "node_alarm_settings" {
+  description = "Auditable node alarm thresholds and evaluation windows, or null until enabled."
+  value       = var.enable_node_monitoring ? module.node_monitoring[0].settings : null
+}
+
 output "vpc_id" {
   description = "Production VPC ID."
   value       = var.enable_network ? module.network[0].vpc_id : null

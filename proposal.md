@@ -1221,6 +1221,12 @@ Consider CloudWatch Agent only if it provides useful value without unnecessary c
 
 Do not build a large monitoring platform into the base appliance.
 
+Implemented as an explicit OpenTofu gate: both production nodes receive standard
+CloudWatch alarms for EC2 status-check failures, sustained high CPU, and low T3a CPU
+credits. Alarm and recovery transitions use one encrypted SNS email channel. No agent,
+custom metric, dashboard, or synthetic monitor is added to the base appliance. The
+recipient must confirm and test the subscription after apply.
+
 ---
 
 # 34. Automatic OS updates

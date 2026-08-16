@@ -151,3 +151,15 @@ module "node_backups" {
   retention_days     = var.node_backup_retention_days
   tags               = var.tags
 }
+
+module "node_monitoring" {
+  count  = var.enable_node_monitoring ? 1 : 0
+  source = "../../modules/node-monitoring"
+
+  aws_region         = var.aws_region
+  environment        = var.environment
+  instance_ids       = module.ec2_nodes[0].instance_ids
+  notification_email = var.node_alarm_notification_email
+  project_name       = var.vpc_name
+  tags               = var.tags
+}
