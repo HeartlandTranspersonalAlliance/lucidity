@@ -364,7 +364,7 @@ Automatic OS reboots are enabled for changed bootc images in the daily update wi
 
 The AWS layer uses configurable architecture, region, and instance types. The initial target is AMD64 with `t3a.small` for the controller and `t3a.large` for the worker; ARM64 is deferred until the first AWS deployment path is proven. GitHub Actions publishes immutable candidates to ECR through OIDC, not long-lived AWS keys. AMIs are generated separately from OCI images with upstream bootc tooling and explicitly selected by OpenTofu.
 
-Networking spans three Availability Zones by default and provides public and isolated private subnets, DNS support, tiered security groups, and 90-day VPC Flow Logs. The initial two-node deployment puts the controller and worker in public subnets with one Elastic IP each. It uses private VPC addresses for controller-to-worker SSH and exposes only the required public service ports. NAT Gateways and an ALB are not justified for the expected five-to-ten-person, low-traffic workload and remain disabled. Optional [node monitoring](docs/node-monitoring.md) adds only EC2 status, CPU, and burst-credit alarms with encrypted email delivery.
+Networking spans three Availability Zones by default and provides public and isolated private subnets, DNS support, tiered security groups, and 90-day VPC Flow Logs. The initial two-node deployment puts the controller and worker in public subnets with one Elastic IP each. It uses private VPC addresses for controller-to-worker SSH and exposes only the required public service ports. NAT Gateways and an ALB are not justified for the expected five-to-ten-person, low-traffic workload and remain disabled. Optional [node monitoring](docs/node-monitoring.md) adds only EC2 status, CPU, and burst-credit alarms with encrypted email delivery; paid EC2 detailed monitoring stays off because those alarms use metrics already included with basic monitoring.
 
 OpenTofu is the infrastructure-as-code CLI for this project. Configuration remains Terraform-compatible where practical so the AWS provider and reusable modules retain broad ecosystem compatibility. Terraform is reserved for a documented incompatibility that cannot be resolved with OpenTofu. CI-only values belong in GitHub Secrets, AWS-hosted runtime secrets belong in AWS Secrets Manager, and provider-neutral or self-hosted secrets may use OpenBao.
 
@@ -382,7 +382,7 @@ The infrastructure intentionally has:
 - no ALB by default;
 - no Route 53 requirement.
 
-Those services can be added later only when a concrete operational requirement justifies their cost and complexity. External DNS will point the controller hostname to its Elastic IP and application hostnames to the worker Elastic IP.
+Those services can be added later only when a concrete operational requirement justifies their cost and complexity. Cloudflare DNS points the controller hostname to its Elastic IP and all application hostnames to the single worker Elastic IP. See the [cost and addressing guide](docs/cost-optimization.md) for the record layout, proxy boundary, and IPv6 decision.
 
 AMD64 is preferred for the first deployment and maximum third-party image compatibility. ARM64/Graviton remains a future optimization when every required application image is multi-architecture. Production x86 emulation on ARM is not enabled implicitly.
 

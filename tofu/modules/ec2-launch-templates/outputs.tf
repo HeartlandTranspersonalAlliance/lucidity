@@ -13,6 +13,13 @@ output "selected_ami_ids" {
   value       = { for role, ami in data.aws_ami.selected : role => ami.image_id }
 }
 
+output "detailed_monitoring_enabled" {
+  description = "Whether paid EC2 one-minute detailed metric monitoring is enabled for each node role."
+  value = {
+    for role, template in aws_launch_template.node : role => tobool(template.monitoring[0].enabled)
+  }
+}
+
 output "root_volume_settings" {
   description = "Auditable encrypted root-volume retention settings keyed by node role."
   value = {

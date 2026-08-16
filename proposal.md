@@ -1126,9 +1126,8 @@ Do not invent support that has not been confirmed.
 
 # 30. DNS
 
-Do not require Route 53.
-
-The user may use external DNS such as Cloudflare.
+Use Cloudflare for authoritative DNS and optional HTTP proxying. Cloudflare remains the
+authoritative zone and the AWS stack exposes origin IP outputs.
 
 Expose OpenTofu outputs containing:
 
@@ -1147,12 +1146,22 @@ Example:
 
 ```text
 coolify.example.org
-    → controller
+    → controller Elastic IP (proxied A record)
 
 
 *.apps.example.org
-    → worker
+    → worker Elastic IP (proxied A record)
+
+
+matrix.example.org
+    → worker Elastic IP (proxied A record, federation on 443)
 ```
+
+Many DNS records may reuse the same worker address. Cloudflare's shared anycast proxy
+addresses are the public frontend; the stable worker Elastic IP remains the origin.
+Keep public IPv4 connectivity for the nodes because required container registries and
+Discord bridge endpoints currently depend on IPv4 egress. The two Elastic IPs cost less
+than providing that path through AWS DNS64/NAT64 and a NAT Gateway.
 
 ---
 
@@ -1230,7 +1239,9 @@ Implemented as an explicit OpenTofu gate: both production nodes receive standard
 CloudWatch alarms for EC2 status-check failures, sustained high CPU, and low T3a CPU
 credits. Alarm and recovery transitions use one encrypted SNS email channel. No agent,
 custom metric, dashboard, or synthetic monitor is added to the base appliance. The
-recipient must confirm and test the subscription after apply.
+recipient must confirm and test the subscription after apply. Paid EC2 detailed
+monitoring is disabled because the one-minute status-check and five-minute CPU and
+credit metrics used by these alarms are already included in basic monitoring.
 
 ---
 

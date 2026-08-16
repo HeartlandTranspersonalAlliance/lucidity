@@ -1,0 +1,62 @@
+# Cost and addressing decisions
+
+This deployment uses Cloudflare for authoritative DNS and optional HTTP proxying. The
+AWS origin uses direct Elastic IP connectivity for the two EC2 nodes.
+
+## DNS and public addresses
+
+Use one stable Elastic IP per node and reuse the worker address for every hosted
+service. Any number of application records can share that worker origin address.
+
+| Record | Target | Cloudflare mode |
+|---|---|---|
+| `coolify.example.org` | controller Elastic IP | Proxied |
+| `*.apps.example.org` | worker Elastic IP | Proxied |
+| `matrix.example.org` | worker Elastic IP | Proxied |
+
+Cloudflare returns its shared anycast addresses to clients for proxied records and
+connects to the Elastic IP origin. Use HTTPS port 443 for Matrix client and federation
+traffic through Cloudflare's standard proxy. If the Matrix user identifier uses the zone apex,
+serve the standard `/.well-known/matrix/client` and `/.well-known/matrix/server`
+delegation documents from that hostname and delegate federation to
+`matrix.example.org:443`.
+
+The controller and worker keep separate Elastic IPs. This preserves management access
+while application builds, Matrix, PostgreSQL, and bridges consume worker memory and
+I/O. Revisit consolidation after measured utilization and successful restore drills.
+
+## IPv6 decision
+
+Keep public IPv4 connectivity for both nodes. Discord bridge endpoints and required
+image registries currently depend on IPv4 egress. The two Elastic IPs provide that path
+at a lower base cost than AWS DNS64/NAT64 through a NAT Gateway. Cloudflare supplies
+shared IPv4 and IPv6 anycast addresses to website and Matrix clients at the frontend.
+
+Dual-stack remains a future inbound enhancement after the external dependencies offer
+a complete IPv6 egress path.
+
+## Current low-idle-cost choices
+
+- T3a burstable instances use fixed-cost standard credits.
+- The controller and worker share one Availability Zone by default, keeping their
+  private traffic free of cross-AZ data-transfer charges.
+- gp3 root volumes use included baseline IOPS and throughput.
+- Direct EC2 networking and Coolify-managed routing provide the ingress and service
+  layers.
+- EC2 basic monitoring supplies the one-minute
+  status checks and five-minute CPU and credit metrics used by the alarms.
+- AWS Backup keeps 14 daily incremental recovery points in warm regional storage.
+
+Review instance memory, CPU credits, gp3 consumption, backup storage, CloudWatch Logs,
+and internet egress after the first month. Resize only from measured peaks: the Matrix
+database, media, bridge processes, application containers, and Coolify builds share the
+worker's memory and disk budget.
+
+## References
+
+- [Cloudflare proxied DNS records](https://developers.cloudflare.com/dns/proxy-status/)
+- [Cloudflare proxy port support](https://developers.cloudflare.com/fundamentals/reference/network-ports/)
+- [Matrix server discovery and delegation](https://spec.matrix.org/latest/server-server-api/#server-discovery)
+- [AWS public IPv4 pricing](https://aws.amazon.com/vpc/pricing/)
+- [AWS IPv6-to-IPv4 connectivity through DNS64 and NAT64](https://docs.aws.amazon.com/vpc/latest/userguide/nat-gateway-nat64-dns64.html)
+- [EC2 basic and detailed monitoring](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/manage-detailed-monitoring.html)

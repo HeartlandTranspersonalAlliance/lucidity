@@ -96,7 +96,7 @@ resource "aws_launch_template" "node" {
   }
 
   monitoring {
-    enabled = true
+    enabled = false
   }
 
   user_data = each.key == "controller" ? base64encode(local.controller_user_data) : null
