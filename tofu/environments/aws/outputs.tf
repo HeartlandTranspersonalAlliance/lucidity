@@ -29,7 +29,7 @@ output "github_publish_role_arn" {
 }
 
 output "deployment_architecture" {
-  description = "CPU architecture selected for future EC2 launch templates."
+  description = "CPU architecture selected for EC2 launch templates."
   value       = var.deployment_architecture
 }
 
@@ -56,6 +56,36 @@ output "ec2_launch_template_latest_versions" {
 output "selected_ami_ids" {
   description = "Self-owned AMI IDs explicitly selected for EC2 launch templates."
   value       = var.enable_ec2_launch_templates ? module.ec2_launch_templates[0].selected_ami_ids : {}
+}
+
+output "ec2_instance_ids" {
+  description = "Production EC2 instance IDs keyed by node role, or an empty map until explicitly enabled."
+  value       = var.enable_ec2_instances ? module.ec2_nodes[0].instance_ids : {}
+}
+
+output "ec2_private_ips" {
+  description = "Production private VPC IPv4 addresses keyed by node role."
+  value       = var.enable_ec2_instances ? module.ec2_nodes[0].private_ips : {}
+}
+
+output "ec2_public_ips" {
+  description = "Production stable Elastic IPv4 addresses keyed by node role."
+  value       = var.enable_ec2_instances ? module.ec2_nodes[0].public_ips : {}
+}
+
+output "ec2_elastic_ip_allocation_ids" {
+  description = "Production Elastic IP allocation IDs keyed by node role."
+  value       = var.enable_ec2_instances ? module.ec2_nodes[0].elastic_ip_allocation_ids : {}
+}
+
+output "ec2_availability_zones" {
+  description = "Production Availability Zones keyed by node role."
+  value       = var.enable_ec2_instances ? module.ec2_nodes[0].availability_zones : {}
+}
+
+output "ec2_instance_settings" {
+  description = "Auditable production placement, protection, addressing, and pinned template settings keyed by node role."
+  value       = var.enable_ec2_instances ? module.ec2_nodes[0].instance_settings : {}
 }
 
 output "vpc_id" {
@@ -114,22 +144,22 @@ output "vpc_flow_log_group_name" {
 }
 
 output "controller_instance_profile_name" {
-  description = "SSM-enabled instance profile for the future controller."
+  description = "SSM-enabled instance profile for the controller."
   value       = var.enable_instance_management ? module.instance_management[0].instance_profile_names.controller : null
 }
 
 output "controller_runtime_role_arn" {
-  description = "SSM-enabled IAM role ARN used by the future controller EC2 instance."
+  description = "SSM-enabled IAM role ARN used by the controller EC2 instance."
   value       = var.enable_instance_management ? module.instance_management[0].role_arns.controller : null
 }
 
 output "worker_instance_profile_name" {
-  description = "SSM-enabled instance profile for the future worker."
+  description = "SSM-enabled instance profile for the worker."
   value       = var.enable_instance_management ? module.instance_management[0].instance_profile_names.worker : null
 }
 
 output "worker_runtime_role_arn" {
-  description = "SSM-enabled IAM role ARN used by the future worker EC2 instance."
+  description = "SSM-enabled IAM role ARN used by the worker EC2 instance."
   value       = var.enable_instance_management ? module.instance_management[0].role_arns.worker : null
 }
 

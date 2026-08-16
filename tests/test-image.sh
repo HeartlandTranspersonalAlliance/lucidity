@@ -461,8 +461,12 @@ fi
 [[ $(printf '%s\n' scripts/bootstrap-worker.sh tests/test-worker.sh | ci/controller-changes.sh) == false ]]
 [[ $(printf '%s\n' .github/workflows/validate.yml | ci/controller-changes.sh) == true ]]
 grep -Fq 'merge_group:' .github/workflows/validate.yml
+if grep -Fq 'push:' .github/workflows/validate.yml; then
+    echo "validate.yml must not repeat the merge queue's full lifecycle after main updates" >&2
+    exit 1
+fi
 # Pull requests retain a real guest boot; only the additional deployment-cycle reboots are deferred.
-grep -Fq "FULL_LIFECYCLE: \${{ github.event_name != 'pull_request' }}" .github/workflows/validate.yml
+grep -Fq "FULL_LIFECYCLE: \${{ github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' }}" .github/workflows/validate.yml
 [[ $(grep -Fc "if: env.FULL_LIFECYCLE == 'true'" .github/workflows/validate.yml) == 2 ]]
 [[ $(grep -Fc 'make vm-validate-' .github/workflows/validate.yml) == 2 ]]
 # This is a literal shell expression in the workflow under test.

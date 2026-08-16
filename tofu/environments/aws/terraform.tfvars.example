@@ -7,12 +7,26 @@ enable_runtime_secrets = false
 enable_instance_management = false
 enable_ami_launch_validation = false
 enable_ec2_launch_templates  = false
+enable_ec2_instances         = false
 
 # After both roles have retained, boot-validated AMIs and the controller secret has
 # been populated out of band, enable networking, instance management, runtime secrets,
 # and launch templates together. Pin exact AMI IDs; never select "newest".
 # controller_ami_id = "ami-0123456789abcdef0"
 # worker_ami_id     = "ami-0fedcba9876543210"
+# enable_ec2_launch_templates = true
+# enable_ec2_instances        = true
+
+# Both nodes default to the first selected public subnet to avoid cross-AZ traffic.
+# Override either index to spread nodes after accepting the availability and transfer trade-off.
+ec2_node_availability_zone_indices = {
+  controller = 0
+  worker     = 0
+}
+
+# Direct API termination protection is enabled by default. OpenTofu changes can still
+# replace resources, so review every production plan and back up mutable state first.
+enable_ec2_termination_protection = true
 
 controller_root_volume_size_gib = 40
 worker_root_volume_size_gib     = 80

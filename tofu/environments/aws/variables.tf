@@ -16,19 +16,19 @@ variable "deployment_architecture" {
 }
 
 variable "controller_instance_type" {
-  description = "EC2 instance type reserved for the future controller launch template."
+  description = "EC2 instance type used by the controller launch template."
   type        = string
   default     = "t3a.small"
 }
 
 variable "worker_instance_type" {
-  description = "EC2 instance type reserved for the future worker launch template."
+  description = "EC2 instance type used by the worker launch template."
   type        = string
   default     = "t3a.large"
 }
 
 variable "enable_network" {
-  description = "Create the VPC and network controls needed by the future EC2 deployment."
+  description = "Create the VPC and network controls used by the EC2 deployment."
   type        = bool
   default     = false
 }
@@ -60,10 +60,75 @@ variable "enable_ec2_launch_templates" {
     condition = !var.enable_ec2_launch_templates || (
       var.enable_network &&
       var.enable_instance_management &&
-      var.enable_runtime_secrets
+      var.enable_runtime_secrets &&
+      var.deployment_architecture == "amd64" &&
+      var.controller_ami_id != null &&
+      var.worker_ami_id != null
     )
-    error_message = "EC2 launch templates require networking, instance management, and runtime secrets to be enabled."
+    error_message = "EC2 launch templates require the proven AMD64 architecture, explicit controller and worker AMI IDs, networking, instance management, and runtime secrets."
   }
+}
+
+variable "enable_ec2_instances" {
+  description = "Launch the production controller and worker from pinned numeric launch template versions and associate stable Elastic IPs."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !var.enable_ec2_instances || var.enable_ec2_launch_templates
+    error_message = "EC2 instances require the hardened launch templates to be enabled."
+  }
+}
+
+variable "ec2_node_names" {
+  description = "Stable Name tags for the production controller and first worker."
+  type        = map(string)
+  default = {
+    controller = "coolify-controller"
+    worker     = "coolify-worker-01"
+  }
+
+  validation {
+    condition = (
+      length(var.ec2_node_names) == 2 &&
+      alltrue([
+        for role in ["controller", "worker"] :
+        can(regex("^[A-Za-z0-9][A-Za-z0-9-]{1,62}$", var.ec2_node_names[role]))
+      ])
+    )
+    error_message = "EC2 node names must contain explicit controller and worker values using 2-63 letters, numbers, or hyphens."
+  }
+}
+
+variable "ec2_node_availability_zone_indices" {
+  description = "Zero-based indices into the sorted selected Availability Zones for each production node. Both default to one AZ to avoid cross-AZ management traffic."
+  type        = map(number)
+  default = {
+    controller = 0
+    worker     = 0
+  }
+
+  validation {
+    condition = (
+      length(var.ec2_node_availability_zone_indices) == 2 &&
+      alltrue([
+        for role in ["controller", "worker"] :
+        try(
+          var.ec2_node_availability_zone_indices[role] >= 0 &&
+          var.ec2_node_availability_zone_indices[role] < var.availability_zone_count &&
+          floor(var.ec2_node_availability_zone_indices[role]) == var.ec2_node_availability_zone_indices[role],
+          false,
+        )
+      ])
+    )
+    error_message = "Node Availability Zone indices must contain controller and worker integers within the selected Availability Zone count."
+  }
+}
+
+variable "enable_ec2_termination_protection" {
+  description = "Protect production controller and worker nodes from direct EC2 API termination."
+  type        = bool
+  default     = true
 }
 
 variable "controller_ami_id" {
@@ -91,7 +156,7 @@ variable "worker_ami_id" {
 }
 
 variable "controller_root_volume_size_gib" {
-  description = "Encrypted gp3 root volume size for the future controller launch template."
+  description = "Encrypted gp3 root volume size for the controller launch template."
   type        = number
   default     = 40
 
@@ -102,7 +167,7 @@ variable "controller_root_volume_size_gib" {
 }
 
 variable "worker_root_volume_size_gib" {
-  description = "Encrypted gp3 root volume size for the future worker launch template."
+  description = "Encrypted gp3 root volume size for the worker launch template."
   type        = number
   default     = 80
 
@@ -134,6 +199,11 @@ variable "availability_zone_count" {
   description = "Number of available standard Availability Zones used by the VPC."
   type        = number
   default     = 3
+
+  validation {
+    condition     = var.availability_zone_count >= 2 && var.availability_zone_count <= 6
+    error_message = "Use between two and six Availability Zones."
+  }
 }
 
 variable "enable_nat_gateways" {
