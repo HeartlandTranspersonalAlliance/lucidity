@@ -94,14 +94,14 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: ci/setup-build-cache.sh controller
 
-      - name: Build controller foundation
+      - name: Build controller image
         env:
           CONTAINER_ENGINE: docker
           IMAGE_NAME: ${{ env.CONTROLLER_IMAGE }}
           IMAGE_VERSION: controller-ci
         run: ./scripts/build.sh controller
 
-      - name: Validate controller bootc image and Nix mountpoint
+      - name: Validate controller bootc image, persistence policy, and secret tooling
         env:
           CONTAINER_ENGINE: docker
         run: ./scripts/validate-image.sh "${CONTROLLER_IMAGE}"

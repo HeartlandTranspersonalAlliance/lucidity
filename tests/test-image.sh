@@ -23,6 +23,17 @@ required_files=(
     roles/common/usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-coolify-aws.conf
     roles/common/usr/lib/systemd/system/coolify-bootc-ecr-auth.service
     roles/common/usr/libexec/coolify-aws/configure-bootc-ecr-auth
+    roles/controller/etc/coolify-controller/runtime-secrets.env.example
+    roles/controller/usr/lib/systemd/system/aws-workload-credentials-provider-sm.service
+    roles/controller/usr/lib/systemd/system/aws-workload-credentials-provider-token.service
+    roles/controller/usr/lib/systemd/system/coolify-controller-bootstrap.service
+    roles/controller/usr/lib/systemd/system/coolify-controller-storage.service
+    roles/controller/usr/lib/sysusers.d/coolify-controller.conf
+    roles/controller/usr/lib/tmpfiles.d/coolify-controller.conf
+    roles/controller/usr/libexec/coolify-aws/bootstrap-controller-with-secrets
+    roles/controller/usr/libexec/coolify-aws/prepare-controller-storage
+    roles/controller/usr/libexec/coolify-aws/workload-credentials-provider-token
+    scripts/bootstrap-controller.sh
     roles/worker/usr/lib/systemd/system/coolify-worker-authorized-keys.service
     scripts/build.sh
     scripts/build-disk.sh
@@ -38,6 +49,12 @@ required_files=(
     tests/fixtures/aws
     tests/fixtures/bootc
     tests/fixtures/coldsnap
+    tests/fixtures/controller-asm-exec
+    tests/fixtures/controller-bootstrap-probe
+    tests/fixtures/controller-curl
+    tests/fixtures/controller-docker
+    tests/fixtures/controller-openssl
+    tests/fixtures/controller-restorecon
     tests/test-ami-import.sh
     image/image-builder.env
     tofu/modules/ami-import-validation/main.tf
@@ -76,6 +93,23 @@ grep -Fq 'WantedBy=cloud-init.target' roles/worker/usr/lib/systemd/system/coolif
 grep -Fq 'enable bootc-fetch-apply-updates.timer' roles/common/usr/lib/systemd/system-preset/80-coolify-aws.preset
 grep -Fq 'OnCalendar=*-*-* 11:00:00 UTC' roles/common/usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-coolify-aws.conf
 grep -Fq 'install -d -m 0755 /nix' Containerfile
+grep -Fq 'WCP_VERSION=3.1.1' Containerfile
+grep -Fq 'WCP_SOURCE_SHA256=71019369b95c028e09f6b6ed65cc0237b8ba8a4b86a8e5bce4c31f518f8c698e' Containerfile
+grep -Fq 'ASM_EXEC_COMMIT=957cf377ea1dffccf1f8a54ded2be8666b6db41c' Containerfile
+grep -Fq 'ASM_EXEC_LICENSE_SHA256=09e8a9bcec8067104652c168685ab0931e7868f9c8284b66f5ae6edae5f1130b' Containerfile
+grep -Fq "semanage fcontext -a -t container_file_t '/data/coolify(/.*)?'" Containerfile
+grep -Fq 'EnvironmentFile=-/etc/coolify-controller/runtime-secrets.env' roles/controller/usr/lib/systemd/system/coolify-controller-bootstrap.service
+grep -Fq 'After=aws-workload-credentials-provider-token.service network-online.target' roles/controller/usr/lib/systemd/system/aws-workload-credentials-provider-sm.service
+grep -Fq 'http://127.0.0.1:2773/ping' roles/controller/usr/lib/systemd/system/aws-workload-credentials-provider-sm.service
+grep -Fq 'AWS_TOKEN=file:///run/awssmatoken' roles/controller/usr/lib/systemd/system/aws-workload-credentials-provider-sm.service
+# This is a literal shell expression in the implementation under test.
+# shellcheck disable=SC2016
+grep -Fq 'mount --bind "${source_path}" "${target_path}"' roles/controller/usr/libexec/coolify-aws/prepare-controller-storage
+grep -Fq '{{resolve:secretsmanager:' roles/controller/etc/coolify-controller/runtime-secrets.env.example
+if rg -n '=(plaintext|password|secret)$' roles/controller/etc/coolify-controller; then
+    echo "controller configuration must contain references, never secret values" >&2
+    exit 1
+fi
 grep -Fxq 'SELINUX=enforcing' roles/common/etc/selinux/config
 grep -Fxq 'SELINUXTYPE=targeted' roles/common/etc/selinux/config
 if rg -n 'nix\.mount|nix-storage|/var/lib/nix' roles Containerfile; then

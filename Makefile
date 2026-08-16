@@ -21,6 +21,7 @@ lint:
 test:
 	./tests/test-image.sh
 	./tests/test-ami-import.sh
+	./tests/test-controller.sh
 	./tests/test-worker.sh
 
 validate: lint test

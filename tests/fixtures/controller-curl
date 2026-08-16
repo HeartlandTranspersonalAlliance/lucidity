@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+output=
+url=
+while (($#)); do
+    case "$1" in
+        --output|-o)
+            output=$2
+            shift 2
+            ;;
+        --fail|--location|--silent|--show-error|-f|-L|-s|-S)
+            shift
+            ;;
+        *)
+            url=$1
+            shift
+            ;;
+    esac
+done
+
+[[ -n ${output} && -n ${url} ]]
+name=${url##*/}
+case "${name}" in
+    .env.production)
+        printf '%s\n' \
+            'APP_ID=' \
+            'APP_KEY=' \
+            'DB_PASSWORD=' \
+            'REDIS_PASSWORD=' \
+            'PUSHER_APP_ID=' \
+            'PUSHER_APP_KEY=' \
+            'PUSHER_APP_SECRET=' >"${output}"
+        ;;
+    docker-compose.yml|docker-compose.prod.yml)
+        printf 'services: {}\n' >"${output}"
+        ;;
+    upgrade.sh|upgrade-postgres.sh)
+        printf '#!/usr/bin/env bash\nexit 0\n' >"${output}"
+        ;;
+    *)
+        echo "unexpected controller fixture URL: ${url}" >&2
+        exit 2
+        ;;
+esac
+
+printf '%s\n' "${name}" >>"${CONTROLLER_TEST_STATE}/downloads"

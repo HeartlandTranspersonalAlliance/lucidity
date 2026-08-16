@@ -36,4 +36,27 @@ esac
     sshd -t
 '
 
+if [[ ${role} == controller ]]; then
+    "${engine}" run --rm --entrypoint /bin/bash "${image}" -Eeuo pipefail -c '
+        test -x /usr/bin/asm-exec
+        test -x /usr/libexec/coolify-aws/aws-workload-credentials-provider
+        test -x /usr/libexec/coolify-aws/bootstrap-controller
+        test -s /usr/share/licenses/asm-exec/LICENSE
+        test -s /usr/share/licenses/aws-workload-credentials-provider/LICENSE
+        test -s /usr/share/licenses/aws-workload-credentials-provider/NOTICE
+        systemctl is-enabled --quiet aws-workload-credentials-provider-token.service
+        systemctl is-enabled --quiet aws-workload-credentials-provider-sm.service
+        systemctl is-enabled --quiet coolify-controller-storage.service
+        systemctl is-enabled --quiet coolify-controller-bootstrap.service
+        systemd-analyze verify \
+            /usr/lib/systemd/system/aws-workload-credentials-provider-token.service \
+            /usr/lib/systemd/system/aws-workload-credentials-provider-sm.service \
+            /usr/lib/systemd/system/coolify-controller-storage.service \
+            /usr/lib/systemd/system/coolify-controller-bootstrap.service
+        semanage fcontext --list | grep -E "^/data/coolify\(/\.\*\)\?.*container_file_t" >/dev/null
+        grep -Fq "EnvironmentFile=-/etc/coolify-controller/runtime-secrets.env" \
+            /usr/lib/systemd/system/coolify-controller-bootstrap.service
+    '
+fi
+
 echo "image validation passed: ${image}"

@@ -1,6 +1,6 @@
 # Coolify bootc appliance for AWS
 
-This repository builds an image-mode Linux appliance for a small Coolify deployment on EC2. The implemented worker is an AlmaLinux 10 bootc host with Docker Engine, Compose, SSH, cloud-init, SELinux policy, and persistent Docker storage. A controller image foundation now exists, but its Coolify bootstrap is still planned.
+This repository builds an image-mode Linux appliance for a small Coolify deployment on EC2. The worker is an AlmaLinux 10 bootc host with Docker Engine, Compose, SSH, cloud-init, SELinux policy, and persistent Docker storage. The controller image adds persistent Coolify storage and an idempotent first-boot bootstrap; its complete VM and EC2 lifecycle still needs validation.
 
 > [!WARNING]
 > AlmaLinux's bootc images are experimental upstream. Running Coolify on a custom bootc appliance is also not an officially documented Coolify deployment model. Treat the current repository as development work until boot, update, rollback, persistence, and Coolify integration have been exercised on real EC2 instances.
@@ -25,7 +25,7 @@ Responsibility is deliberately split:
 |---|---|---|
 | Kernel, Docker, SSH, systemd, host utilities | bootc image built from Git | bootc deployments |
 | Docker images, volumes, and application data | Docker/Coolify | `/var/lib/docker` |
-| Coolify database, configuration, and generated keys | Coolify controller (planned) | `/data/coolify` backed by persistent host storage |
+| Coolify database, configuration, and generated keys | Coolify controller | `/data/coolify` bound to `/var/lib/coolify` |
 | Credentials and private keys | Runtime/AWS secret mechanisms | Never the Git repository or OS image |
 
 Coolify itself will remain containerized and retain its own update lifecycle. An OS build must not contain live Coolify state or make a Coolify application upgrade necessary.
@@ -42,6 +42,10 @@ Implemented:
 - Docker data root fixed explicitly at `/var/lib/docker`;
 - key-only root SSH suitable for Coolify remote management;
 - idempotent runtime installation of a Coolify public key;
+- controller storage persisted under `/var/lib/coolify` and bind-mounted at Coolify's required `/data/coolify` path;
+- an idempotent controller bootstrap that preserves its environment and SSH identity across ordinary boots;
+- a narrowly scoped persistent `container_file_t` rule for the Coolify tree while SELinux remains enforcing;
+- checksum-pinned AWS `asm-exec` and AWS Workload Credentials Provider sources for runtime-only controller secret resolution;
 - cloud-init and lightweight repository/image checks;
 - pinned unified image-builder workflow for local QCOW2 and AWS disk artifacts;
 - containerized KVM/QEMU lifecycle validation with disposable NoCloud credentials;
@@ -64,8 +68,10 @@ writes the raw disk directly to EBS. A retained release pulls the immutable priv
 source commit, uses that real registry reference as the bootc source, runs the same EBS
 Direct and T3a/SSM gates, and preserves the validated AMI and encrypted snapshot. EC2 launch
 templates are defined but remain disabled until exact controller and worker AMI IDs are
-selected. The persistent controller bootstrap is still the blocker for launching the
-production pair. No untested AWS deployment code is presented as complete.
+selected. The controller bootstrap now builds and passes image-level validation, but its
+VM update/rollback lifecycle, retained controller AMI, and OpenTofu provisioning of the
+reference-only secret environment remain blockers for launching the production pair. No
+untested AWS deployment code is presented as complete.
 
 Merged-main run `31899706447` measured the 12 GiB EBS Direct upload at about 33
 seconds and reached a launchable AMI about 48 seconds after upload began. The complete
@@ -96,6 +102,7 @@ roles/controller/             controller-only host configuration
 roles/worker/                 worker-only systemd configuration
 tofu/                         AWS network, runtime identity, secrets, ECR, and OIDC bootstrap
 scripts/build.sh              local image build
+scripts/bootstrap-controller.sh idempotent Coolify initialization
 scripts/bootstrap-worker.sh   idempotent public-key provisioning
 scripts/validate-image.sh     bootc and package validation
 scripts/build-disk.sh         privileged qcow2/AMI artifact generation
@@ -167,6 +174,7 @@ make lint
 make test
 make build-controller
 make build-worker
+make validate-controller
 make validate
 nix develop --command make tofu-check
 ```
@@ -253,7 +261,16 @@ The worker also accepts an EC2 administrator key in the local VM test harness. A
 
 `/var/lib/docker` is conventional mutable host storage and remains outside bootc's immutable `/usr` deployment. Docker's data root is explicit in `daemon.json`, the standard `container-selinux` and targeted policy packages are installed, and `/etc/selinux/config` requires enforcing mode. The booted-VM test rejects anything other than `Enforcing`.
 
-Coolify officially lists AlmaLinux among its supported Red Hat-family hosts, but its current production Compose file uses `/data/coolify` bind mounts without SELinux relabel flags. The controller bootstrap must add a persistent, narrowly scoped `container_file_t` file-context rule for the required `/data/coolify` tree and run `restorecon` before starting Coolify. An end-to-end test must reject AVC denials; disabling or weakening SELinux is not an accepted workaround.
+Coolify officially lists AlmaLinux among its supported Red Hat-family hosts, but its current production Compose file uses `/data/coolify` bind mounts without SELinux relabel flags. The controller image adds a persistent, narrowly scoped `container_file_t` file-context rule for the required `/data/coolify` tree, and the bootstrap runs `restorecon` before starting Coolify. An end-to-end test must still reject AVC denials; disabling or weakening SELinux is not an accepted workaround.
+
+The controller implements that boundary with a systemd-managed bind mount from
+`/var/lib/coolify` to `/data/coolify`. Its bootstrap downloads the official Compose,
+production override, environment template, and upgrade scripts only when absent. It
+fills empty initial secret fields, creates the controller SSH identity and attachable
+Docker network only when needed, reapplies the SELinux label, and runs Compose without
+overwriting a working installation. Lightweight tests prove a second run preserves the
+environment and SSH identity; a booted-controller update and rollback test is still
+required before this persistence path is considered production-proven.
 
 The local lifecycle test establishes the intended persistence boundary by:
 
@@ -316,7 +333,7 @@ Networking spans three Availability Zones by default and provides public and iso
 
 OpenTofu is the infrastructure-as-code CLI for this project. Configuration remains Terraform-compatible where practical so the AWS provider and reusable modules retain broad ecosystem compatibility. Terraform is reserved for a documented incompatibility that cannot be resolved with OpenTofu. CI-only values belong in GitHub Secrets, AWS-hosted runtime secrets belong in AWS Secrets Manager, and provider-neutral or self-hosted secrets may use OpenBao.
 
-The AWS stack creates one empty bundled controller-runtime secret, a dedicated rotating KMS key, and a controller EC2 instance profile scoped to that secret and key. OpenTofu never receives the secret value. The future EC2 bootstrap must resolve individual JSON keys at runtime through the repository-mandated `asm-exec` dynamic-reference flow. An approved `asm-exec` source is not yet present, so secret consumption is not claimed as implemented.
+The AWS stack creates one empty bundled controller-runtime secret, a dedicated rotating KMS key, and a controller EC2 instance profile scoped to that secret and key. OpenTofu never receives the secret value. The controller image builds AWS Workload Credentials Provider 3.1.1 from checksum-pinned source and installs AWS's checksum-pinned `asm-exec`. When `/etc/coolify-controller/runtime-secrets.env` exists, the bootstrap wrapper requires all seven Coolify secret settings to be dynamic references and rejects plaintext. The example file documents the expected JSON keys. Without that file the controller generates local values, which is intended for local validation only; production EC2 provisioning must install the reference-only file before the bootstrap service runs.
 
 OpenTofu cannot safely replace a secret store because a managed secret value would enter its state. Running OpenBao only for this deployment would add more state, backup work, and availability risk than the single AWS secret warrants, so Secrets Manager remains the initial choice. OpenBao can replace it later if provider independence becomes an operational requirement.
 

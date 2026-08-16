@@ -72,8 +72,12 @@ cross-role repository access. Runtime secret consumers must use the output patte
 ```
 
 Resolve that reference with the approved `asm-exec` flow on the instance. This
-repository does not yet contain an approved `asm-exec` package or bootstrap unit, so
-runtime consumption remains an explicit blocker for the EC2 milestone.
+repository now builds the AWS Workload Credentials Provider from checksum-pinned source,
+installs a checksum-pinned AWS `asm-exec`, and includes an idempotent controller bootstrap
+unit. The bootstrap accepts only dynamic references in
+`/etc/coolify-controller/runtime-secrets.env`; see the adjacent `.example` file for the
+seven required JSON keys. Wiring that reference-only file into the future EC2 instance
+provisioning remains an explicit blocker. Do not put resolved values in user data.
 
 At the pricing reviewed during implementation, one secret plus one customer-managed
 KMS key costs about USD 1.40 per month before negligible API request charges. AWS KMS
@@ -191,9 +195,11 @@ public address, or user data is embedded. Consumers must pin the numeric templat
 version from `ec2_launch_template_latest_versions`; changing a template does not roll
 running instances automatically.
 
-The controller bootstrap is still incomplete, so do not enable these templates or
-launch production EC2 instances yet. Defining this boundary now makes AMI selection
-reviewable without pretending the controller milestone is complete.
+The controller bootstrap is implemented and image-validated, but its VM lifecycle,
+retained controller AMI, and reference-only EC2 provisioning are not complete. Do not
+enable these templates or launch production EC2 instances yet. Defining this boundary
+now makes AMI selection reviewable without pretending the deployment milestone is
+complete.
 
 ## ECR candidate publication
 

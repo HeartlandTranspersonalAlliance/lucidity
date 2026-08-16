@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+[[ ${1:-} == -- ]] && shift
+for variable in \
+    COOLIFY_APP_ID \
+    COOLIFY_APP_KEY \
+    COOLIFY_DB_PASSWORD \
+    COOLIFY_REDIS_PASSWORD \
+    COOLIFY_PUSHER_APP_ID \
+    COOLIFY_PUSHER_APP_KEY \
+    COOLIFY_PUSHER_APP_SECRET; do
+    printf -v "${variable}" 'resolved-%s' "${variable}"
+    export "${variable}"
+done
+exec "$@"
