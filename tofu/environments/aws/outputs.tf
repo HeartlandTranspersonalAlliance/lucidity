@@ -180,14 +180,17 @@ output "ami_test_subnet_id" {
   ] : null
 }
 
-output "ami_test_security_group_id" {
-  description = "Application security group used by the disposable SSM AMI boot test."
-  value       = var.enable_ami_launch_validation && var.enable_network ? module.network[0].security_group_ids.application : null
+output "ami_test_security_group_ids" {
+  description = "Role-specific security group IDs used by disposable SSM AMI boot tests."
+  value = var.enable_ami_launch_validation && var.enable_network ? {
+    controller = module.network[0].security_group_ids.controller
+    worker     = module.network[0].security_group_ids.application
+  } : {}
 }
 
-output "ami_test_instance_profile_name" {
-  description = "SSM-enabled worker profile used by the disposable AMI boot test."
-  value       = var.enable_ami_launch_validation && var.enable_instance_management ? module.instance_management[0].instance_profile_names.worker : null
+output "ami_test_instance_profile_names" {
+  description = "Role-specific SSM-enabled instance profiles used by disposable AMI boot tests."
+  value       = var.enable_ami_launch_validation && var.enable_instance_management ? module.instance_management[0].instance_profile_names : {}
 }
 
 output "ami_test_instance_type" {

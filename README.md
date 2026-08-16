@@ -56,22 +56,23 @@ Implemented:
 - a three-AZ VPC with public/private subnets, optional NAT Gateways, tiered security groups, and VPC Flow Logs;
 - an empty controller runtime secret, dedicated rotating KMS key, and least-privilege EC2 instance profile, with no secret value in OpenTofu state.
 - a dedicated AMI snapshot KMS key and EBS Direct API upload path for disposable validation and retained releases.
-- a manually gated retained worker-AMI release mode and hardened launch templates that require explicit self-owned AMI IDs.
-- immutable semantic releases that bind tested ECR digests, SPDX SBOMs, and the retained worker AMI in one checksummed manifest.
+- manually gated retained controller and worker AMI release gates, plus hardened launch templates that require explicit self-owned AMI IDs.
+- immutable semantic releases that bind both tested ECR digests, SPDX SBOMs, and role-specific retained AMIs in one checksummed manifest.
 
 The upstream base currently makes `bootc` and `rpm-ostree` depend on Podman, so Podman remains installed. It is a bootc host dependency/tool, not the production application runtime; Coolify workloads use Docker Engine.
 
 The disposable AWS snapshot-to-AMI registration and T3a boot gates have passed on
 merged `main`. The guest was validated through SSM without a key pair or inbound
 SSH, and cleanup removed the instance, AMI, and snapshot. The delivery transport
-writes the raw disk directly to EBS. A retained release pulls the immutable private ECR candidate for the full
-source commit, uses that real registry reference as the bootc source, runs the same EBS
-Direct and T3a/SSM gates, and preserves the validated AMI and encrypted snapshot. EC2 launch
+writes the raw disk directly to EBS. A retained release pulls each role's immutable private ECR candidate for the full
+source commit, uses those real registry references as the bootc sources, runs parallel EBS
+Direct and T3a/SSM gates, and preserves both validated AMIs and encrypted snapshots. EC2 launch
 templates are defined but remain disabled until exact controller and worker AMI IDs are
 selected. The controller bootstrap now passes the full hosted KVM update/rollback
 lifecycle with its persistent environment, SSH identity, Compose service set, bind mount,
-and SELinux label intact. A retained controller AMI and OpenTofu provisioning of the
-reference-only secret environment remain blockers for launching the production pair. No
+and SELinux label intact. The controller AMI gate also waits for that bootstrap before
+retaining the image. OpenTofu provisioning of the reference-only secret environment remains
+the blocker for launching the production pair. No
 untested AWS deployment code is presented as complete.
 
 Merged-main run `31899706447` measured the 12 GiB EBS Direct upload at about 33
@@ -143,7 +144,7 @@ the mutable `stable` channel.
 
 ## Immutable releases and SBOMs
 
-`VERSION` seeds the first release at `0.1.0`. Manually dispatch **Release bootc AMI**
+`VERSION` seeds the first release at `0.1.0`. Manually dispatch **Release bootc appliance**
 from `main` after its required checks pass. The default `auto` bump applies conventional
 commit intent since the previous release: a breaking-change marker selects major,
 `feat:` selects minor, and other changes select patch. The dispatch also offers explicit
@@ -153,11 +154,12 @@ The release workflow reuses a successful publication for the exact source commit
 dispatches one and waits for it. It never rebuilds during promotion. Two parallel jobs
 copy each tested `sha-<commit>` manifest to its immutable `vX.Y.Z` ECR tag, scan the
 exact `repository@sha256:digest` with pinned Syft, produce SPDX JSON, and attest each
-SBOM against that digest. The worker digest and uncompressed SBOM SHA-256 are passed to
-the retained EBS Direct AMI gate, whose installed bootc deployment tracks that immutable
-version tag rather than a mutable channel. After boot validation, the workflow creates a manifest
-binding the version, source commit, controller and worker OCI digests, SBOM hashes,
-AMI ID, encrypted snapshot ID, and workflow evidence.
+SBOM against that digest. Each role's digest and uncompressed SBOM SHA-256 are passed
+to parallel retained EBS Direct AMI gates, whose installed bootc deployments track
+immutable version tags rather than a mutable channel. After both boot validations, the
+workflow creates a schema-v2 manifest binding the version, source commit, controller
+and worker OCI digests, SBOM hashes, role-specific AMI and encrypted snapshot IDs, and
+workflow evidence.
 
 The GitHub release is created as a draft with the manifest, compressed SBOMs, and their
 checksums attached before it is published. Repository release immutability then protects

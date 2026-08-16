@@ -106,8 +106,10 @@ configure these non-secret GitHub repository variables from the OpenTofu outputs
 | `AWS_AMI_IMPORT_ROLE_ARN` | `github_ami_validation_role_arn` |
 | `AWS_AMI_SNAPSHOT_KMS_KEY_ARN` | `ami_snapshot_kms_key_arn` |
 | `AWS_AMI_TEST_SUBNET_ID` | `ami_test_subnet_id` |
-| `AWS_AMI_TEST_SECURITY_GROUP_ID` | `ami_test_security_group_id` |
-| `AWS_AMI_TEST_INSTANCE_PROFILE_NAME` | `ami_test_instance_profile_name` |
+| `AWS_AMI_TEST_CONTROLLER_SECURITY_GROUP_ID` | `ami_test_security_group_ids["controller"]` |
+| `AWS_AMI_TEST_WORKER_SECURITY_GROUP_ID` | `ami_test_security_group_ids["worker"]` |
+| `AWS_AMI_TEST_CONTROLLER_INSTANCE_PROFILE_NAME` | `ami_test_instance_profile_names["controller"]` |
+| `AWS_AMI_TEST_WORKER_INSTANCE_PROFILE_NAME` | `ami_test_instance_profile_names["worker"]` |
 
 Then manually run **Validate AMI compatibility** with `run_aws_validation` enabled.
 The workflow resolves pinned `coldsnap 0.10.0` from `flake.lock` and
@@ -120,13 +122,14 @@ snapshot. Merged-main run `31899706447` proved the optimized path on 2026-08-15:
 and cleanup step took 4 minutes 54 seconds. The earlier VM Import phase alone took
 about 14 minutes.
 
-For an ad hoc production worker candidate, choose `ami_lifecycle=retained` and enable
-both AWS validation and the launch gate. Normal semantic releases should use
-**Release bootc AMI**, which supplies the immutable version, worker OCI digest, and SPDX
-SBOM hash to the same retained AMI gate and publishes their AMI and snapshot IDs in the
-immutable GitHub release manifest.
-First ensure **Publish bootc images** has published the current `main` worker candidate
-as `sha-<full-commit>`. The AMI workflow pulls that immutable private ECR reference and
+For an ad hoc production candidate, select its `ami_role`, choose
+`ami_lifecycle=retained`, and enable both AWS validation and the launch gate. Normal
+semantic releases should use **Release bootc appliance**, which supplies the immutable
+version, role-specific OCI digests, and SPDX SBOM hashes to parallel retained AMI gates
+and publishes both AMI and snapshot IDs in the immutable schema-v2 GitHub release
+manifest.
+First ensure **Publish bootc images** has published the current `main` controller and
+worker candidates as `sha-<full-commit>`. The AMI workflow pulls the selected role's immutable private ECR reference and
 uses it as the disk's bootc source, so the installed host tracks a real production
 registry rather than the disposable `localhost` reference. It names and tags the AMI
 with the same commit SHA, launches a disposable T3a guest through SSM, and marks the
@@ -136,6 +139,8 @@ retains the encrypted snapshot and AMI, and prints the exact AMI ID for explicit
 OpenTofu selection. Rerunning the same commit reuses the already validated immutable
 release instead of creating a duplicate. Registration proves AWS accepts the disk and
 AMI metadata, while the separate disposable T3a gate proves boot and guest behavior.
+For the controller role, the SSM gate waits for storage preparation and the controller
+bootstrap marker before the retained image can be marked validated.
 
 ### Disposable bootc switch benchmark
 
@@ -162,7 +167,7 @@ CentOS bootc base does not provide the repository's keyless management contract.
 To repeat that boot gate, temporarily set `enable_network`,
 `enable_instance_management`, and `enable_ami_launch_validation` to `true`, keep
 `enable_nat_gateways` and `enable_runtime_secrets` false, apply the reviewed plan,
-and configure the three `AWS_AMI_TEST_*` variables above. Manually dispatch the
+and configure the role-specific `AWS_AMI_TEST_*` variables above. Manually dispatch the
 workflow with both `run_aws_validation` and `run_aws_launch` enabled. The workflow launches one
 `t3a.small` in standard CPU-credit mode with no key pair, IMDSv2 required, and the
 application security group. SSM Run Command verifies AMD64, SELinux enforcing,
@@ -195,8 +200,9 @@ public address, or user data is embedded. Consumers must pin the numeric templat
 version from `ec2_launch_template_latest_versions`; changing a template does not roll
 running instances automatically.
 
-The controller bootstrap is implemented and image-validated, but its VM lifecycle,
-retained controller AMI, and reference-only EC2 provisioning are not complete. Do not
+The controller bootstrap is implemented and image-validated, and the release workflow
+now creates and boot-validates its retained AMI. Reference-only EC2 provisioning is not
+complete. Do not
 enable these templates or launch production EC2 instances yet. Defining this boundary
 now makes AMI selection reviewable without pretending the deployment milestone is
 complete.

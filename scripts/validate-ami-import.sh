@@ -45,7 +45,7 @@ if [[ -n ${release_version} || -n ${source_image_digest} || -n ${sbom_sha256} ]]
     release_metadata=true
 fi
 if [[ ${ami_lifecycle} == retained ]]; then
-    [[ ${launch_validation} == true ]] || { echo "retained AMIs require the disposable EC2 launch gate" >&2; exit 2; }
+    [[ ${launch_validation} == true ]] || { echo "retained AMIs require the EC2 launch gate" >&2; exit 2; }
     [[ ${source_revision} =~ ^[0-9a-f]{40}$ ]] || { echo "AMI_SOURCE_REVISION must be a full lowercase Git commit SHA for retained AMIs" >&2; exit 2; }
     if [[ ${release_metadata} == true ]]; then
         [[ ${expected_bootc_image_ref} =~ ^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[a-z0-9]+([._/-][a-z0-9]+)*:${release_version}$ ]] || {
@@ -501,6 +501,7 @@ if [[ ${launch_validation} == true ]]; then
 
     ssm_commands=$(jq -cn \
         --arg lifecycle "${ami_lifecycle}" \
+        --arg role "${ami_role}" \
         --arg expected_bootc_image_ref "${expected_bootc_image_ref}" \
         --arg switch_target_ref "${switch_target_ref}" \
         '{commands:[
@@ -528,10 +529,22 @@ if [[ ${launch_validation} == true ]]; then
                 "test \"$(jq -r '.credHelpers[]' /run/ostree/auth.json)\" = ecr-login",
                 "bootc upgrade --check"
             ]
+        else . end |
+        if $role == "controller" then
+            .commands += [
+                "if systemctl is-failed --quiet coolify-controller-bootstrap.service; then echo LUCIDITY_CONTROLLER_BOOTSTRAP_FAILED; systemctl --no-pager --full status coolify-controller-bootstrap.service; exit 1; fi",
+                "systemctl is-active --quiet coolify-controller-storage.service",
+                "systemctl is-active --quiet coolify-controller-bootstrap.service",
+                "mountpoint --quiet /data/coolify",
+                "test -e /data/coolify/.controller-bootstrap-complete",
+                "test -s /data/coolify/source/.env"
+            ]
         else . end')
     command_succeeded=false
     validation_attempts=1
-    [[ -n ${switch_target_ref} ]] && validation_attempts=90
+    if [[ -n ${switch_target_ref} || ${ami_role} == controller ]]; then
+        validation_attempts=90
+    fi
     for ((validation_attempt = 1; validation_attempt <= validation_attempts; validation_attempt++)); do
         command_response=$(aws ssm send-command \
             --region "${region}" \
@@ -546,7 +559,10 @@ if [[ ${launch_validation} == true ]]; then
             command_id=""
         fi
         if [[ -z ${command_id} ]]; then
-            [[ -n ${switch_target_ref} ]] || { echo "SSM did not return a command ID" >&2; exit 1; }
+            if [[ -z ${switch_target_ref} && ${ami_role} != controller ]]; then
+                echo "SSM did not return a command ID" >&2
+                exit 1
+            fi
             sleep 10
             continue
         fi
@@ -576,10 +592,15 @@ if [[ ${launch_validation} == true ]]; then
                 Pending|InProgress|Delayed) sleep 5 ;;
                 *)
                     command_finished=true
-                    if [[ -z ${switch_target_ref} ]] || grep -Fq LUCIDITY_SWITCH_TARGET_BOOTED <<< "$(jq -r '.StandardOutputContent' <<< "${invocation}")"; then
+                    command_output=$(jq -r '.StandardOutputContent' <<< "${invocation}")
+                    if grep -Eq 'LUCIDITY_SWITCH_TARGET_BOOTED|LUCIDITY_CONTROLLER_BOOTSTRAP_FAILED' <<< "${command_output}" ||
+                        [[ -z ${switch_target_ref} && ${ami_role} != controller ]]; then
                         jq -r '.StandardOutputContent, .StandardErrorContent' <<< "${invocation}" >&2
                         echo "SSM guest validation failed with status ${command_status}" >&2
                         exit 1
+                    fi
+                    if ((validation_attempt == validation_attempts)); then
+                        jq -r '.StandardOutputContent, .StandardErrorContent' <<< "${invocation}" >&2
                     fi
                     break
                     ;;

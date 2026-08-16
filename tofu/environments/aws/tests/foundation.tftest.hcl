@@ -185,8 +185,8 @@ run "default_registry_and_oidc_contract" {
     condition = (
       output.ami_launch_validation_enabled == false &&
       output.ami_test_subnet_id == null &&
-      output.ami_test_security_group_id == null &&
-      output.ami_test_instance_profile_name == null
+      length(output.ami_test_security_group_ids) == 0 &&
+      length(output.ami_test_instance_profile_names) == 0
     )
     error_message = "Disposable EC2 launch permissions and identifiers must remain disabled during the initial image-pipeline bootstrap."
   }
@@ -283,11 +283,13 @@ run "ami_launch_validation_contract" {
     condition = (
       output.ami_launch_validation_enabled == true &&
       output.ami_test_instance_type == "t3a.small" &&
-      output.ami_test_instance_profile_name == "lucidity-production-worker-profile" &&
+      output.ami_test_instance_profile_names.controller == "lucidity-production-controller-profile" &&
+      output.ami_test_instance_profile_names.worker == "lucidity-production-worker-profile" &&
       output.ami_test_subnet_id == "subnet-0123456789abcdef0" &&
-      output.ami_test_security_group_id == "sg-0123456789abcdef0"
+      output.ami_test_security_group_ids.controller == "sg-0123456789abcdef0" &&
+      output.ami_test_security_group_ids.worker == "sg-0123456789abcdef0"
     )
-    error_message = "The disposable AMI launch gate must expose only the selected t3a.small, public subnet, application security group, and SSM worker profile."
+    error_message = "The disposable AMI launch gate must expose only the selected t3a.small, public subnet, and role-specific security groups and SSM profiles."
   }
 }
 
