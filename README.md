@@ -71,8 +71,9 @@ templates are defined but remain disabled until exact controller and worker AMI 
 selected. The controller bootstrap now passes the full hosted KVM update/rollback
 lifecycle with its persistent environment, SSH identity, Compose service set, bind mount,
 and SELinux label intact. The controller AMI gate also waits for that bootstrap before
-retaining the image. OpenTofu provisioning of the reference-only secret environment remains
-the blocker for launching the production pair. No
+retaining the image. Its launch template now provisions a root-only environment file
+containing only Secrets Manager references. Actual EC2 instances and networking
+attachments remain the next deployment milestone. No
 untested AWS deployment code is presented as complete.
 
 Merged-main run `31899706447` measured the 12 GiB EBS Direct upload at about 33
@@ -118,7 +119,7 @@ proposal.md                   full implementation plan and milestones
 
 ## Remote-first validation
 
-GitHub Actions is the primary build and test environment. Every pull request runs the lightweight and infrastructure checks below. Role-impacting pull requests run only the affected controller or worker lifecycle, while every push to `main` and every manual run execute both:
+GitHub Actions is the primary build and test environment. Every pull request runs the lightweight and infrastructure checks below. Role-impacting pull requests build and boot each affected controller or worker once. Merge-queue candidates, pushes to `main`, and manual runs execute the complete lifecycle for both roles:
 
 1. OpenTofu formatting, validation, and mocked infrastructure tests in a pinned Nix environment;
 2. ShellCheck, static behavior tests, and actionlint;
@@ -126,12 +127,12 @@ GitHub Actions is the primary build and test environment. Every pull request run
 4. controller image assertions for the native `/nix` mountpoint and enforcing SELinux configuration;
 5. a privileged worker QCOW2 conversion inside the pinned CI tooling container;
 6. QCOW2 consistency checks;
-7. UEFI controller and worker guest boots plus cloud-init, service, and SSH checks;
-8. registry switches, two-version bootc updates, and rollbacks through disposable guest-reachable registries, with the same persistent state verified after each reboot.
+7. UEFI controller and worker guest boots plus cloud-init, service, and SSH checks on every affected pull request;
+8. on integration runs, registry switches, two-version bootc updates, and rollbacks through disposable guest-reachable registries, with the same persistent state verified after each reboot.
 
-The OpenTofu job installs Determinate Nix through a commit-pinned action. Image jobs install no packages onto the hosted runner. Lifecycle jobs use host `sudo` only for GitHub's documented udev rule granting access to the runner's existing `/dev/kvm` device. AMI jobs use narrowly scoped root Podman commands because osbuild consumes the bootc source through shared root container storage. A repository test rejects other workflow uses of `sudo`. KVM accelerates the complete VM lifecycle without removing any registry-switch, update, or rollback reboot checks, while QEMU TCG remains the automatic fallback. Build artifacts stay within the ephemeral job and are not uploaded, avoiding persistent storage cost and accidental publication of disposable SSH identities.
+The OpenTofu job installs Determinate Nix through a commit-pinned action. Image jobs install no packages onto the hosted runner. Lifecycle jobs use host `sudo` only for GitHub's documented udev rule granting access to the runner's existing `/dev/kvm` device. AMI jobs use narrowly scoped root Podman commands because osbuild consumes the bootc source through shared root container storage. A repository test rejects other workflow uses of `sudo`. KVM accelerates every VM test, while QEMU TCG remains the automatic fallback. Build artifacts stay within the ephemeral job and are not uploaded, avoiding persistent storage cost and accidental publication of disposable SSH identities.
 
-For pull requests, a lightweight `ubuntu-slim` job classifies changed paths before allocating the full VM runners. Documentation, OpenTofu, and role-exclusive changes skip unrelated image lifecycles; unknown or shared paths default to both. Pushes to `main` and manual runs always execute both lifecycles. Validation consumes role-scoped GHCR caches read-only, while trusted publication runs refresh those caches with the minimum required token permissions.
+For pull requests, a lightweight `ubuntu-slim` job classifies changed paths before allocating the full VM runners. Documentation, OpenTofu, and role-exclusive changes skip unrelated image roles; unknown, shared, workflow, or classifier changes default to both. Each selected role still builds a QCOW2 and passes a real accelerated guest boot. The slower update-image build plus switch, update, rollback, and three additional reboots run for both roles on `merge_group`, `main`, and manual events. Enable GitHub's merge queue to make that complete lifecycle a pre-merge integration gate; without it, the same coverage runs immediately after merge on `main`. Validation consumes role-scoped GHCR caches read-only, while trusted publication runs refresh those caches with the minimum required token permissions.
 
 Local commands remain available for development and diagnosis, but a successful local run is not a substitute for the required GitHub checks.
 
@@ -364,7 +365,7 @@ Networking spans three Availability Zones by default and provides public and iso
 
 OpenTofu is the infrastructure-as-code CLI for this project. Configuration remains Terraform-compatible where practical so the AWS provider and reusable modules retain broad ecosystem compatibility. Terraform is reserved for a documented incompatibility that cannot be resolved with OpenTofu. CI-only values belong in GitHub Secrets, AWS-hosted runtime secrets belong in AWS Secrets Manager, and provider-neutral or self-hosted secrets may use OpenBao.
 
-The AWS stack creates one empty bundled controller-runtime secret, a dedicated rotating KMS key, and a controller EC2 instance profile scoped to that secret and key. OpenTofu never receives the secret value. The controller image builds AWS Workload Credentials Provider 3.1.1 from checksum-pinned source and installs AWS's checksum-pinned `asm-exec`. When `/etc/coolify-controller/runtime-secrets.env` exists, the bootstrap wrapper requires all seven Coolify secret settings to be dynamic references and rejects plaintext. The example file documents the expected JSON keys. Without that file the controller generates local values, which is intended for local validation only; production EC2 provisioning must install the reference-only file before the bootstrap service runs.
+The AWS stack creates one empty bundled controller-runtime secret, a dedicated rotating KMS key, and a controller EC2 instance profile scoped to that secret and key. OpenTofu never receives the secret value. The controller image builds AWS Workload Credentials Provider 3.1.1 from checksum-pinned source and installs AWS's checksum-pinned `asm-exec`. The controller launch template's cloud-init data writes `/etc/coolify-controller/runtime-secrets.env` with seven dynamic references and mode `0600` before `cloud-final.service` completes; it contains no resolved secret. The bootstrap wrapper rejects plaintext and resolves those references only at runtime through the instance role. Populate all seven JSON values through an out-of-band operator workflow before launching production EC2.
 
 OpenTofu cannot safely replace a secret store because a managed secret value would enter its state. Running OpenBao only for this deployment would add more state, backup work, and availability risk than the single AWS secret warrants, so Secrets Manager remains the initial choice. OpenBao can replace it later if provider independence becomes an operational requirement.
 

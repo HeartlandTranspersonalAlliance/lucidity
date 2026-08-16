@@ -2,6 +2,9 @@ name: Validate
 
 on:
   pull_request:
+  merge_group:
+    types:
+      - checks_requested
   push:
     branches:
       - main
@@ -15,6 +18,7 @@ permissions:
   contents: read
 
 env:
+  FULL_LIFECYCLE: ${{ github.event_name != 'pull_request' }}
   IMAGE: localhost/coolify-bootc-worker:lifecycle-v1
   UPDATE_IMAGE: localhost/coolify-bootc-worker:lifecycle-v2
   CONTROLLER_IMAGE: localhost/coolify-bootc-controller:lifecycle-v1
@@ -149,6 +153,7 @@ jobs:
           make validate-disk-controller
 
       - name: Build controller update image and publish lifecycle images locally
+        if: env.FULL_LIFECYCLE == 'true'
         env:
           CONTAINER_ENGINE: docker
           IMAGE_NAME: ${{ env.CONTROLLER_UPDATE_IMAGE }}
@@ -157,7 +162,7 @@ jobs:
           ./scripts/build.sh controller
           make vm-registry-start-controller
 
-      - name: Boot controller and validate switch, update, and rollback persistence
+      - name: Boot and validate controller guest
         env:
           CONTAINER_ENGINE: docker
           VM_TOOL_IMAGE: ${{ env.CI_TOOLS_IMAGE }}
@@ -177,7 +182,9 @@ jobs:
           make vm-init-controller
           make vm-start-controller
           make vm-validate-controller
-          make vm-update-rollback-controller
+          if [[ ${FULL_LIFECYCLE} == true ]]; then
+            make vm-update-rollback-controller
+          fi
 
       - name: Remove GHCR login and BuildKit builder
         if: always()
@@ -246,6 +253,7 @@ jobs:
           make validate-disk-worker
 
       - name: Build update image and publish lifecycle images locally
+        if: env.FULL_LIFECYCLE == 'true'
         env:
           CONTAINER_ENGINE: docker
           IMAGE_NAME: ${{ env.UPDATE_IMAGE }}
@@ -254,7 +262,7 @@ jobs:
           ./scripts/build.sh worker
           make vm-registry-start-worker
 
-      - name: Boot worker and validate switch, update, and rollback persistence
+      - name: Boot and validate worker guest
         env:
           CONTAINER_ENGINE: docker
           VM_TOOL_IMAGE: ${{ env.CI_TOOLS_IMAGE }}
@@ -273,7 +281,9 @@ jobs:
           make vm-init-worker
           make vm-start-worker
           make vm-validate-worker
-          make vm-update-rollback-worker
+          if [[ ${FULL_LIFECYCLE} == true ]]; then
+            make vm-update-rollback-worker
+          fi
 
       - name: Remove GHCR login and BuildKit builder
         if: always()
