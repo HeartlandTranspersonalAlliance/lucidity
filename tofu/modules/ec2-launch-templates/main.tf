@@ -104,7 +104,7 @@ resource "aws_launch_template" "node" {
   tag_specifications {
     resource_type = "instance"
     tags = merge(local.common_tags, {
-      Name = "${var.project_name}-${var.environment}-${each.key}"
+      Name = var.node_names[each.key]
       Role = each.key
     })
   }
@@ -112,7 +112,7 @@ resource "aws_launch_template" "node" {
   tag_specifications {
     resource_type = "volume"
     tags = merge(local.common_tags, {
-      Name = "${var.project_name}-${var.environment}-${each.key}-root"
+      Name = "${var.node_names[each.key]}-root"
       Role = each.key
     })
   }

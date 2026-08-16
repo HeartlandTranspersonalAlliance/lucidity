@@ -56,7 +56,7 @@ Implemented:
 - a three-AZ VPC with public/private subnets, optional NAT Gateways, tiered security groups, and VPC Flow Logs;
 - an empty controller runtime secret, dedicated rotating KMS key, and least-privilege EC2 instance profile, with no secret value in OpenTofu state.
 - a dedicated AMI snapshot KMS key and EBS Direct API upload path for disposable validation and retained releases.
-- manually gated retained controller and worker AMI release gates, plus hardened launch templates that require explicit self-owned AMI IDs.
+- manually gated retained controller and worker AMI release gates, hardened launch templates that require explicit self-owned AMI IDs, and an explicitly enabled two-node deployment with stable Elastic IPs.
 - immutable semantic releases that bind both tested ECR digests, SPDX SBOMs, and role-specific retained AMIs in one checksummed manifest.
 
 The upstream base currently makes `bootc` and `rpm-ostree` depend on Podman, so Podman remains installed. It is a bootc host dependency/tool, not the production application runtime; Coolify workloads use Docker Engine.
@@ -67,14 +67,15 @@ SSH, and cleanup removed the instance, AMI, and snapshot. The delivery transport
 writes the raw disk directly to EBS. A retained release pulls each role's immutable private ECR candidate for the full
 source commit, uses those real registry references as the bootc sources, runs parallel EBS
 Direct and T3a/SSM gates, and preserves both validated AMIs and encrypted snapshots. EC2 launch
-templates are defined but remain disabled until exact controller and worker AMI IDs are
+templates and production instances are defined but remain disabled until exact controller and worker AMI IDs are
 selected. The controller bootstrap now passes the full hosted KVM update/rollback
 lifecycle with its persistent environment, SSH identity, Compose service set, bind mount,
 and SELinux label intact. The controller AMI gate also waits for that bootstrap before
 retaining the image. Its launch template now provisions a root-only environment file
-containing only Secrets Manager references. Actual EC2 instances and networking
-attachments remain the next deployment milestone. No
-untested AWS deployment code is presented as complete.
+containing only Secrets Manager references. The deployment module pins numeric launch
+template versions, creates both nodes, and associates stable Elastic IPs. The
+deployment plan is covered by mocked OpenTofu tests but remains production-unproven
+until a reviewed apply and the Milestone 10 live checks succeed.
 
 Merged-main run `31899706447` measured the 12 GiB EBS Direct upload at about 33
 seconds and reached a launchable AMI about 48 seconds after upload began. The complete
@@ -119,7 +120,7 @@ proposal.md                   full implementation plan and milestones
 
 ## Remote-first validation
 
-GitHub Actions is the primary build and test environment. Every pull request runs the lightweight and infrastructure checks below. Role-impacting pull requests build and boot each affected controller or worker once. Merge-queue candidates, pushes to `main`, and manual runs execute the complete lifecycle for both roles:
+GitHub Actions is the primary build and test environment. Every pull request runs the lightweight and infrastructure checks below. Role-impacting pull requests build and boot each affected controller or worker once. Merge-queue candidates and manual runs execute the complete lifecycle for both roles:
 
 1. OpenTofu formatting, validation, and mocked infrastructure tests in a pinned Nix environment;
 2. ShellCheck, static behavior tests, and actionlint;
@@ -132,7 +133,7 @@ GitHub Actions is the primary build and test environment. Every pull request run
 
 The OpenTofu job installs Determinate Nix through a commit-pinned action. Image jobs install no packages onto the hosted runner. Lifecycle jobs use host `sudo` only for GitHub's documented udev rule granting access to the runner's existing `/dev/kvm` device. AMI jobs use narrowly scoped root Podman commands because osbuild consumes the bootc source through shared root container storage. A repository test rejects other workflow uses of `sudo`. KVM accelerates every VM test, while QEMU TCG remains the automatic fallback. Build artifacts stay within the ephemeral job and are not uploaded, avoiding persistent storage cost and accidental publication of disposable SSH identities.
 
-For pull requests, a lightweight `ubuntu-slim` job classifies changed paths before allocating the full VM runners. Documentation, OpenTofu, and role-exclusive changes skip unrelated image roles; unknown, shared, workflow, or classifier changes default to both. Each selected role still builds a QCOW2 and passes a real accelerated guest boot. The slower update-image build plus switch, update, rollback, and three additional reboots run for both roles on `merge_group`, `main`, and manual events. The required merge queue serializes candidates and makes that complete lifecycle a pre-merge integration gate. Validation consumes role-scoped GHCR caches read-only, while trusted publication runs refresh those caches with the minimum required token permissions.
+For pull requests, a lightweight `ubuntu-slim` job classifies changed paths before allocating the full VM runners. Documentation, OpenTofu, and role-exclusive changes skip unrelated image roles; unknown, shared, workflow, or classifier changes default to both. Each selected role still builds a QCOW2 and passes a real accelerated guest boot. The slower update-image build plus switch, update, rollback, and three additional reboots run for both roles on `merge_group` and manual events. The required merge queue serializes candidates and makes that complete lifecycle a pre-merge integration gate. A second full run after the same candidate reaches `main` is intentionally omitted. Validation consumes role-scoped GHCR caches read-only, while trusted publication runs refresh those caches with the minimum required token permissions.
 
 Local commands remain available for development and diagnosis, but a successful local run is not a substitute for the required GitHub checks.
 
@@ -383,7 +384,7 @@ Those services can be added later only when a concrete operational requirement j
 
 AMD64 is preferred for the first deployment and maximum third-party image compatibility. ARM64/Graviton remains a future optimization when every required application image is multi-architecture. Production x86 emulation on ARM is not enabled implicitly.
 
-The AWS foundation is implemented under [`tofu/`](tofu/README.md). Its first apply creates immutable scanned ECR repositories, branch-restricted GitHub identities, and disposable AMI snapshot validation resources. Networking and the empty encrypted controller secret are feature-gated until the AMI is accepted and EC2 deployment begins. The stack deliberately does not deploy instances or require AWS credentials during pull-request artifact validation. An authorized operator must perform the initial bootstrap apply, then manual snapshot validation can use OIDC without storing AWS access keys in GitHub.
+The AWS foundation is implemented under [`tofu/`](tofu/README.md). Its first apply creates immutable scanned ECR repositories, branch-restricted GitHub identities, and disposable AMI snapshot validation resources. Networking, the empty encrypted controller secret, launch templates, and production instances are independently gated until retained AMIs are accepted and deployment begins. Pull-request artifact validation does not require AWS credentials. An authorized operator must perform the initial bootstrap apply, then manual snapshot validation can use OIDC without storing AWS access keys in GitHub.
 
 See [proposal.md](proposal.md) for the complete staged implementation and acceptance criteria.
 

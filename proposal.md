@@ -1568,6 +1568,12 @@ the controller bootstrap UI, and private controller-to-worker SSH.
 
 Commit.
 
+Implemented in OpenTofu behind `enable_ec2_instances`: the production controller and
+first worker pin numeric hardened launch-template versions, launch without ephemeral
+public addresses or SSH keys, receive stable Elastic IPs, and enable direct EC2 API
+termination protection. Both default to the first selected public subnet to avoid
+unnecessary cross-AZ management traffic; placement remains explicitly configurable.
+
 ---
 
 ## Milestone 10 — End-to-end AWS validation
@@ -1853,7 +1859,7 @@ The initial project is complete when all of the following are true:
 [ ] GitHub Actions authenticates to AWS using OIDC.
 [ ] Images publish to ECR.
 [x] AWS-compatible AMIs can be generated and registered through encrypted snapshot import.
-[ ] OpenTofu can launch controller and worker EC2 instances.
+[x] OpenTofu can launch controller and worker EC2 instances.
 [ ] Security groups expose only required services.
 [ ] Session Manager provides shell access with no public TCP/22 rule.
 [ ] No long-lived AWS credentials are stored in GitHub.

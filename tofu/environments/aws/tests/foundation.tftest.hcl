@@ -29,6 +29,21 @@ mock_provider "aws" {
     }
   }
 
+  mock_resource "aws_eip" {
+    defaults = {
+      id        = "eipalloc-0123456789abcdef0"
+      public_ip = "198.51.100.10"
+    }
+  }
+
+  mock_resource "aws_instance" {
+    defaults = {
+      availability_zone = "us-east-2a"
+      id                = "i-0123456789abcdef0"
+      private_ip        = "10.20.0.10"
+    }
+  }
+
   mock_resource "aws_kms_key" {
     defaults = {
       arn    = "arn:aws:kms:us-east-2:123456789012:key/11111111-2222-3333-4444-555555555555"
@@ -142,9 +157,11 @@ run "default_registry_and_oidc_contract" {
   assert {
     condition = (
       length(output.ec2_launch_template_ids) == 0 &&
-      length(output.selected_ami_ids) == 0
+      length(output.selected_ami_ids) == 0 &&
+      length(output.ec2_instance_ids) == 0 &&
+      length(output.ec2_public_ips) == 0
     )
-    error_message = "Launch templates must remain absent until retained AMI IDs are explicitly selected."
+    error_message = "Launch templates and production nodes must remain absent until retained AMI IDs and deployment are explicitly selected."
   }
 
   assert {
@@ -268,6 +285,43 @@ run "explicit_ami_launch_template_contract" {
       output.ec2_launch_template_latest_versions.worker == 1
     )
     error_message = "Explicit retained AMIs must create one numerically versioned launch template per node role."
+  }
+}
+
+run "production_ec2_nodes_contract" {
+  command = plan
+
+  variables {
+    controller_ami_id           = "ami-01111111111111111"
+    enable_ec2_instances        = true
+    enable_ec2_launch_templates = true
+    enable_instance_management  = true
+    enable_network              = true
+    enable_runtime_secrets      = true
+    worker_ami_id               = "ami-02222222222222222"
+  }
+
+  assert {
+    condition = (
+      output.ec2_instance_ids.controller == "i-0123456789abcdef0" &&
+      output.ec2_instance_ids.worker == "i-0123456789abcdef0" &&
+      output.ec2_private_ips.controller == "10.20.0.10" &&
+      output.ec2_public_ips.worker == "198.51.100.10" &&
+      output.ec2_elastic_ip_allocation_ids.controller == "eipalloc-0123456789abcdef0" &&
+      output.ec2_availability_zones.worker == "us-east-2a"
+    )
+    error_message = "The production deployment must create one pinned controller and worker with stable private and public addressing."
+  }
+
+  assert {
+    condition = (
+      output.ec2_instance_settings.controller.associate_public_ip_address == false &&
+      output.ec2_instance_settings.controller.disable_api_termination == true &&
+      output.ec2_instance_settings.controller.instance_initiated_shutdown_action == "stop" &&
+      output.ec2_instance_settings.controller.launch_template_version == "1" &&
+      output.ec2_instance_settings.controller.subnet_id == "subnet-0123456789abcdef0"
+    )
+    error_message = "Production nodes must suppress ephemeral public IPs, protect termination, stop on guest shutdown, and pin a numeric launch template version."
   }
 }
 

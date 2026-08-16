@@ -12,18 +12,18 @@ This stack creates the AWS resources needed to publish lucidity bootc OCI images
 - immutable controller and worker ECR version tags, one controlled mutable `stable` channel, scan-on-push, and untagged-image cleanup that preserves releases;
 - a rotating AMI snapshot KMS key and EBS Direct API permissions for disposable validation and retained releases;
 - hardened, versioned EC2 launch templates gated on explicit self-owned controller and worker AMI IDs;
+- explicitly gated controller and worker EC2 instances with stable Elastic IPs and API termination protection;
 - an account-level GitHub Actions OIDC provider, unless an existing provider ARN is supplied;
 - a repository-scoped IAM role that only trusts `main` for the immutable owner and repository IDs of `HeartlandTranspersonalAlliance/lucidity`;
 - least-privilege permissions to authenticate to ECR and push to these two repositories.
 
-It does not create EC2 instances, AMIs, state storage, or secret values. The GitHub
-workflow creates retained AMIs only after an explicit manual release dispatch. Networking,
-instance management, and runtime secrets remain separately gated; launch templates
-require all three.
+It does not create EC2 instances, AMIs, state storage, or secret values by default. The
+GitHub workflow creates retained AMIs only after an explicit manual release dispatch.
+Networking, instance management, runtime secrets, launch templates, and production
+instances remain explicitly gated in that order.
 
 The initial compute contract is AMD64 with `t3a.small` for the controller and
-`t3a.large` for the worker. These values are outputs for the future launch-template
-milestone and do not create instances yet. ARM64 remains configurable but deferred.
+`t3a.large` for the worker. ARM64 remains configurable but deferred.
 
 The default `allowed_web_cidrs` value is `0.0.0.0/0` because application HTTP and
 HTTPS must be reachable from the internet. There is no administrator SSH security
@@ -40,8 +40,8 @@ need a separate outbound rule.
 The initial controller and worker will use public subnets and stable Elastic IPs, so
 `enable_nat_gateways` defaults to `false`. The private subnets remain isolated. Enable
 NAT only when accepting the fixed hourly and data-processing cost required by a future
-private workload. Elastic IPs are created with the EC2 milestone rather than now so
-unused addresses do not accrue charges.
+private workload. Elastic IPs are created only when `enable_ec2_instances=true`, so
+disabled deployment resources do not accrue public IPv4 charges.
 
 ## Controlled bootc channel
 
@@ -207,8 +207,42 @@ not roll running instances automatically.
 The controller bootstrap is implemented and image-validated, the release workflow
 creates and boot-validates its retained AMI, and the launch template provisions only
 runtime references. Populate all seven JSON values out of band before launching a
-production controller. Creating the instances, Elastic IPs, and attachments remains a
-separate deployment milestone.
+production controller.
+
+## Production EC2 deployment
+
+After retaining and validating both role AMIs, populate the controller runtime secret
+out of band and set the following together in the reviewed production tfvars:
+
+```hcl
+enable_network              = true
+enable_runtime_secrets      = true
+enable_instance_management  = true
+enable_ec2_launch_templates = true
+enable_ec2_instances        = true
+
+controller_ami_id = "ami-CONTROLLER"
+worker_ami_id     = "ami-WORKER"
+```
+
+OpenTofu launches `coolify-controller` and `coolify-worker-01` from numeric launch
+template versions, suppresses auto-assigned public addresses, and associates one
+stable Elastic IP with each primary network interface. Both nodes use the first
+selected public subnet by default, which avoids cross-AZ controller-to-worker SSH
+charges. Change `ec2_node_availability_zone_indices` only after deciding that spreading
+these non-redundant nodes across zones provides enough isolation to justify cross-AZ
+traffic. There is no key pair or public TCP/22 ingress.
+
+Review the complete plan before apply. Direct EC2 API termination protection defaults
+to enabled, but OpenTofu can still propose replacement when an immutable instance
+argument changes. Back up mutable Coolify and Docker state before approving any
+replacement. A launch-template update alone does not affect a running instance until
+its pinned numeric version is deliberately changed in this deployment.
+
+After apply, use `ec2_instance_ids` for Session Manager, `ec2_private_ips.worker` when
+registering the worker with Coolify, and `ec2_public_ips` for external DNS. Public IPv4
+addresses incur hourly AWS charges even when their instances are stopped; disable the
+deployment or release addresses only as part of an intentional teardown.
 
 ## ECR candidate publication
 
@@ -288,7 +322,9 @@ pipeline foundation:
 
 It deliberately leaves `enable_network`, `enable_instance_management`, and
 `enable_runtime_secrets` false. After the disposable AWS import succeeds and EC2
-deployment is ready, set all three to true and apply again. Keep
+deployment is ready, first set those three flags to true and apply the supporting
+resources. Populate the runtime secret out of band, select the exact retained AMI IDs,
+then enable launch templates and instances in a reviewed plan. Keep
 `enable_nat_gateways` false for the selected direct-public design.
 
 If `token.actions.githubusercontent.com` is already configured in the account, set `github_oidc_provider_arn` to its ARN. IAM permits only one provider for that URL in an account.

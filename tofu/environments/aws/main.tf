@@ -3,6 +3,11 @@ locals {
     controller = "${var.repository_prefix}/controller"
     worker     = "${var.repository_prefix}/worker"
   }
+  ec2_node_subnet_ids = var.enable_ec2_instances ? {
+    for role in ["controller", "worker"] : role => module.network[0].public_subnet_ids[
+      sort(keys(module.network[0].public_subnet_ids))[var.ec2_node_availability_zone_indices[role]]
+    ]
+  } : {}
 }
 
 module "network" {
@@ -109,6 +114,7 @@ module "ec2_launch_templates" {
     controller = var.controller_instance_type
     worker     = var.worker_instance_type
   }
+  node_names              = var.ec2_node_names
   project_name            = var.vpc_name
   root_volume_kms_key_arn = module.ami_import_validation.snapshot_kms_key_arn
   root_volume_sizes = {
@@ -117,4 +123,18 @@ module "ec2_launch_templates" {
   }
   security_group_ids = module.network[0].security_group_ids
   tags               = var.tags
+}
+
+module "ec2_nodes" {
+  count  = var.enable_ec2_instances ? 1 : 0
+  source = "../../modules/ec2-nodes"
+
+  enable_termination_protection = var.enable_ec2_termination_protection
+  environment                   = var.environment
+  launch_template_ids           = module.ec2_launch_templates[0].launch_template_ids
+  launch_template_versions      = module.ec2_launch_templates[0].launch_template_latest_versions
+  node_names                    = var.ec2_node_names
+  project_name                  = var.vpc_name
+  subnet_ids                    = local.ec2_node_subnet_ids
+  tags                          = var.tags
 }

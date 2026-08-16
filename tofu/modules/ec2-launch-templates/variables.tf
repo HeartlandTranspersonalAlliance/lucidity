@@ -8,6 +8,22 @@ variable "environment" {
   type        = string
 }
 
+variable "node_names" {
+  description = "Stable Name tags for instances launched from each role template."
+  type        = map(string)
+
+  validation {
+    condition = (
+      length(var.node_names) == 2 &&
+      alltrue([
+        for role in ["controller", "worker"] :
+        can(regex("^[A-Za-z0-9][A-Za-z0-9-]{1,62}$", var.node_names[role]))
+      ])
+    )
+    error_message = "Node names must contain explicit controller and worker values using 2-63 letters, numbers, or hyphens."
+  }
+}
+
 variable "controller_runtime_secret_name" {
   description = "Secrets Manager name embedded only as dynamic references in controller cloud-init user data."
   type        = string
