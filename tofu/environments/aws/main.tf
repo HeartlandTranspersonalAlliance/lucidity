@@ -96,6 +96,20 @@ module "ami_import_validation" {
   tags = var.tags
 }
 
+module "deployment_validation" {
+  source = "../../modules/deployment-validation"
+
+  aws_region                 = var.aws_region
+  environment                = var.environment
+  github_branch              = var.github_publish_branch
+  github_repository          = var.github_repository
+  github_repository_owner_id = var.github_repository_owner_id
+  github_repository_id       = var.github_repository_id
+  oidc_provider_arn          = module.github_oidc.oidc_provider_arn
+  project_name               = var.vpc_name
+  tags                       = var.tags
+}
+
 module "ec2_launch_templates" {
   count  = var.enable_ec2_launch_templates ? 1 : 0
   source = "../../modules/ec2-launch-templates"

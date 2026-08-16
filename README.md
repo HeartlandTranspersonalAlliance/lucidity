@@ -59,6 +59,7 @@ Implemented:
 - a dedicated AMI snapshot KMS key and EBS Direct API upload path for disposable validation and retained releases.
 - manually gated retained controller and worker AMI release gates, hardened launch templates that require explicit self-owned AMI IDs, and an explicitly enabled two-node deployment with stable Elastic IPs.
 - immutable semantic releases that bind both tested ECR digests, SPDX SBOMs, and role-specific retained AMIs in one checksummed manifest.
+- an operator-triggered GitHub OIDC and SSM gate that enrolls the controller public key, validates both live nodes, proves private controller-to-worker SSH, and optionally probes public HTTPS endpoints.
 
 The upstream base currently makes `bootc` and `rpm-ostree` depend on Podman, so Podman remains installed. It is a bootc host dependency/tool, not the production application runtime; Coolify workloads use Docker Engine.
 
@@ -135,7 +136,7 @@ GitHub Actions is the primary build and test environment. Every pull request run
 
 The OpenTofu job installs Determinate Nix through a commit-pinned action. The same pinned development environment supplies codespell, and repository lint checks spelling and tracked-text style across the complete tree. Root EditorConfig rules align editors and CI on LF line endings, final newlines, and trimmed trailing whitespace. Image jobs use the runner's supplied container tools. Lifecycle jobs use host `sudo` for GitHub's documented udev rule granting access to the runner's existing `/dev/kvm` device. AMI jobs use narrowly scoped root Podman commands because osbuild consumes the bootc source through shared root container storage. KVM accelerates every VM test, while QEMU TCG remains the automatic fallback. Build artifacts stay within the ephemeral job. A daily read-only AWS audit reports disposable validation instances, AMIs, or snapshots that remain tagged after 12 hours, covering runner termination cases where an EXIT trap cannot execute.
 
-For pull requests and merge groups, a lightweight `ubuntu-slim` job classifies changed paths before allocating the full VM runners. Documentation, OpenTofu, role-exclusive, and isolated static-quality changes select only their relevant jobs; unknown, shared, workflow, root Makefile, or classifier changes select both roles. Quality targets live in `mk/quality.mk`, giving spelling and tracked-text policy changes a static-only dependency boundary while the root Makefile remains a lifecycle control surface. Each selected pull-request role builds and validates a QCOW2. The required serial merge queue runs the affected role's initial boot, update, rollback, and persistence checks against the exact candidate merged with current `main`. A weekly Monday run and manual dispatch exercise both complete lifecycles to detect upstream image drift. Raw AMI compatibility runs on pull requests when its workflow or the shared disk build and validation scripts change. Validation consumes role-scoped GHCR caches read-only, while trusted publication runs refresh those caches with the minimum required token permissions.
+For pull requests and merge groups, a lightweight `ubuntu-slim` job classifies changed paths before allocating the full VM runners. Documentation, OpenTofu, role-exclusive, isolated static-quality, and live-deployment validation changes select only their relevant jobs; unknown, shared, lifecycle workflow, root Makefile, or classifier changes select both roles. Quality targets live in `mk/quality.mk`, giving spelling and tracked-text policy changes a static-only dependency boundary while the root Makefile remains a lifecycle control surface. Each selected pull-request role builds and validates a QCOW2. The required serial merge queue runs the affected role's initial boot, update, rollback, and persistence checks against the exact candidate merged with current `main`. A weekly Monday run and manual dispatch exercise both complete lifecycles to detect upstream image drift. Raw AMI compatibility runs on pull requests when its workflow or the shared disk build and validation scripts change. Validation consumes role-scoped GHCR caches read-only, while trusted publication runs refresh those caches with the minimum required token permissions.
 
 Local commands remain available for development and diagnosis, but a successful local run is not a substitute for the required GitHub checks.
 
@@ -272,7 +273,7 @@ controller's disposable registry, VM container, and generated files under
 
 ## Worker SSH provisioning
 
-Coolify requires root SSH access to a remote Docker host. Password authentication is disabled. The selected first-boot mechanism is cloud-init user data containing only Coolify's **public** key. The image's oneshot service validates and appends it without replacing existing administrator keys.
+Coolify requires root SSH access to a remote Docker host. Password authentication is disabled. The production enrollment workflow reads only the controller's generated **public** key through SSM, validates it, and places it in the worker's root-only input file through SSM. The image's oneshot service validates and appends it without replacing existing administrator keys. Local VM tests exercise the same service with cloud-init:
 
 ```yaml
 #cloud-config
@@ -284,7 +285,7 @@ write_files:
       ssh-ed25519 REPLACE_WITH_COOLIFY_PUBLIC_KEY coolify
 ```
 
-The service runs after `cloud-final.service`. Reboots are safe: existing keys are retained and exact duplicates are not added. Never put a private key in user data, Git, an AMI, or OpenTofu configuration. EC2 user data should not be treated as a secret store even though this payload is only a public key.
+The service runs after `cloud-final.service`. Reboots and repeated enrollment runs are safe: existing keys are retained and exact duplicates are not added. The controller private key remains on its encrypted persistent volume and is never returned to GitHub, user data, Git, an AMI, or OpenTofu configuration.
 
 The worker also accepts an EC2 administrator key in the local VM test harness. AWS administration uses Systems Manager Session Manager instead: there is no public TCP/22 rule. The only EC2 SSH path is controller-to-worker over private VPC addresses because Coolify requires it. Do not expose SSH to an administrator CIDR or `0.0.0.0/0`.
 
@@ -402,6 +403,7 @@ variables from its outputs:
 | `AWS_ECR_PUBLISH_ROLE_ARN` | `github_publish_role_arn` |
 | `AWS_ECR_CONTROLLER_REPOSITORY_URL` | `ecr_repository_urls["controller"]` |
 | `AWS_ECR_WORKER_REPOSITORY_URL` | `ecr_repository_urls["worker"]` |
+| `AWS_DEPLOYMENT_VALIDATION_ROLE_ARN` | `github_deployment_validation_role_arn` |
 
 The publishing workflow runs only for `main`, uses short-lived OIDC credentials, and
 does not require AWS access-key secrets. Every published controller and worker image

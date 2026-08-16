@@ -233,6 +233,14 @@ run "default_registry_and_oidc_contract" {
 
   assert {
     condition = (
+      output.github_deployment_validation_role_arn == "arn:aws:iam::123456789012:role/lucidity-mock-role" &&
+      output.github_deployment_validation_subject == "repo:HeartlandTranspersonalAlliance@256628390/lucidity@1333819830:ref:refs/heads/main"
+    )
+    error_message = "Deployment validation must expose a dedicated role restricted to the immutable repository identity and main branch."
+  }
+
+  assert {
+    condition = (
       output.ami_launch_validation_enabled == false &&
       output.ami_test_subnet_id == null &&
       length(output.ami_test_security_group_ids) == 0 &&

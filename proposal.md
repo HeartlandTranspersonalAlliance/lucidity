@@ -1654,6 +1654,15 @@ Verify HTTPS using a test domain if available.
 
 Do not require a real production domain for automated CI.
 
+Implemented as the manual **Validate production deployment** GitHub-hosted workflow.
+Its main-branch OIDC role discovers the uniquely tagged nodes and uses SSM to validate
+their hardened EC2 and guest state. The first run idempotently enrolls the controller's
+public key on the worker. Every run authenticates the worker host key through SSM and
+proves private controller-to-worker SSH with strict host-key checking. Optional
+controller and worker HTTPS inputs extend the same run through Cloudflare to the public
+service endpoints. The workflow records a concise acceptance summary without returning
+the controller private key or resolved runtime values.
+
 Commit.
 
 ---

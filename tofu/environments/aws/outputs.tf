@@ -268,6 +268,16 @@ output "github_ami_validation_subject" {
   value       = module.ami_import_validation.github_subject
 }
 
+output "github_deployment_validation_role_arn" {
+  description = "GitHub Actions role ARN for production node enrollment and validation through SSM."
+  value       = module.deployment_validation.github_role_arn
+}
+
+output "github_deployment_validation_subject" {
+  description = "Exact GitHub OIDC subject allowed to validate the production deployment."
+  value       = module.deployment_validation.github_subject
+}
+
 output "ami_launch_validation_enabled" {
   description = "Whether the main-branch AMI workflow may launch one tagged disposable t3a.small."
   value       = var.enable_ami_launch_validation
