@@ -4,17 +4,7 @@ on:
   pull_request:
     paths:
       - .github/workflows/ami.yml
-      - Containerfile
-      - ci/Containerfile
-      - ci/setup-build-cache.sh
-      - ci/teardown-build-cache.sh
-      - flake.lock
-      - flake.nix
-      - image/**
-      - roles/**
-      - scripts/build.sh
       - scripts/build-disk.sh
-      - scripts/validate-ami-import.sh
       - scripts/validate-disk.sh
   workflow_call:
     inputs:
