@@ -16,6 +16,7 @@ publish and deploy lucidity bootc images:
 - hardened, versioned EC2 launch templates gated on explicit self-owned controller and worker AMI IDs;
 - explicitly gated controller and worker EC2 instances with stable Elastic IPs and API termination protection;
 - explicitly gated daily, crash-consistent AWS Backup recovery points with governance-mode Vault Lock and dedicated backup and restore roles;
+- explicitly gated status-check, CPU, and T3a credit alarms delivered through encrypted SNS email;
 - an account-level GitHub Actions OIDC provider, unless an existing provider ARN is supplied;
 - a repository-scoped IAM role that only trusts `main` for the immutable owner and repository IDs of `HeartlandTranspersonalAlliance/lucidity`;
 - least-privilege permissions to authenticate to ECR and push to these two repositories.
@@ -225,6 +226,8 @@ enable_instance_management  = true
 enable_ec2_launch_templates = true
 enable_ec2_instances        = true
 enable_node_backups          = true
+enable_node_monitoring       = true
+node_alarm_notification_email = "operations@example.org"
 
 controller_ami_id = "ami-CONTROLLER"
 worker_ami_id     = "ami-WORKER"
@@ -253,6 +256,13 @@ enforces retention between 7 and 365 days without making the configuration perma
 immutable. Cross-Region copies and cold storage remain off to avoid cost and long
 restore times until a stronger failure model requires them. Follow
 [`docs/node-recovery.md`](../docs/node-recovery.md) for verification and drills.
+
+Node monitoring uses six standard CloudWatch alarms, one SNS topic, and one dedicated
+customer-managed KMS key. It avoids a dashboard, custom metrics, and CloudWatch Agent.
+The email subscription must be confirmed and tested after apply; see
+[`docs/node-monitoring.md`](../docs/node-monitoring.md). The KMS key and alarms are
+billed resources, so monitoring remains separately gated rather than appearing in the
+low-idle-cost image-pipeline bootstrap.
 
 After apply, use `ec2_instance_ids` for Session Manager, `ec2_private_ips.worker` when
 registering the worker with Coolify, and `ec2_public_ips` for external DNS. Public IPv4
