@@ -257,6 +257,7 @@ run "explicit_ami_launch_template_contract" {
     enable_ec2_launch_templates = true
     enable_instance_management  = true
     enable_network              = true
+    enable_runtime_secrets      = true
     worker_ami_id               = "ami-02222222222222222"
   }
 

@@ -8,6 +8,16 @@ variable "environment" {
   type        = string
 }
 
+variable "controller_runtime_secret_name" {
+  description = "Secrets Manager name embedded only as dynamic references in controller cloud-init user data."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9/_+=.@-]{1,512}$", var.controller_runtime_secret_name))
+    error_message = "The controller runtime secret name must be a valid Secrets Manager name."
+  }
+}
+
 variable "ami_ids" {
   description = "Explicit retained AMI IDs for the controller and worker roles."
   type        = map(string)

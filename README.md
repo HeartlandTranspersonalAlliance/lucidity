@@ -71,8 +71,9 @@ templates are defined but remain disabled until exact controller and worker AMI 
 selected. The controller bootstrap now passes the full hosted KVM update/rollback
 lifecycle with its persistent environment, SSH identity, Compose service set, bind mount,
 and SELinux label intact. The controller AMI gate also waits for that bootstrap before
-retaining the image. OpenTofu provisioning of the reference-only secret environment remains
-the blocker for launching the production pair. No
+retaining the image. Its launch template now provisions a root-only environment file
+containing only Secrets Manager references. Actual EC2 instances and networking
+attachments remain the next deployment milestone. No
 untested AWS deployment code is presented as complete.
 
 Merged-main run `31899706447` measured the 12 GiB EBS Direct upload at about 33
@@ -364,7 +365,7 @@ Networking spans three Availability Zones by default and provides public and iso
 
 OpenTofu is the infrastructure-as-code CLI for this project. Configuration remains Terraform-compatible where practical so the AWS provider and reusable modules retain broad ecosystem compatibility. Terraform is reserved for a documented incompatibility that cannot be resolved with OpenTofu. CI-only values belong in GitHub Secrets, AWS-hosted runtime secrets belong in AWS Secrets Manager, and provider-neutral or self-hosted secrets may use OpenBao.
 
-The AWS stack creates one empty bundled controller-runtime secret, a dedicated rotating KMS key, and a controller EC2 instance profile scoped to that secret and key. OpenTofu never receives the secret value. The controller image builds AWS Workload Credentials Provider 3.1.1 from checksum-pinned source and installs AWS's checksum-pinned `asm-exec`. When `/etc/coolify-controller/runtime-secrets.env` exists, the bootstrap wrapper requires all seven Coolify secret settings to be dynamic references and rejects plaintext. The example file documents the expected JSON keys. Without that file the controller generates local values, which is intended for local validation only; production EC2 provisioning must install the reference-only file before the bootstrap service runs.
+The AWS stack creates one empty bundled controller-runtime secret, a dedicated rotating KMS key, and a controller EC2 instance profile scoped to that secret and key. OpenTofu never receives the secret value. The controller image builds AWS Workload Credentials Provider 3.1.1 from checksum-pinned source and installs AWS's checksum-pinned `asm-exec`. The controller launch template's cloud-init data writes `/etc/coolify-controller/runtime-secrets.env` with seven dynamic references and mode `0600` before `cloud-final.service` completes; it contains no resolved secret. The bootstrap wrapper rejects plaintext and resolves those references only at runtime through the instance role. Populate all seven JSON values through an out-of-band operator workflow before launching production EC2.
 
 OpenTofu cannot safely replace a secret store because a managed secret value would enter its state. Running OpenBao only for this deployment would add more state, backup work, and availability risk than the single AWS secret warrants, so Secrets Manager remains the initial choice. OpenBao can replace it later if provider independence becomes an operational requirement.
 

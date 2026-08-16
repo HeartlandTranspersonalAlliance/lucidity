@@ -8,8 +8,9 @@ enable_instance_management = false
 enable_ami_launch_validation = false
 enable_ec2_launch_templates  = false
 
-# After both roles have retained, boot-validated AMIs and the controller bootstrap is
-# complete, pin the exact IDs and enable launch templates. Never select "newest".
+# After both roles have retained, boot-validated AMIs and the controller secret has
+# been populated out of band, enable networking, instance management, runtime secrets,
+# and launch templates together. Pin exact AMI IDs; never select "newest".
 # controller_ami_id = "ami-0123456789abcdef0"
 # worker_ami_id     = "ami-0fedcba9876543210"
 

@@ -1,4 +1,29 @@
 locals {
+  controller_runtime_secret_keys = {
+    COOLIFY_APP_ID            = "APP_ID"
+    COOLIFY_APP_KEY           = "APP_KEY"
+    COOLIFY_DB_PASSWORD       = "DB_PASSWORD"
+    COOLIFY_PUSHER_APP_ID     = "PUSHER_APP_ID"
+    COOLIFY_PUSHER_APP_KEY    = "PUSHER_APP_KEY"
+    COOLIFY_PUSHER_APP_SECRET = "PUSHER_APP_SECRET"
+    COOLIFY_REDIS_PASSWORD    = "REDIS_PASSWORD"
+  }
+  controller_runtime_reference_content = join("\n", [
+    for environment_name, json_key in local.controller_runtime_secret_keys :
+    "${environment_name}={{resolve:secretsmanager:${var.controller_runtime_secret_name}:SecretString:${json_key}}}"
+  ])
+  controller_user_data = join("\n", [
+    "#cloud-config",
+    yamlencode({
+      write_files = [{
+        path        = "/etc/coolify-controller/runtime-secrets.env"
+        owner       = "root:root"
+        permissions = "0600"
+        content     = local.controller_runtime_reference_content
+      }]
+    }),
+    "",
+  ])
   roles = {
     controller = {
       security_group_ids = [
@@ -73,6 +98,8 @@ resource "aws_launch_template" "node" {
   monitoring {
     enabled = true
   }
+
+  user_data = each.key == "controller" ? base64encode(local.controller_user_data) : null
 
   tag_specifications {
     resource_type = "instance"

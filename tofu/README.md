@@ -18,7 +18,8 @@ This stack creates the AWS resources needed to publish lucidity bootc OCI images
 
 It does not create EC2 instances, AMIs, state storage, or secret values. The GitHub
 workflow creates retained AMIs only after an explicit manual release dispatch. Networking,
-instance management, runtime secrets, and launch templates remain independently gated.
+instance management, and runtime secrets remain separately gated; launch templates
+require all three.
 
 The initial compute contract is AMD64 with `t3a.small` for the controller and
 `t3a.large` for the worker. These values are outputs for the future launch-template
@@ -59,7 +60,7 @@ deliberately creates no `aws_secretsmanager_secret_version`. Populate its JSON v
 through an out-of-band operator workflow after apply. Never put that value in HCL,
 tfvars, user data, an AMI, CI logs, or OpenTofu state.
 
-The future controller launch template must attach `controller_instance_profile_name`.
+The controller launch template attaches `controller_instance_profile_name`.
 Its SSM-enabled role can describe and read only this secret and can decrypt only
 through Secrets Manager in the configured region. The worker uses
 `worker_instance_profile_name` and receives no secret permission. Each role can obtain
@@ -76,8 +77,10 @@ repository now builds the AWS Workload Credentials Provider from checksum-pinned
 installs a checksum-pinned AWS `asm-exec`, and includes an idempotent controller bootstrap
 unit. The bootstrap accepts only dynamic references in
 `/etc/coolify-controller/runtime-secrets.env`; see the adjacent `.example` file for the
-seven required JSON keys. Wiring that reference-only file into the future EC2 instance
-provisioning remains an explicit blocker. Do not put resolved values in user data.
+seven required JSON keys. The controller launch template's cloud-init data writes that
+root-only file with the seven reference strings before `cloud-final.service` completes;
+it contains no resolved value. The worker template has no user data. Never put resolved
+values in user data.
 
 At the pricing reviewed during implementation, one secret plus one customer-managed
 KMS key costs about USD 1.40 per month before negligible API request charges. AWS KMS
@@ -188,7 +191,7 @@ measure build, upload, snapshot completion, and boot-gate durations independentl
 
 Launch templates are disabled by default and never discover the newest AMI. After both
 roles have retained, boot-validated AMIs, set `controller_ami_id` and `worker_ami_id`
-to those exact IDs, enable networking and instance management, then set
+to those exact IDs, enable networking, instance management, and runtime secrets, then set
 `enable_ec2_launch_templates=true`. OpenTofu verifies both AMIs are self-owned,
 available AMD64 UEFI HVM EBS images with ENA and IMDSv2 support.
 
@@ -196,16 +199,16 @@ The templates use the proposal defaults: `t3a.small` with 40 GiB gp3 for the
 controller and `t3a.large` with 80 GiB gp3 for the worker. Root volumes are encrypted
 with the AMI snapshot KMS key, CPU credits are standard, detailed monitoring is on,
 IMDSv2 is required with container-compatible hop limit 2, and no key pair, subnet,
-public address, or user data is embedded. Consumers must pin the numeric template
-version from `ec2_launch_template_latest_versions`; changing a template does not roll
-running instances automatically.
+or public address is embedded. The controller user data contains only the root-only
+Secrets Manager reference file; the worker has none. Consumers must pin the numeric
+template version from `ec2_launch_template_latest_versions`; changing a template does
+not roll running instances automatically.
 
-The controller bootstrap is implemented and image-validated, and the release workflow
-now creates and boot-validates its retained AMI. Reference-only EC2 provisioning is not
-complete. Do not
-enable these templates or launch production EC2 instances yet. Defining this boundary
-now makes AMI selection reviewable without pretending the deployment milestone is
-complete.
+The controller bootstrap is implemented and image-validated, the release workflow
+creates and boot-validates its retained AMI, and the launch template provisions only
+runtime references. Populate all seven JSON values out of band before launching a
+production controller. Creating the instances, Elastic IPs, and attachments remains a
+separate deployment milestone.
 
 ## ECR candidate publication
 

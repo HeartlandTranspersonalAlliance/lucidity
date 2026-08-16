@@ -1534,6 +1534,13 @@ Commit.
 
 ## Milestone 9 — EC2 deployment
 
+The controller launch template must use cloud-init only to write the seven
+Secrets Manager dynamic references to a root-only runtime environment file before
+`cloud-final.service` completes. OpenTofu, its state, EC2 user data, and CI must never
+contain the resolved values. Require runtime secrets, instance management, and
+networking whenever launch templates are enabled. The worker template needs no user
+data.
+
 OpenTofu should launch:
 
 ```text

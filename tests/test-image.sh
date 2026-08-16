@@ -427,8 +427,24 @@ grep -Fq 'http_put_response_hop_limit = 2' tofu/modules/ec2-launch-templates/mai
 grep -Fq 'cpu_credits = "standard"' tofu/modules/ec2-launch-templates/main.tf
 grep -Fq 'volume_type           = "gp3"' tofu/modules/ec2-launch-templates/main.tf
 grep -Fq 'update_default_version = false' tofu/modules/ec2-launch-templates/main.tf
-if rg -n 'key_name|associate_public_ip_address|user_data' tofu/modules/ec2-launch-templates; then
-    echo "launch templates must not embed key pairs, networking placement, or user data" >&2
+grep -Fq 'user_data = each.key == "controller" ? base64encode(local.controller_user_data) : null' tofu/modules/ec2-launch-templates/main.tf
+grep -Fq 'path        = "/etc/coolify-controller/runtime-secrets.env"' tofu/modules/ec2-launch-templates/main.tf
+grep -Fq 'permissions = "0600"' tofu/modules/ec2-launch-templates/main.tf
+# These are literal OpenTofu interpolation expressions.
+# shellcheck disable=SC2016
+grep -Fq '{{resolve:secretsmanager:${var.controller_runtime_secret_name}:SecretString:${json_key}}}' tofu/modules/ec2-launch-templates/main.tf
+for secret_variable in \
+    COOLIFY_APP_ID \
+    COOLIFY_APP_KEY \
+    COOLIFY_DB_PASSWORD \
+    COOLIFY_REDIS_PASSWORD \
+    COOLIFY_PUSHER_APP_ID \
+    COOLIFY_PUSHER_APP_KEY \
+    COOLIFY_PUSHER_APP_SECRET; do
+    grep -Fq "${secret_variable}" tofu/modules/ec2-launch-templates/main.tf
+done
+if rg -n 'key_name|associate_public_ip_address' tofu/modules/ec2-launch-templates; then
+    echo "launch templates must not embed key pairs or networking placement" >&2
     exit 1
 fi
 [[ $(printf '%s\n' README.md tofu/environments/aws/main.tf roles/controller/usr/example | ci/worker-changes.sh) == false ]]
