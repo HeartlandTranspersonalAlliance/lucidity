@@ -15,6 +15,7 @@ publish and deploy lucidity bootc images:
 - a rotating AMI snapshot KMS key and EBS Direct API permissions for disposable validation and retained releases;
 - hardened, versioned EC2 launch templates gated on explicit self-owned controller and worker AMI IDs;
 - explicitly gated controller and worker EC2 instances with stable Elastic IPs and API termination protection;
+- explicitly gated Cloudflare A records that proxy the controller and worker Elastic IPs;
 - explicitly gated daily, crash-consistent AWS Backup recovery points with governance-mode Vault Lock and dedicated backup and restore roles;
 - explicitly gated status-check, CPU, and T3a credit alarms delivered through encrypted SNS email;
 - an account-level GitHub Actions OIDC provider, unless an existing provider ARN is supplied;
@@ -25,6 +26,10 @@ It does not create EC2 instances, AMIs, state storage, or secret values by defau
 GitHub workflow creates retained AMIs only after an explicit manual release dispatch.
 Networking, instance management, runtime secrets, launch templates, production
 instances, and their backup plan remain explicitly gated in that order.
+
+Cloudflare DNS is gated after the EC2 instances. It manages only the configured
+production hostnames and leaves the zone apex, mail, verification, and other existing
+records unchanged.
 
 The initial compute contract is AMD64 with `t3a.small` for the controller and
 `t3a.large` for the worker. ARM64 remains configurable but deferred.
@@ -230,6 +235,8 @@ enable_runtime_secrets      = true
 enable_instance_management  = true
 enable_ec2_launch_templates = true
 enable_ec2_instances        = true
+cloudflare_zone_id          = "4616a45d9d8f6dd9a0ff5b5e739bdf6d"
+enable_cloudflare_dns       = true
 enable_node_backups          = true
 enable_node_monitoring       = true
 node_alarm_notification_email = "operations@example.org"
@@ -245,6 +252,14 @@ selected public subnet by default, which avoids cross-AZ controller-to-worker SS
 charges. Change `ec2_node_availability_zone_indices` only after deciding that spreading
 these non-redundant nodes across zones provides enough isolation to justify cross-AZ
 traffic. There is no key pair or public TCP/22 ingress.
+
+With `enable_cloudflare_dns=true`, OpenTofu also creates proxied A records for
+`coolify.heartlandta.org` on the controller address and `apps.heartlandta.org`,
+`*.apps.heartlandta.org`, and `matrix.heartlandta.org` on the worker address. The
+Cloudflare provider reads `CLOUDFLARE_API_TOKEN` from the process environment. Keep
+that token in the GitHub Actions secret of the same name or another runtime secret
+store; do not add it to HCL, tfvars, command arguments, or OpenTofu state. The zone ID
+is a non-secret identifier and may be configured as a GitHub variable.
 
 Review the complete plan before apply. Direct EC2 API termination protection defaults
 to enabled, but OpenTofu can still propose replacement when an immutable instance

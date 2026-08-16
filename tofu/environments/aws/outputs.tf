@@ -98,6 +98,11 @@ output "ec2_instance_settings" {
   value       = var.enable_ec2_instances ? module.ec2_nodes[0].instance_settings : {}
 }
 
+output "cloudflare_dns_records" {
+  description = "Managed Cloudflare A records keyed by complete hostname, or an empty map until explicitly enabled."
+  value       = var.enable_cloudflare_dns ? module.cloudflare_dns[0].records : {}
+}
+
 output "node_backup_vault_arn" {
   description = "Governance-locked backup vault protecting production nodes, or null until enabled."
   value       = var.enable_node_backups ? module.node_backups[0].vault_arn : null

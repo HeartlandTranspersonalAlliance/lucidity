@@ -150,6 +150,14 @@ mock_provider "aws" {
   }
 }
 
+mock_provider "cloudflare" {
+  mock_resource "cloudflare_dns_record" {
+    defaults = {
+      id = "mock-cloudflare-dns-record"
+    }
+  }
+}
+
 run "default_registry_and_oidc_contract" {
   command = plan
 
@@ -185,6 +193,7 @@ run "default_registry_and_oidc_contract" {
       length(output.selected_ami_ids) == 0 &&
       length(output.ec2_instance_ids) == 0 &&
       length(output.ec2_public_ips) == 0 &&
+      length(output.cloudflare_dns_records) == 0 &&
       output.node_backup_vault_arn == null &&
       output.node_backup_plan_id == null &&
       output.node_alarm_notification_topic_arn == null &&
@@ -376,6 +385,36 @@ run "production_ec2_nodes_contract" {
       output.ec2_root_volume_settings.worker.volume_type == "gp3"
     )
     error_message = "Production root volumes must be encrypted gp3 storage retained independently of instance termination."
+  }
+}
+
+run "production_cloudflare_dns_contract" {
+  command = plan
+
+  variables {
+    cloudflare_zone_id          = "4616a45d9d8f6dd9a0ff5b5e739bdf6d"
+    controller_ami_id           = "ami-01111111111111111"
+    enable_cloudflare_dns       = true
+    enable_ec2_instances        = true
+    enable_ec2_launch_templates = true
+    enable_instance_management  = true
+    enable_network              = true
+    enable_runtime_secrets      = true
+    worker_ami_id               = "ami-02222222222222222"
+  }
+
+  assert {
+    condition = (
+      length(output.cloudflare_dns_records) == 4 &&
+      output.cloudflare_dns_records["coolify.heartlandta.org"].content == "198.51.100.10" &&
+      output.cloudflare_dns_records["coolify.heartlandta.org"].proxied == true &&
+      output.cloudflare_dns_records["apps.heartlandta.org"].content == "198.51.100.10" &&
+      output.cloudflare_dns_records["*.apps.heartlandta.org"].content == "198.51.100.10" &&
+      output.cloudflare_dns_records["matrix.heartlandta.org"].content == "198.51.100.10" &&
+      output.cloudflare_dns_records["matrix.heartlandta.org"].type == "A" &&
+      output.cloudflare_dns_records["matrix.heartlandta.org"].ttl == 1
+    )
+    error_message = "Enabled Cloudflare DNS must proxy the controller hostname and worker application hostnames to stable Elastic IPs."
   }
 }
 

@@ -385,7 +385,7 @@ The infrastructure intentionally has:
 - no ALB by default;
 - no Route 53 requirement.
 
-Those services can be added later only when a concrete operational requirement justifies their cost and complexity. Cloudflare DNS points the controller hostname to its Elastic IP and all application hostnames to the single worker Elastic IP. See the [cost and addressing guide](docs/cost-optimization.md) for the record layout, proxy boundary, and IPv6 decision.
+Those services can be added later only when a concrete operational requirement justifies their cost and complexity. The explicitly gated OpenTofu Cloudflare module points the controller hostname to its Elastic IP and all application hostnames to the single worker Elastic IP. See the [cost and addressing guide](docs/cost-optimization.md) for the record layout, proxy boundary, and IPv6 decision.
 
 AMD64 is preferred for the first deployment and maximum third-party image compatibility. ARM64/Graviton remains a future optimization when every required application image is multi-architecture. Production x86 emulation on ARM is not enabled implicitly.
 

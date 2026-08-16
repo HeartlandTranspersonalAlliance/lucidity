@@ -8,6 +8,7 @@ enable_instance_management = false
 enable_ami_launch_validation = false
 enable_ec2_launch_templates  = false
 enable_ec2_instances         = false
+enable_cloudflare_dns        = false
 enable_node_backups          = false
 enable_node_monitoring       = false
 
@@ -18,6 +19,8 @@ enable_node_monitoring       = false
 # worker_ami_id     = "ami-0fedcba9876543210"
 # enable_ec2_launch_templates = true
 # enable_ec2_instances        = true
+# cloudflare_zone_id          = "0123456789abcdef0123456789abcdef"
+# enable_cloudflare_dns       = true
 # enable_node_backups         = true
 # enable_node_monitoring      = true
 # node_alarm_notification_email = "operations@example.org"

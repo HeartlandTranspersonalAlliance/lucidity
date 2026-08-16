@@ -8,6 +8,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 6.0"
     }
+    cloudflare = {
+      source  = "cloudflare/cloudflare"
+      version = "~> 5.23"
+    }
   }
 }
 
@@ -24,3 +28,6 @@ provider "aws" {
     )
   }
 }
+
+# Authentication is read only from CLOUDFLARE_API_TOKEN at runtime.
+provider "cloudflare" {}

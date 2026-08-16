@@ -131,6 +131,77 @@ variable "enable_ec2_termination_protection" {
   default     = true
 }
 
+variable "enable_cloudflare_dns" {
+  description = "Manage proxied production hostnames in Cloudflare after stable EC2 Elastic IPs exist."
+  type        = bool
+  default     = false
+
+  validation {
+    condition = !var.enable_cloudflare_dns || (
+      var.enable_ec2_instances &&
+      var.cloudflare_zone_id != null
+    )
+    error_message = "Cloudflare DNS requires production EC2 instances and an explicit Cloudflare zone ID."
+  }
+}
+
+variable "cloudflare_zone_id" {
+  description = "Cloudflare zone identifier for managed DNS records. This identifier is not a credential."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.cloudflare_zone_id == null || can(regex("^[0-9a-f]{32}$", var.cloudflare_zone_id))
+    error_message = "The Cloudflare zone ID must be null or a 32-character lowercase hexadecimal identifier."
+  }
+}
+
+variable "cloudflare_zone_name" {
+  description = "Authoritative Cloudflare zone name for production hostnames."
+  type        = string
+  default     = "heartlandta.org"
+
+  validation {
+    condition     = can(regex("^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$", var.cloudflare_zone_name))
+    error_message = "The Cloudflare zone name must be a lowercase fully qualified domain name without a trailing dot."
+  }
+}
+
+variable "cloudflare_dns_records" {
+  description = "Relative Cloudflare DNS names mapped to their EC2 origin role and proxy mode."
+  type = map(object({
+    role    = string
+    proxied = optional(bool, true)
+  }))
+  default = {
+    "coolify" = {
+      role = "controller"
+    }
+    "apps" = {
+      role = "worker"
+    }
+    "*.apps" = {
+      role = "worker"
+    }
+    "matrix" = {
+      role = "worker"
+    }
+  }
+
+  validation {
+    condition = (
+      length(var.cloudflare_dns_records) > 0 &&
+      alltrue([
+        for name, record in var.cloudflare_dns_records :
+        can(regex("^(?:\\*\\.)?[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$", name)) &&
+        contains(["controller", "worker"], record.role)
+      ])
+    )
+    error_message = "Each Cloudflare record must use a valid lowercase relative DNS name and target the controller or worker role."
+  }
+}
+
 variable "enable_node_backups" {
   description = "Protect both production EC2 nodes with daily crash-consistent AWS Backup recovery points and governance-mode Vault Lock."
   type        = bool

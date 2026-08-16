@@ -153,6 +153,16 @@ module "ec2_nodes" {
   tags                          = var.tags
 }
 
+module "cloudflare_dns" {
+  count  = var.enable_cloudflare_dns ? 1 : 0
+  source = "../../modules/cloudflare-dns"
+
+  origin_ipv4 = module.ec2_nodes[0].public_ips
+  records     = var.cloudflare_dns_records
+  zone_id     = var.cloudflare_zone_id
+  zone_name   = var.cloudflare_zone_name
+}
+
 module "node_backups" {
   count  = var.enable_node_backups ? 1 : 0
   source = "../../modules/node-backups"
