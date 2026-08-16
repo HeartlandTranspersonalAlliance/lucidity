@@ -81,9 +81,18 @@ jobs:
           "${ACTIONLINT_IMAGE}" -color
 
   controller-image:
+    permissions:
+      contents: read
+      packages: write
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Prepare role-scoped GHCR build cache
+        env:
+          GHCR_CACHE_WRITE: ${{ github.event_name != 'pull_request' }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ci/setup-build-cache.sh controller
 
       - name: Build controller foundation
         env:
@@ -97,13 +106,26 @@ jobs:
           CONTAINER_ENGINE: docker
         run: ./scripts/validate-image.sh "${CONTROLLER_IMAGE}"
 
+      - name: Remove GHCR login and BuildKit builder
+        if: always()
+        run: ci/teardown-build-cache.sh
+
   worker-lifecycle:
     needs: worker-changes
     if: needs.worker-changes.outputs.required == 'true'
+    permissions:
+      contents: read
+      packages: write
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Prepare role-scoped GHCR build cache
+        env:
+          GHCR_CACHE_WRITE: ${{ github.event_name != 'pull_request' }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ci/setup-build-cache.sh worker
 
       - name: Enable KVM acceleration
         run: |
@@ -179,3 +201,7 @@ jobs:
           make vm-start-worker
           make vm-validate-worker
           make vm-update-rollback-worker
+
+      - name: Remove GHCR login and BuildKit builder
+        if: always()
+        run: ci/teardown-build-cache.sh

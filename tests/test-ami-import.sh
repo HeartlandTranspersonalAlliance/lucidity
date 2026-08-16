@@ -147,6 +147,9 @@ PATH="${repo_root}/tests/fixtures:${PATH}" \
     exit 1
 }
 grep -Fq "bootc switch '123456789012.dkr.ecr.us-east-2.amazonaws.com/lucidity/bootc/worker:sha-0123456789abcdef0123456789abcdef01234567'" "${switch_log}"
+switch_auth_json='{"auths":{"123456789012.dkr.ecr.us-east-2.amazonaws.com":{}},"credHelpers":{"123456789012.dkr.ecr.us-east-2.amazonaws.com":"ecr-login"}}'
+switch_auth_base64=$(printf '%s' "${switch_auth_json}" | base64 --wrap=0)
+grep -Fq "printf '%s' '${switch_auth_base64}' | base64 --decode > /run/ostree/auth.json" "${switch_log}"
 grep -Fq 'lucidity-bootc-switch-benchmark-reboot' "${switch_log}"
 grep -Fq 'ec2 terminate-instances' "${switch_log}"
 grep -Fq 'ec2 deregister-image' "${switch_log}"

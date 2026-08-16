@@ -9,6 +9,8 @@ required_files=(
     AGENTS.md
     ci/Containerfile
     ci/images.env
+    ci/setup-build-cache.sh
+    ci/teardown-build-cache.sh
     ci/worker-changes.sh
     .github/workflows/publish.yml
     .github/workflows/ami-switch-benchmark.yml
@@ -83,6 +85,21 @@ grep -Eq '^ACTIONLINT_IMAGE=.+@sha256:[0-9a-f]{64}$' ci/images.env
 grep -Eq '^REGISTRY_IMAGE=.+@sha256:[0-9a-f]{64}$' ci/images.env
 grep -Fq 'IMAGE_VERSION' scripts/build.sh
 grep -Fq 'benchmark-base|controller|worker' scripts/build.sh
+grep -Fq 'docker buildx build --load' scripts/build.sh
+# These are literal shell expressions in the implementation under test.
+# shellcheck disable=SC2016
+grep -Fq 'type=registry,ref=${BUILD_CACHE_FROM}' scripts/build.sh
+grep -Fq 'mode=max,image-manifest=true,oci-mediatypes=true' scripts/build.sh
+grep -Fq 'podman build --layers' scripts/build.sh
+grep -Fq -- '--cache-ttl 168h' scripts/build.sh
+# shellcheck disable=SC2016
+grep -Fq 'cache_repository=${GITHUB_REPOSITORY,,}-build-cache' ci/setup-build-cache.sh
+# shellcheck disable=SC2016
+grep -Fq 'docker login "${cache_registry}" --username "${GITHUB_ACTOR}" --password-stdin' ci/setup-build-cache.sh
+grep -Fq 'sudo podman login' ci/setup-build-cache.sh
+grep -Fq 'sudo skopeo list-tags' ci/setup-build-cache.sh
+grep -Fq 'BUILD_CACHE_TO=' ci/setup-build-cache.sh
+grep -Fq 'sudo podman logout' ci/teardown-build-cache.sh
 grep -Fq 'benchmark-base|controller|worker' scripts/validate-image.sh
 grep -Fq 'FROM common AS benchmark-base' Containerfile
 grep -Fq '/usr/lib/coolify-aws/image-version' Containerfile
@@ -115,6 +132,7 @@ grep -Fq 'aws ec2 run-instances' scripts/validate-ami-import.sh
 grep -Fq -- '--credit-specification CpuCredits=standard' scripts/validate-ami-import.sh
 grep -Fq 'HttpEndpoint=enabled,HttpTokens=required,HttpPutResponseHopLimit=2' scripts/validate-ami-import.sh
 grep -Fq 'aws ssm send-command' scripts/validate-ami-import.sh
+grep -Fq 'base64 --decode > /run/ostree/auth.json' scripts/validate-ami-import.sh
 # These are literal guest-shell snippets embedded in the jq command document.
 # shellcheck disable=SC2016
 grep -Fq 'test \"$(getenforce)\" = Enforcing' scripts/validate-ami-import.sh
@@ -166,8 +184,17 @@ if rg -n 'ec2:\$\{var\.aws_region\}:\$\{local\.account_id\}:(image|snapshot)/\*'
     exit 1
 fi
 grep -Fq 'allowed-account-ids: 467590374785' .github/workflows/ami.yml
+grep -Fq 'ci/setup-build-cache.sh worker' .github/workflows/ami.yml
+# This is a literal GitHub Actions expression.
+# shellcheck disable=SC2016
+grep -Fq "GHCR_CACHE_WRITE: \${{ github.event_name != 'pull_request' }}" .github/workflows/ami.yml
 grep -Fq "github.ref == 'refs/heads/main'" .github/workflows/publish.yml
 grep -Fq 'id-token: write' .github/workflows/publish.yml
+grep -Fq 'packages: write' .github/workflows/publish.yml
+grep -Fq 'max-parallel: 4' .github/workflows/publish.yml
+# This is a literal GitHub Actions expression.
+# shellcheck disable=SC2016
+grep -Fq 'ci/setup-build-cache.sh "${{ matrix.role }}"' .github/workflows/publish.yml
 # This is a literal GitHub Actions expression.
 # shellcheck disable=SC2016
 grep -Fq 'IMAGE_TAG: sha-${{ github.sha }}' .github/workflows/publish.yml
@@ -202,10 +229,13 @@ grep -Fq 'ami_lifecycle:' .github/workflows/ami.yml
 # This is a literal GitHub Actions expression.
 # shellcheck disable=SC2016
 grep -Fq 'AMI_LIFECYCLE: ${{ inputs.ami_lifecycle }}' .github/workflows/ami.yml
-grep -Fq "docker pull \"\${WORKER_IMAGE_REF}\"" .github/workflows/ami.yml
+grep -Fq "sudo podman pull \"\${WORKER_IMAGE_REF}\"" .github/workflows/ami.yml
 # This is a literal GitHub Actions shell expression.
 # shellcheck disable=SC2016
-grep -Fq 'CONTAINER_ENGINE=docker ./scripts/validate-image.sh "${WORKER_IMAGE_REF}"' .github/workflows/ami.yml
+grep -Fq 'sudo env CONTAINER_ENGINE=podman ./scripts/validate-image.sh "${WORKER_IMAGE_REF}"' .github/workflows/ami.yml
+grep -Fq 'sudo podman build' .github/workflows/ami.yml
+grep -Fq 'CONTAINER_ENGINE=docker' .github/workflows/ami.yml
+grep -Fq 'GHCR_CACHE_ENGINE: podman' .github/workflows/ami-switch-benchmark.yml
 grep -Fq 'AWS_ECR_WORKER_REPOSITORY_URL' .github/workflows/ami.yml
 grep -Fq "worker_image_ref=\"\${ECR_REPOSITORY_URL}:sha-\${GITHUB_SHA}\"" .github/workflows/ami.yml
 grep -Fq 'retained AMIs require the disposable EC2 launch gate' scripts/validate-ami-import.sh
@@ -214,6 +244,7 @@ grep -Fq 'completed_successfully=true' scripts/validate-ami-import.sh
 grep -Fq 'AMI_SWITCH_TARGET_REF' scripts/validate-ami-import.sh
 grep -Fq 'CENTOS_BOOTC_IMAGE: quay.io/centos-bootc/centos-bootc:stream10@sha256:' .github/workflows/ami-switch-benchmark.yml
 grep -Fq './scripts/build.sh benchmark-base' .github/workflows/ami-switch-benchmark.yml
+grep -Fq 'ci/setup-build-cache.sh benchmark-base' .github/workflows/ami-switch-benchmark.yml
 # These are literal workflow shell expressions.
 # shellcheck disable=SC2016
 grep -Fq 'image_without_tag=${WORKER_IMAGE_REF%:*}' .github/workflows/ami-switch-benchmark.yml
@@ -278,13 +309,14 @@ fi
 [[ $(printf '%s\n' README.md roles/worker/usr/example | ci/worker-changes.sh) == true ]]
 [[ $(printf '%s\n' .github/workflows/validate.yml | ci/worker-changes.sh) == true ]]
 unexpected_sudo=$(grep -R -n -E '(^|[[:space:]])sudo[[:space:]]' .github/workflows | \
-    grep -Ev 'sudo (tee /etc/udev/rules.d/99-kvm4all.rules|udevadm control --reload-rules|udevadm trigger --name-match=kvm)$' || true)
+    grep -Ev 'sudo (tee /etc/udev/rules.d/99-kvm4all.rules|udevadm control --reload-rules|udevadm trigger --name-match=kvm)$' | \
+    grep -Ev '^\.github/workflows/(ami|ami-switch-benchmark)\.yml:.*sudo (podman (system df|login|pull|image inspect|build|logout)|env (\\|CONTAINER_ENGINE=podman))' || true)
 if [[ -n ${unexpected_sudo} ]]; then
-    echo "GitHub Actions may use host sudo only for the documented KVM udev rule" >&2
+    echo "GitHub Actions may use host sudo only for KVM setup and the documented root-Podman osbuild path" >&2
     printf '%s\n' "${unexpected_sudo}" >&2
     exit 1
 fi
-[[ $(grep -R -h -E '(^|[[:space:]])sudo[[:space:]]' .github/workflows | wc -l) == 3 ]] || {
+[[ $(grep -R -h -E 'sudo (tee /etc/udev/rules.d/99-kvm4all.rules|udevadm control --reload-rules|udevadm trigger --name-match=kvm)$' .github/workflows | wc -l) == 3 ]] || {
     echo "the KVM setup must contain exactly three narrowly scoped sudo commands" >&2
     exit 1
 }

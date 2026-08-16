@@ -31,7 +31,39 @@ base_image=${BASE_IMAGE:-quay.io/almalinuxorg/almalinux-bootc:10}
 image_name=${IMAGE_NAME:-localhost/coolify-bootc-${role}:dev}
 image_version=${IMAGE_VERSION:-dev}
 
-exec "${engine}" build \
+build_command=("${engine}" build)
+if [[ -n ${BUILD_CACHE_FROM:-} || -n ${BUILD_CACHE_TO:-} ]]; then
+    case "${engine}" in
+        docker)
+            docker buildx version >/dev/null
+            build_command=(docker buildx build --load)
+            if [[ -n ${BUILDX_BUILDER_NAME:-} ]]; then
+                build_command+=(--builder "${BUILDX_BUILDER_NAME}")
+            fi
+            if [[ -n ${BUILD_CACHE_FROM:-} ]]; then
+                build_command+=(--cache-from "type=registry,ref=${BUILD_CACHE_FROM}")
+            fi
+            if [[ -n ${BUILD_CACHE_TO:-} ]]; then
+                build_command+=(--cache-to "type=registry,ref=${BUILD_CACHE_TO},mode=max,image-manifest=true,oci-mediatypes=true")
+            fi
+            ;;
+        podman)
+            build_command=(podman build --layers)
+            if [[ -n ${BUILD_CACHE_FROM:-} ]]; then
+                build_command+=(--cache-from "${BUILD_CACHE_FROM}" --cache-ttl 168h)
+            fi
+            if [[ -n ${BUILD_CACHE_TO:-} ]]; then
+                build_command+=(--cache-to "${BUILD_CACHE_TO}")
+            fi
+            ;;
+        *)
+            echo "registry build caching requires Docker or Podman" >&2
+            exit 2
+            ;;
+    esac
+fi
+
+exec "${build_command[@]}" \
     --pull \
     --platform "linux/${arch}" \
     --target "${role}" \
