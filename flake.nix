@@ -19,6 +19,7 @@
         in
         {
           coldsnap = pkgs.coldsnap;
+          syft = pkgs.syft;
         }
       );
 

@@ -36,6 +36,21 @@ on:
         required: true
         type: boolean
         default: false
+      release_version:
+        description: Optional immutable vX.Y.Z release associated with a retained AMI
+        required: false
+        type: string
+        default: ""
+      source_image_digest:
+        description: Optional immutable worker OCI digest associated with the release
+        required: false
+        type: string
+        default: ""
+      sbom_sha256:
+        description: Optional SHA-256 of the worker SPDX SBOM associated with the release
+        required: false
+        type: string
+        default: ""
 
 concurrency:
   group: ami-validation-${{ github.ref }}
@@ -68,13 +83,18 @@ jobs:
         env:
           AMI_LIFECYCLE: ${{ inputs.ami_lifecycle }}
           ECR_REPOSITORY_URL: ${{ vars.AWS_ECR_WORKER_REPOSITORY_URL }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
         run: |
           if [[ "${AMI_LIFECYCLE}" == retained ]]; then
             [[ "${ECR_REPOSITORY_URL}" =~ ^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[a-z0-9]+([._/-][a-z0-9]+)*$ ]] || {
               echo "AWS_ECR_WORKER_REPOSITORY_URL must be configured for retained AMIs" >&2
               exit 1
             }
-            worker_image_ref="${ECR_REPOSITORY_URL}:sha-${GITHUB_SHA}"
+            if [[ -n "${RELEASE_VERSION}" ]]; then
+              worker_image_ref="${ECR_REPOSITORY_URL}:${RELEASE_VERSION}"
+            else
+              worker_image_ref="${ECR_REPOSITORY_URL}:sha-${GITHUB_SHA}"
+            fi
           else
             worker_image_ref="${IMAGE}"
           fi
@@ -92,8 +112,24 @@ jobs:
 
       - name: Pull immutable ECR worker candidate
         if: github.event_name == 'workflow_dispatch' && inputs.ami_lifecycle == 'retained'
+        env:
+          SOURCE_IMAGE_DIGEST: ${{ inputs.source_image_digest }}
         run: |
           registry=${WORKER_IMAGE_REF%%/*}
+          image_without_tag=${WORKER_IMAGE_REF%:*}
+          repository_name=${image_without_tag#*/}
+          source_tag=${WORKER_IMAGE_REF##*:}
+          resolved_digest=$(aws ecr batch-get-image \
+            --region "${AWS_REGION}" \
+            --repository-name "${repository_name}" \
+            --image-ids "imageTag=${source_tag}" \
+            --query 'images[0].imageId.imageDigest' \
+            --output text)
+          [[ ${resolved_digest} =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "retained worker candidate did not resolve to an OCI digest" >&2; exit 1; }
+          if [[ -n "${SOURCE_IMAGE_DIGEST}" && "${resolved_digest}" != "${SOURCE_IMAGE_DIGEST}" ]]; then
+            echo "retained worker candidate digest does not match the release manifest input" >&2
+            exit 1
+          fi
           aws ecr get-login-password --region "${AWS_REGION}" | sudo podman login --username AWS --password-stdin "${registry}"
           sudo podman pull "${WORKER_IMAGE_REF}"
           sudo env CONTAINER_ENGINE=podman ./scripts/validate-image.sh "${WORKER_IMAGE_REF}"
@@ -170,6 +206,9 @@ jobs:
           IMPORT_ROLE_ARN: ${{ vars.AWS_AMI_IMPORT_ROLE_ARN }}
           SNAPSHOT_KMS_KEY_ARN: ${{ vars.AWS_AMI_SNAPSHOT_KMS_KEY_ARN }}
           ECR_WORKER_REPOSITORY_URL: ${{ vars.AWS_ECR_WORKER_REPOSITORY_URL }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          SOURCE_IMAGE_DIGEST: ${{ inputs.source_image_digest }}
+          SBOM_SHA256: ${{ inputs.sbom_sha256 }}
           TEST_INSTANCE_PROFILE: ${{ vars.AWS_AMI_TEST_INSTANCE_PROFILE_NAME }}
           TEST_SECURITY_GROUP: ${{ vars.AWS_AMI_TEST_SECURITY_GROUP_ID }}
           TEST_SUBNET: ${{ vars.AWS_AMI_TEST_SUBNET_ID }}
@@ -183,6 +222,12 @@ jobs:
             [[ "${RUN_AWS_LAUNCH}" == true ]] || { echo "retained AMI publication requires the disposable EC2 launch gate" >&2; exit 1; }
             [[ "${GITHUB_REF}" == refs/heads/main ]] || { echo "retained AMIs may be published only from main" >&2; exit 1; }
             test -n "${ECR_WORKER_REPOSITORY_URL}" || { echo "AWS_ECR_WORKER_REPOSITORY_URL is required for retained AMIs" >&2; exit 1; }
+          fi
+          if [[ -n "${RELEASE_VERSION}" || -n "${SOURCE_IMAGE_DIGEST}" || -n "${SBOM_SHA256}" ]]; then
+            [[ "${AMI_LIFECYCLE}" == retained ]] || { echo "release metadata is restricted to retained AMIs" >&2; exit 1; }
+            [[ "${RELEASE_VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "release_version must be v-prefixed SemVer" >&2; exit 1; }
+            [[ "${SOURCE_IMAGE_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "source_image_digest must be a lowercase OCI SHA-256 digest" >&2; exit 1; }
+            [[ "${SBOM_SHA256}" =~ ^[0-9a-f]{64}$ ]] || { echo "sbom_sha256 must be a lowercase SHA-256 digest" >&2; exit 1; }
           fi
           [[ "${RUN_AWS_VALIDATION}" == true ]] || exit 0
           test -n "${IMPORT_ROLE_ARN}" || { echo "AWS_AMI_IMPORT_ROLE_ARN repository variable is required" >&2; exit 1; }
@@ -219,7 +264,10 @@ jobs:
         env:
           AMI_EXPECTED_BOOTC_IMAGE_REF: ${{ env.WORKER_IMAGE_REF }}
           AMI_LIFECYCLE: ${{ inputs.ami_lifecycle }}
+          AMI_RELEASE_VERSION: ${{ inputs.release_version }}
           AMI_ROLE: worker
+          AMI_SBOM_SHA256: ${{ inputs.sbom_sha256 }}
+          AMI_SOURCE_IMAGE_DIGEST: ${{ inputs.source_image_digest }}
           AMI_SOURCE_REVISION: ${{ github.sha }}
           AMI_LAUNCH_VALIDATION: ${{ inputs.run_aws_launch }}
           AMI_SNAPSHOT_KMS_KEY_ARN: ${{ vars.AWS_AMI_SNAPSHOT_KMS_KEY_ARN }}

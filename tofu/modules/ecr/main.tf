@@ -30,24 +30,12 @@ resource "aws_ecr_lifecycle_policy" "bootc" {
     rules = [
       {
         rulePriority = 1
-        description  = "Expire untagged images"
+        description  = "Expire untagged images while retaining immutable release tags"
         selection = {
           tagStatus   = "untagged"
           countType   = "sinceImagePushed"
           countUnit   = "days"
           countNumber = var.expire_untagged_after_days
-        }
-        action = {
-          type = "expire"
-        }
-      },
-      {
-        rulePriority = 2
-        description  = "Retain a bounded bootc image history"
-        selection = {
-          tagStatus   = "any"
-          countType   = "imageCountMoreThan"
-          countNumber = var.retain_tagged_images
         }
         action = {
           type = "expire"

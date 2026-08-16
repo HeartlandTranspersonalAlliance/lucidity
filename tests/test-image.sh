@@ -5,6 +5,9 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "${repo_root}"
 
 required_files=(
+    VERSION
+    .github/syft.yaml
+    .github/workflows/release.yml
     Containerfile
     AGENTS.md
     ci/Containerfile
@@ -155,6 +158,11 @@ fi
 grep -Fq 'resource "aws_nat_gateway" "this"' tofu/modules/network/main.tf
 grep -Fq 'default     = false' tofu/modules/network/variables.tf
 grep -Fq 'image_tag_mutability = length(var.mutable_channel_tags) > 0 ? "IMMUTABLE_WITH_EXCLUSION" : "IMMUTABLE"' tofu/modules/ecr/main.tf
+grep -Fq 'Expire untagged images while retaining immutable release tags' tofu/modules/ecr/main.tf
+if grep -Fq 'tagStatus   = "any"' tofu/modules/ecr/main.tf; then
+    echo "ECR lifecycle policy must not expire immutable tagged releases" >&2
+    exit 1
+fi
 grep -Fq 'resource "aws_flow_log" "this"' tofu/modules/network/main.tf
 grep -Fq 'AmazonSSMManagedInstanceCore' tofu/modules/instance-management/main.tf
 grep -Fq 'resource "aws_iam_role_policy" "ecr_pull"' tofu/modules/instance-management/main.tf
@@ -237,7 +245,11 @@ grep -Fq 'sudo podman build' .github/workflows/ami.yml
 grep -Fq 'CONTAINER_ENGINE=docker' .github/workflows/ami.yml
 grep -Fq 'GHCR_CACHE_ENGINE: podman' .github/workflows/ami-switch-benchmark.yml
 grep -Fq 'AWS_ECR_WORKER_REPOSITORY_URL' .github/workflows/ami.yml
-grep -Fq "worker_image_ref=\"\${ECR_REPOSITORY_URL}:sha-\${GITHUB_SHA}\"" .github/workflows/ami.yml
+# These are literal workflow shell expressions.
+# shellcheck disable=SC2016
+grep -Fq 'worker_image_ref="${ECR_REPOSITORY_URL}:${RELEASE_VERSION}"' .github/workflows/ami.yml
+# shellcheck disable=SC2016
+grep -Fq 'worker_image_ref="${ECR_REPOSITORY_URL}:sha-${GITHUB_SHA}"' .github/workflows/ami.yml
 grep -Fq 'retained AMIs require the disposable EC2 launch gate' scripts/validate-ami-import.sh
 grep -Fq 'artifact_purpose=ami-release' scripts/validate-ami-import.sh
 grep -Fq 'completed_successfully=true' scripts/validate-ami-import.sh
@@ -262,6 +274,31 @@ grep -Fq './scripts/validate-image.sh "${BOOTSTRAP_IMAGE}"' .github/workflows/am
 grep -Fq 'AMI_SWITCH_TARGET_REF: ${{ env.WORKER_IMAGE_REF }}' .github/workflows/ami-switch-benchmark.yml
 grep -Fq 'nix build --no-link --print-out-paths .#coldsnap' .github/workflows/ami.yml
 grep -Fq 'coldsnap = pkgs.coldsnap;' flake.nix
+grep -Fq 'syft = pkgs.syft;' flake.nix
+grep -Fxq '0.1.0' VERSION
+grep -Fq 'name: Release bootc AMI' .github/workflows/release.yml
+grep -Fq 'gh workflow run publish.yml --ref main' .github/workflows/release.yml
+grep -Fq 'aws ecr put-image' .github/workflows/release.yml
+grep -Fq 'nix build .#syft --no-link --print-out-paths' .github/workflows/release.yml
+grep -Fq 'predicate-type: https://spdx.dev/Document/v2.3' .github/workflows/release.yml
+grep -Fq 'gh workflow run ami.yml --ref main' .github/workflows/release.yml
+# These are literal shell and GitHub Actions expressions in the workflows under test.
+# shellcheck disable=SC2016
+grep -Fq 'gh release create "${RELEASE_TAG}"' .github/workflows/release.yml
+# shellcheck disable=SC2016
+grep -Fq 'gh release edit "${RELEASE_TAG}" --draft=false' .github/workflows/release.yml
+# shellcheck disable=SC2016
+grep -Fq 'AMI_RELEASE_VERSION: ${{ inputs.release_version }}' .github/workflows/ami.yml
+# shellcheck disable=SC2016
+grep -Fq 'AMI_SOURCE_IMAGE_DIGEST: ${{ inputs.source_image_digest }}' .github/workflows/ami.yml
+# shellcheck disable=SC2016
+grep -Fq 'AMI_SBOM_SHA256: ${{ inputs.sbom_sha256 }}' .github/workflows/ami.yml
+grep -Fq 'Key=SourceImageDigest' scripts/validate-ami-import.sh
+grep -Fq 'Key=SbomSha256' scripts/validate-ami-import.sh
+if rg -n 'AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|secrets\.' .github/workflows/release.yml; then
+    echo "immutable releases must use GitHub OIDC without stored AWS credentials" >&2
+    exit 1
+fi
 if rg -n -i 'vmimport|vm import|import-snapshot|AMI_IMPORT_BUCKET|VMIMPORT_ROLE_NAME|snapshot_upload_mode' \
     .github/workflows/ami.yml scripts/validate-ami-import.sh tofu/modules/ami-import-validation; then
     echo "legacy VM Import must not remain in the EBS Direct AMI delivery path" >&2

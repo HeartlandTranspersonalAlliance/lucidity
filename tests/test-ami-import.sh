@@ -70,10 +70,13 @@ AWS_MOCK_LOG="${release_log}" \
 AWS_MOCK_SNAPSHOT_ID=snap-789abc \
 AWS_REGION=us-east-2 \
 AMI_LAUNCH_VALIDATION=true \
-AMI_EXPECTED_BOOTC_IMAGE_REF=123456789012.dkr.ecr.us-east-2.amazonaws.com/lucidity/bootc/worker:sha-0123456789abcdef0123456789abcdef01234567 \
+AMI_EXPECTED_BOOTC_IMAGE_REF=123456789012.dkr.ecr.us-east-2.amazonaws.com/lucidity/bootc/worker:v0.1.0 \
 AMI_LIFECYCLE=retained \
+AMI_RELEASE_VERSION=v0.1.0 \
 AMI_ROLE=worker \
+AMI_SBOM_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
 AMI_SNAPSHOT_KMS_KEY_ARN="${kms_key_arn}" \
+AMI_SOURCE_IMAGE_DIGEST=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
 AMI_SOURCE_REVISION=0123456789abcdef0123456789abcdef01234567 \
 AMI_TEST_INSTANCE_PROFILE_NAME=mock-worker-profile \
 AMI_TEST_INSTANCE_TYPE=t3a.small \
@@ -88,6 +91,9 @@ PATH="${repo_root}/tests/fixtures:${PATH}" \
 grep -Fq -- '--tag Key=Purpose,Value=ami-release' "${release_log}"
 grep -Fq -- '--tag Key=Role,Value=worker' "${release_log}"
 grep -Fq -- '--tag Key=SourceRevision,Value=0123456789abcdef0123456789abcdef01234567' "${release_log}"
+grep -Fq -- '--tag Key=ReleaseVersion,Value=v0.1.0' "${release_log}"
+grep -Fq -- '--tag Key=SourceImageDigest,Value=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' "${release_log}"
+grep -Fq -- '--tag Key=SbomSha256,Value=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' "${release_log}"
 grep -Fq 'ec2 terminate-instances' "${release_log}"
 grep -Fq 'ami_id=ami-test' "${release_output}"
 grep -Fq 'snapshot_id=snap-789abc' "${release_output}"
@@ -101,10 +107,13 @@ AWS_MOCK_LOG="${rerun_log}" \
 AWS_MOCK_SNAPSHOT_ID=snap-789abc \
 AWS_REGION=us-east-2 \
 AMI_LAUNCH_VALIDATION=true \
-AMI_EXPECTED_BOOTC_IMAGE_REF=123456789012.dkr.ecr.us-east-2.amazonaws.com/lucidity/bootc/worker:sha-0123456789abcdef0123456789abcdef01234567 \
+AMI_EXPECTED_BOOTC_IMAGE_REF=123456789012.dkr.ecr.us-east-2.amazonaws.com/lucidity/bootc/worker:v0.1.0 \
 AMI_LIFECYCLE=retained \
+AMI_RELEASE_VERSION=v0.1.0 \
 AMI_ROLE=worker \
+AMI_SBOM_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
 AMI_SNAPSHOT_KMS_KEY_ARN="${kms_key_arn}" \
+AMI_SOURCE_IMAGE_DIGEST=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
 AMI_SOURCE_REVISION=0123456789abcdef0123456789abcdef01234567 \
 AMI_TEST_INSTANCE_PROFILE_NAME=mock-worker-profile \
 AMI_TEST_INSTANCE_TYPE=t3a.small \
@@ -118,6 +127,7 @@ PATH="${repo_root}/tests/fixtures:${PATH}" \
 
 grep -Fq 'ec2 describe-images' "${rerun_log}"
 grep -Fq 'ec2 describe-snapshots' "${rerun_log}"
+grep -Fq 'ec2 create-tags' "${rerun_log}"
 grep -Fq 'ami_id=ami-abc123' "${rerun_output}"
 if grep -Eq '(^| )(coldsnap|ec2 register-image|ec2 run-instances|ec2 deregister-image|ec2 delete-snapshot)( |$)' "${rerun_log}"; then
     echo "an idempotent retained AMI rerun recreated or removed AWS resources" >&2
