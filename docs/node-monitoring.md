@@ -12,6 +12,12 @@ Each node receives three standard metric alarms:
 | `CPUUtilization` | at least 85 percent | 3 of 5 five-minute periods |
 | `CPUCreditBalance` | at most 20 credits | 2 of 3 five-minute periods |
 
+The launch templates use EC2 basic monitoring. Status-check metrics arrive every
+minute, while CPU utilization and CPU-credit metrics arrive every five minutes. Those
+intervals exactly match these alarms and provide the selected detection timing at the
+basic-monitoring price. The `ec2_detailed_monitoring_enabled` OpenTofu output makes the
+setting auditable for both roles.
+
 Missing data remains `INSUFFICIENT_DATA`; it does not manufacture a failure or a
 recovery event. Both `ALARM` and return-to-`OK` transitions publish to one encrypted
 SNS topic.

@@ -310,9 +310,11 @@ run "explicit_ami_launch_template_contract" {
     condition = (
       length(output.ec2_launch_template_ids) == 2 &&
       output.ec2_launch_template_latest_versions.controller == 1 &&
-      output.ec2_launch_template_latest_versions.worker == 1
+      output.ec2_launch_template_latest_versions.worker == 1 &&
+      output.ec2_detailed_monitoring_enabled.controller == false &&
+      output.ec2_detailed_monitoring_enabled.worker == false
     )
-    error_message = "Explicit retained AMIs must create one numerically versioned launch template per node role."
+    error_message = "Explicit retained AMIs must create one numerically versioned, basic-monitoring launch template per node role."
   }
 }
 

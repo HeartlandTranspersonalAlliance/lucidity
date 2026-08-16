@@ -202,7 +202,7 @@ available AMD64 UEFI HVM EBS images with ENA and IMDSv2 support.
 The templates use the proposal defaults: `t3a.small` with 40 GiB gp3 for the
 controller and `t3a.large` with 80 GiB gp3 for the worker. Root volumes are encrypted
 with the AMI snapshot KMS key and retained if an instance is terminated. CPU credits
-are standard, detailed monitoring is on,
+are standard, EC2 basic monitoring supplies the selected metrics,
 IMDSv2 is required with container-compatible hop limit 2, and no key pair, subnet,
 or public address is embedded. The controller user data contains only the root-only
 Secrets Manager reference file; the worker has none. Consumers must pin the numeric
@@ -259,6 +259,8 @@ restore times until a stronger failure model requires them. Follow
 
 Node monitoring uses six standard CloudWatch alarms, one SNS topic, and one dedicated
 customer-managed KMS key. It avoids a dashboard, custom metrics, and CloudWatch Agent.
+Basic monitoring supplies the status-check metric every minute and the CPU and credit
+metrics every five minutes, matching the configured alarm periods.
 The email subscription must be confirmed and tested after apply; see
 [`docs/node-monitoring.md`](../docs/node-monitoring.md). The KMS key and alarms are
 billed resources, so monitoring remains separately gated rather than appearing in the

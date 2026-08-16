@@ -53,6 +53,11 @@ output "ec2_launch_template_latest_versions" {
   value       = var.enable_ec2_launch_templates ? module.ec2_launch_templates[0].launch_template_latest_versions : {}
 }
 
+output "ec2_detailed_monitoring_enabled" {
+  description = "Paid EC2 detailed-monitoring setting keyed by node role. Basic monitoring remains available when false."
+  value       = var.enable_ec2_launch_templates ? module.ec2_launch_templates[0].detailed_monitoring_enabled : {}
+}
+
 output "ec2_root_volume_settings" {
   description = "Encrypted root-volume retention settings keyed by node role."
   value       = var.enable_ec2_launch_templates ? module.ec2_launch_templates[0].root_volume_settings : {}
