@@ -510,12 +510,16 @@ fi
 [[ $(printf '%s\n' tests/test-image.sh tests/test-ami-import.sh tests/fixtures/aws tests/fixtures/coldsnap | ci/worker-changes.sh) == false ]]
 [[ $(printf '%s\n' README.md roles/worker/usr/example | ci/worker-changes.sh) == true ]]
 [[ $(printf '%s\n' scripts/bootstrap-controller.sh tests/test-controller.sh | ci/worker-changes.sh) == false ]]
+[[ $(printf '%s\n' mk/quality.mk scripts/check-text-style.sh tests/test-text-style.sh | ci/worker-changes.sh) == false ]]
+[[ $(printf '%s\n' Makefile | ci/worker-changes.sh) == true ]]
 [[ $(printf '%s\n' .github/workflows/validate.yml | ci/worker-changes.sh) == true ]]
 [[ $(printf '%s\n' README.md tofu/environments/aws/main.tf roles/worker/usr/example | ci/controller-changes.sh) == false ]]
 [[ $(printf '%s\n' ci/controller-changes.sh ci/worker-changes.sh | ci/controller-changes.sh) == true ]]
 [[ $(printf '%s\n' tests/test-image.sh tests/test-ami-import.sh tests/fixtures/aws tests/fixtures/coldsnap | ci/controller-changes.sh) == false ]]
 [[ $(printf '%s\n' README.md roles/controller/usr/example | ci/controller-changes.sh) == true ]]
 [[ $(printf '%s\n' scripts/bootstrap-worker.sh tests/test-worker.sh | ci/controller-changes.sh) == false ]]
+[[ $(printf '%s\n' mk/quality.mk scripts/check-text-style.sh tests/test-text-style.sh | ci/controller-changes.sh) == false ]]
+[[ $(printf '%s\n' Makefile | ci/controller-changes.sh) == true ]]
 [[ $(printf '%s\n' .github/workflows/validate.yml | ci/controller-changes.sh) == true ]]
 grep -Fq 'merge_group:' .github/workflows/validate.yml
 # These are literal GitHub Actions expressions in the workflow under test.
