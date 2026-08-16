@@ -26,6 +26,7 @@ Responsibility is deliberately split:
 | Kernel, Docker, SSH, systemd, host utilities | bootc image built from Git | bootc deployments |
 | Docker images, volumes, and application data | Docker/Coolify | `/var/lib/docker` |
 | Coolify database, configuration, and generated keys | Coolify controller | `/data/coolify` bound to `/var/lib/coolify` |
+| Determinate Nix store and installer receipt | Determinate Nix Installer | `/nix` bound to `/var/lib/nix` |
 | Credentials and private keys | Runtime/AWS secret mechanisms | Never the Git repository or OS image |
 
 Coolify itself will remain containerized and retain its own update lifecycle. An OS build must not contain live Coolify state or make a Coolify application upgrade necessary.
@@ -35,7 +36,7 @@ Coolify itself will remain containerized and retain its own update lifecycle. An
 Implemented:
 
 - shared AlmaLinux 10 bootc base using Docker's official RHEL repository;
-- native `/nix` mountpoint present in both roles for a future Determinate Nix OSTree installation;
+- checksum-pinned Determinate Nix Installer using its native OSTree planner, persistent store, and SELinux policy on both roles;
 - targeted SELinux policy packages and an explicit enforcing configuration in both roles;
 - AWS Systems Manager Agent enabled in both roles for shell access without public SSH;
 - worker image target for both arm64 and amd64 base manifests;
@@ -206,11 +207,11 @@ IMAGE_NAME=example/coolify-bootc-worker:test \
 
 The `:10` base tag was verified as a multi-architecture index when this milestone was implemented. Because it is mutable, release builds should record and promote tested digests; production hosts must not blindly follow it or a `latest` application tag.
 
-## Determinate Nix roadmap
+## Determinate Nix
 
-Both images contain an empty native `/nix` directory. This follows the proven Purplefin bootc boundary: the immutable image supplies the mountpoint, while Determinate's installer owns the generated mount, daemon, socket, and SELinux-policy integration. The repository deliberately does not maintain a competing `nix.mount` unit.
+Both images contain a checksum-pinned Determinate Nix Installer v3.21.0. On first boot, `determinate-nix-install.service` runs its native [OSTree planner](https://github.com/DeterminateSystems/nix-installer/blob/v3.21.0/src/planner/ostree.rs) with `/var/lib/nix` as the explicit persistent path and anonymous installer diagnostics disabled. The image maps `/usr/local` to persistent `/var/usrlocal`, following the rpm-ostree machine-local layout required by Determinate Nixd. The installer owns the generated `/nix` bind mount, daemon, socket, receipt, and native SELinux policy; the image does not maintain a competing `nix.mount` unit.
 
-Nix installation is a post-AMI milestone for both controller and worker, not a prerequisite for the first AWS boot. Use a reviewed, version-pinned Determinate Nix Installer with its native [OSTree planner](https://github.com/DeterminateSystems/nix-installer/blob/main/src/planner/ostree.rs), an explicit persistent path such as `/var/lib/nix`, and its native SELinux policy action. Do not use the generic Linux planner or disable SELinux. Validation must prove `nix-daemon` works while `getenforce` reports `Enforcing`, and that the store survives reboot, bootc update, rollback, and instance replacement with the intended persistent volume attached.
+The controller and worker VM gates wait for the installer, require `nix-daemon` and enforcing SELinux, build a locked smoke flake, and retain its GC-rooted store result across bootc switch, update, and rollback. The root EBS volume contains `/var/lib/nix`, so the AWS restore drill validates the same store when it restores a replacement node. See the [Determinate Nix operations runbook](docs/determinate-nix.md) for verification, upgrades, failure recovery, and uninstall behavior.
 
 ## Build a bootable disk artifact
 
@@ -321,7 +322,8 @@ The local lifecycle test establishes the intended persistence boundary by:
 4. rolling back and rebooting;
 5. verifying the same data and enforcing SELinux state again. For the controller it
    also compares hashes of the generated environment and private key and requires the
-   same complete Compose service set after every deployment change.
+   same complete Compose service set after every deployment change. Both roles also
+   require the same GC-rooted Nix flake result after every deployment change.
 
 The registry permits HTTP only on the QEMU host gateway for this disposable test. Production images do not contain that exception and must use authenticated HTTPS ECR references.
 

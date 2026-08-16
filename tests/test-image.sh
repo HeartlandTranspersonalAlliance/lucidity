@@ -24,7 +24,11 @@ required_files=(
     roles/common/etc/ssh/sshd_config.d/40-coolify-aws.conf
     roles/common/usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-coolify-aws.conf
     roles/common/usr/lib/systemd/system/coolify-bootc-ecr-auth.service
+    roles/common/usr/lib/systemd/system/determinate-nix-install.service
     roles/common/usr/libexec/coolify-aws/configure-bootc-ecr-auth
+    roles/common/usr/libexec/coolify-aws/install-determinate-nix
+    nix/smoke/flake.nix
+    nix/smoke/flake.lock
     roles/controller/etc/coolify-controller/runtime-secrets.env.example
     roles/controller/usr/lib/systemd/system/aws-workload-credentials-provider-sm.service
     roles/controller/usr/lib/systemd/system/aws-workload-credentials-provider-token.service
@@ -108,6 +112,10 @@ grep -Fq 'ConditionPathExists=/etc/coolify-controller/runtime-secrets.env' roles
 grep -Fq 'enable bootc-fetch-apply-updates.timer' roles/common/usr/lib/systemd/system-preset/80-coolify-aws.preset
 grep -Fq 'OnCalendar=*-*-* 11:00:00 UTC' roles/common/usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-coolify-aws.conf
 grep -Fq 'install -d -m 0755 /nix' Containerfile
+grep -Fq 'NIX_INSTALLER_VERSION=3.21.0' Containerfile
+grep -Fq 'NIX_INSTALLER_COMMIT=9a5e37a9ad25e62337dda5be777007c70c470bfc' Containerfile
+grep -Fq 'NIX_INSTALLER_SHA256=b9911496659f0c35c642353d592926c024c205b597e8094bf73a42908a75e462' Containerfile
+grep -Fq 'NIX_INSTALLER_LICENSE_SHA256=36b6d3fa47916943fd5fec313c584784946047ec1337a78b440e5992cb595f89' Containerfile
 grep -Fq 'WCP_VERSION=3.1.1' Containerfile
 grep -Fq 'WCP_SOURCE_SHA256=71019369b95c028e09f6b6ed65cc0237b8ba8a4b86a8e5bce4c31f518f8c698e' Containerfile
 grep -Fq 'ASM_EXEC_COMMIT=957cf377ea1dffccf1f8a54ded2be8666b6db41c' Containerfile
@@ -127,10 +135,40 @@ if rg -n '=(plaintext|password|secret)$' roles/controller/etc/coolify-controller
 fi
 grep -Fxq 'SELINUX=enforcing' roles/common/etc/selinux/config
 grep -Fxq 'SELINUXTYPE=targeted' roles/common/etc/selinux/config
-if rg -n 'nix\.mount|nix-storage|/var/lib/nix' roles Containerfile; then
-    echo "Determinate's OSTree planner, not the bootc image, must own Nix mount units" >&2
+if find roles -type f -name 'nix.mount' -print -quit | grep -q .; then
+    echo "Determinate's OSTree planner, not the bootc image, must supply nix.mount" >&2
     exit 1
 fi
+grep -Fq 'install ostree' roles/common/usr/libexec/coolify-aws/install-determinate-nix
+grep -Fq -- '--persistence /var/lib/nix' roles/common/usr/libexec/coolify-aws/install-determinate-nix
+grep -Fq -- '--determinate' roles/common/usr/libexec/coolify-aws/install-determinate-nix
+grep -Fq -- '--diagnostic-endpoint ""' roles/common/usr/libexec/coolify-aws/install-determinate-nix
+grep -Fq 'ln -s ../var/usrlocal /usr/local' Containerfile
+grep -Fxq 'd /var/usrlocal 0755 root root -' roles/common/usr/lib/tmpfiles.d/coolify-aws.conf
+grep -Fxq 'd /var/usrlocal/bin 0755 root root -' roles/common/usr/lib/tmpfiles.d/coolify-aws.conf
+grep -Fq 'Recovering an interrupted Determinate Nix installation' roles/common/usr/libexec/coolify-aws/install-determinate-nix
+# This is a literal shell expression in the implementation under test.
+# shellcheck disable=SC2016
+grep -Fq '"${recovery_installer}" uninstall --no-confirm' roles/common/usr/libexec/coolify-aws/install-determinate-nix
+# This is a literal shell expression in the implementation under test.
+# shellcheck disable=SC2016
+grep -Fq '[[ $(getenforce) == Enforcing ]]' roles/common/usr/libexec/coolify-aws/install-determinate-nix
+if grep -Eq '^(After|Before)=.*cloud-final\.service' roles/common/usr/lib/systemd/system/determinate-nix-install.service; then
+    echo "Determinate Nix installation must not order against cloud-final.service" >&2
+    exit 1
+fi
+if grep -Eq '^Before=.*coolify-(controller|worker)' roles/common/usr/lib/systemd/system/determinate-nix-install.service; then
+    echo "Determinate Nix installation must not order the role boot services" >&2
+    exit 1
+fi
+grep -Fq 'Determinate Nix installation failed' scripts/vm-validate.sh
+grep -Fq '_AUDIT_TYPE_NAME=AVC' scripts/vm-validate.sh
+grep -Fq 'systemctl is-active --quiet nix-daemon.service' scripts/vm-validate.sh
+grep -Fq "stat -c '%d:%i' /var/lib/nix" scripts/vm-validate.sh
+grep -Fq '/var/lib/coolify-aws/nix-smoke-result' scripts/vm-validate-update.sh
+grep -Fq 'systemctl start determinate-nix-install.service' scripts/validate-deployment.sh
+grep -Fq 'systemctl is-active --quiet nix-daemon.service' scripts/validate-deployment.sh
+grep -Fq '/var/lib/coolify-aws/nix-smoke-result' scripts/validate-deployment.sh
 grep -Eq '^IMAGE_BUILDER_IMAGE=.+@sha256:[0-9a-f]{64}$' image/image-builder.env
 grep -Eq '^SHELLCHECK_IMAGE=.+@sha256:[0-9a-f]{64}$' ci/images.env
 grep -Eq '^ACTIONLINT_IMAGE=.+@sha256:[0-9a-f]{64}$' ci/images.env

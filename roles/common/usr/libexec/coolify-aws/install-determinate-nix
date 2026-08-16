@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+readonly installer=/usr/libexec/coolify-aws/nix-installer
+readonly receipt=/nix/receipt.json
+
+if [[ -e ${receipt} ]]; then
+    if [[ -x /nix/nix-installer &&
+        -x /usr/local/bin/determinate-nixd &&
+        -f /etc/systemd/system/nix.mount &&
+        -f /etc/systemd/system/nix-daemon.service ]]; then
+        systemctl daemon-reload
+        systemctl start nix.mount nix-daemon.socket nix-daemon.service
+        exit 0
+    fi
+
+    echo "Recovering an interrupted Determinate Nix installation" >&2
+    recovery_installer=${installer}
+    if [[ -x /nix/nix-installer ]]; then
+        recovery_installer=/nix/nix-installer
+    fi
+    "${recovery_installer}" uninstall --no-confirm
+fi
+
+[[ $(getenforce) == Enforcing ]] || {
+    echo "Determinate Nix installation requires SELinux enforcing mode" >&2
+    exit 1
+}
+
+exec "${installer}" install ostree \
+    --no-confirm \
+    --determinate \
+    --persistence /var/lib/nix \
+    --diagnostic-endpoint ""

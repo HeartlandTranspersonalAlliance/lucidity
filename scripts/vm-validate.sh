@@ -118,15 +118,49 @@ printf '%s' "${running}" | sha256sum | cut -d ' ' -f 1
 REMOTE
 }
 
+report_nix_install_failure() {
+    echo "Determinate Nix installation failed" >&2
+    "${admin_ssh[@]}" systemctl --no-pager --full status \
+        determinate-nix-install.service \
+        nix-directory.service \
+        nix.mount \
+        nix-daemon.socket \
+        nix-daemon.service >&2 || true
+    "${admin_ssh[@]}" journalctl --no-pager -n 300 \
+        -u determinate-nix-install.service \
+        -u nix-directory.service \
+        -u nix.mount \
+        -u nix-daemon.socket \
+        -u nix-daemon.service >&2 || true
+    "${admin_ssh[@]}" journalctl -b --no-pager -n 100 \
+        _AUDIT_TYPE_NAME=AVC >&2 || true
+}
+
 assert_common_host() {
     "${admin_ssh[@]}" bash -Eeuo pipefail -s <<'REMOTE'
 systemctl is-active --quiet docker.service
 systemctl is-active --quiet sshd.service
+systemctl is-active --quiet determinate-nix-install.service
+systemctl is-active --quiet nix-daemon.service
 systemctl is-enabled --quiet bootc-fetch-apply-updates.timer
 [[ $(getenforce) == Enforcing ]]
+mountpoint --quiet /nix
+[[ $(stat -c '%d:%i' /nix) == "$(stat -c '%d:%i' /var/lib/nix)" ]]
+[[ -s /nix/receipt.json ]]
 docker info --format '{{json .ServerVersion}}' >/dev/null
 docker compose version >/dev/null
 bootc status >/dev/null
+nix_bin=/nix/var/nix/profiles/default/bin/nix
+"${nix_bin}" --version
+"${nix_bin}" build \
+    --no-write-lock-file \
+    --out-link /var/lib/coolify-aws/nix-smoke-result \
+    /usr/share/coolify-aws/nix-smoke
+[[ $(</var/lib/coolify-aws/nix-smoke-result) == "Determinate Nix guest build passed" ]]
+if journalctl -b --no-pager | grep -Eiq 'avc:[[:space:]]+denied.*(/nix|nix-daemon)'; then
+    echo "SELinux denied Determinate Nix access" >&2
+    exit 1
+fi
 REMOTE
 }
 
@@ -167,16 +201,20 @@ if ! cloud_status=$("${admin_ssh[@]}" cloud-init status --wait); then
     exit 1
 fi
 printf '%s\n' "${cloud_status}"
+if ! "${admin_ssh[@]}" systemctl start determinate-nix-install.service; then
+    report_nix_install_failure
+    exit 1
+fi
 assert_common_host
 
 if [[ ${role} == worker ]]; then
     coolify_ssh=("${ssh_base[@]}" -i "${coolify_identity}" root@127.0.0.1)
     "${coolify_ssh[@]}" true
     "${admin_ssh[@]}" systemctl is-active --quiet coolify-worker-authorized-keys.service
-    echo "Worker VM initial validation passed: cloud-init, both SSH identities, Docker, Compose, bootc, SELinux, and unattended-update timer"
+    echo "Worker VM initial validation passed: cloud-init, SSH, Docker, bootc, Determinate Nix, SELinux, and unattended updates"
     exit 0
 fi
 
 wait_for_controller
 assert_controller
-echo "Controller VM initial validation passed: Coolify initialized with persistent storage and SELinux enforcing"
+echo "Controller VM initial validation passed: Coolify and Determinate Nix initialized with persistent storage and SELinux enforcing"
