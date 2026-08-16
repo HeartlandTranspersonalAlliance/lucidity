@@ -125,7 +125,7 @@ proposal.md                   full implementation plan and milestones
 GitHub Actions is the primary build and test environment. Every pull request runs the lightweight and infrastructure checks below. Role-impacting pull requests build and validate each affected controller or worker image and disk. The merge queue executes the complete guest lifecycle once for each affected role, while manual and weekly runs exercise both roles:
 
 1. OpenTofu formatting, validation, and mocked infrastructure tests in a pinned Nix environment;
-2. ShellCheck, static behavior tests, and actionlint;
+2. codespell, whole-tree whitespace checks, ShellCheck, static behavior tests, and actionlint;
 3. separate amd64 controller and worker OCI builds plus `bootc container lint`;
 4. controller image assertions for the native `/nix` mountpoint and enforcing SELinux configuration;
 5. a privileged worker QCOW2 conversion inside the pinned CI tooling container;
@@ -133,9 +133,9 @@ GitHub Actions is the primary build and test environment. Every pull request run
 7. on integration runs, UEFI controller and worker guest boots plus cloud-init, service, and SSH checks;
 8. registry switches, two-version bootc updates, and rollbacks through disposable guest-reachable registries, with the same persistent state verified after each reboot.
 
-The OpenTofu job installs Determinate Nix through a commit-pinned action. Image jobs install no packages onto the hosted runner. Lifecycle jobs use host `sudo` only for GitHub's documented udev rule granting access to the runner's existing `/dev/kvm` device. AMI jobs use narrowly scoped root Podman commands because osbuild consumes the bootc source through shared root container storage. A repository test rejects other workflow uses of `sudo`. KVM accelerates every VM test, while QEMU TCG remains the automatic fallback. Build artifacts stay within the ephemeral job and are not uploaded, avoiding persistent storage cost and accidental publication of disposable SSH identities.
+The OpenTofu job installs Determinate Nix through a commit-pinned action. The same pinned development environment supplies codespell, and repository lint checks spelling and whitespace across the complete tracked tree. Image jobs use the runner's supplied container tools. Lifecycle jobs use host `sudo` for GitHub's documented udev rule granting access to the runner's existing `/dev/kvm` device. AMI jobs use narrowly scoped root Podman commands because osbuild consumes the bootc source through shared root container storage. KVM accelerates every VM test, while QEMU TCG remains the automatic fallback. Build artifacts stay within the ephemeral job. A daily read-only AWS audit reports disposable validation instances, AMIs, or snapshots that remain tagged after 12 hours, covering runner termination cases where an EXIT trap cannot execute.
 
-For pull requests and merge groups, a lightweight `ubuntu-slim` job classifies changed paths before allocating the full VM runners. Documentation, OpenTofu, and role-exclusive changes skip unrelated image roles; unknown, shared, workflow, or classifier changes default to both. Each selected pull-request role builds and validates a QCOW2 but does not boot a duplicate guest. The required serial merge queue runs the affected role's initial boot, update, rollback, and persistence checks against the exact candidate merged with current `main`. A weekly Monday run and manual dispatch exercise both complete lifecycles to detect upstream image drift even when no relevant file changed. A second full run after the same candidate reaches `main` is intentionally omitted. Raw AMI compatibility runs on pull requests only when its workflow or the shared disk build and validation scripts change; general role image changes are already covered by QCOW2 validation and do not trigger a duplicate worker build. Validation consumes role-scoped GHCR caches read-only, while trusted publication runs refresh those caches with the minimum required token permissions.
+For pull requests and merge groups, a lightweight `ubuntu-slim` job classifies changed paths before allocating the full VM runners. Documentation, OpenTofu, and role-exclusive changes select only their relevant jobs; unknown, shared, workflow, or classifier changes select both roles. Each selected pull-request role builds and validates a QCOW2. The required serial merge queue runs the affected role's initial boot, update, rollback, and persistence checks against the exact candidate merged with current `main`. A weekly Monday run and manual dispatch exercise both complete lifecycles to detect upstream image drift. Raw AMI compatibility runs on pull requests when its workflow or the shared disk build and validation scripts change. Validation consumes role-scoped GHCR caches read-only, while trusted publication runs refresh those caches with the minimum required token permissions.
 
 Local commands remain available for development and diagnosis, but a successful local run is not a substitute for the required GitHub checks.
 
@@ -143,8 +143,8 @@ After relevant changes merge to `main`, **Publish bootc images** builds and vali
 the AMD64 controller and worker images, assumes the repository-scoped AWS role through
 GitHub OIDC, and publishes each image under an immutable `sha-<full-commit>` tag. It
 verifies the tag digest and remote `linux/amd64` manifest before succeeding. Pull
-requests receive no publishing credentials, and this candidate workflow never moves
-the mutable `stable` channel.
+requests use read-only validation permissions. Stable-channel promotion remains a
+separate post-validation operation.
 
 ## Immutable releases and SBOMs
 
@@ -154,8 +154,10 @@ commit intent since the previous release: a breaking-change marker selects major
 `feat:` selects minor, and other changes select patch. The dispatch also offers explicit
 patch, minor, and major overrides when commit history does not express the release impact.
 
-The release workflow reuses a successful publication for the exact source commit or
-dispatches one and waits for it. It never rebuilds during promotion. Two parallel jobs
+The release workflow calls candidate publication directly as a reusable job with the
+exact selected source commit. An existing immutable ECR tag makes this idempotent and
+keeps publication inside the release dependency graph with scoped OIDC permissions.
+Promotion reuses the tested manifest. Two parallel jobs
 copy each tested `sha-<commit>` manifest to its immutable `vX.Y.Z` ECR tag, scan the
 exact `repository@sha256:digest` with pinned Syft, produce SPDX JSON, and attest each
 SBOM against that digest. Each role's digest and uncompressed SBOM SHA-256 are passed

@@ -845,15 +845,27 @@ It should:
 
 Use pinned or major-version-controlled GitHub Actions rather than arbitrary untrusted actions.
 
+Repository lint should enforce spelling and whole-tree whitespace in addition to
+ShellCheck and actionlint. Keep those tools in the pinned development environment so
+local and hosted validation use the same versions.
+
 Affected roles must still build and validate their disk artifact on pull requests.
 Keep the real accelerated guest boot, sequential image switch, update, rollback, and
 persistence reboots as a path-scoped integration gate on merge-queue candidates. Run
 both complete lifecycles weekly and on explicit manual dispatches to catch upstream
-image drift. This avoids booting the same candidate twice without replacing guest
-validation with mocks or repeating it after the candidate reaches `main`.
+image drift. Pull requests prove image and disk construction, while the exact queued
+candidate provides the single authoritative guest lifecycle result.
 Run raw AMI compatibility on pull requests only when the AMI workflow or shared disk
 build and validation scripts change. General role image changes are already covered by
 QCOW2 validation and must not trigger a duplicate worker build.
+
+Release orchestration calls candidate publication as a reusable workflow with an
+explicit source commit. The direct dependency keeps publication status, permissions,
+and failure reporting inside one release graph.
+
+Cleanup traps handle normal cloud-test completion. A scheduled read-only audit covers
+runner termination by reporting old, tagged disposable instances, AMIs, and snapshots
+with their originating GitHub run for operator-reviewed cleanup.
 
 ---
 

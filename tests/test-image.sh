@@ -311,7 +311,11 @@ grep -Fq 'max-parallel: 4' .github/workflows/publish.yml
 grep -Fq 'ci/setup-build-cache.sh "${{ matrix.role }}"' .github/workflows/publish.yml
 # This is a literal GitHub Actions expression.
 # shellcheck disable=SC2016
-grep -Fq 'IMAGE_TAG: sha-${{ github.sha }}' .github/workflows/publish.yml
+grep -Fq 'workflow_call:' .github/workflows/publish.yml
+grep -Fq 'source_sha:' .github/workflows/publish.yml
+# This is a literal GitHub Actions expression.
+# shellcheck disable=SC2016
+grep -Fq 'IMAGE_TAG: sha-${{ inputs.source_sha || github.sha }}' .github/workflows/publish.yml
 grep -Fq 'allowed-account-ids: 467590374785' .github/workflows/publish.yml
 grep -Fq 'aws ecr get-login-password' .github/workflows/publish.yml
 grep -Fq 'aws ecr batch-get-image' .github/workflows/publish.yml
@@ -397,7 +401,23 @@ missing_release_tag_commit=$(git rev-parse --verify --quiet 'refs/tags/v999999.9
     echo "a missing release tag must resolve to an empty commit" >&2
     exit 1
 }
-grep -Fq 'gh workflow run publish.yml --ref main' .github/workflows/release.yml
+grep -Fq 'uses: ./.github/workflows/publish.yml' .github/workflows/release.yml
+# This is a literal GitHub Actions expression.
+# shellcheck disable=SC2016
+grep -Fq 'source_sha: ${{ needs.prepare.outputs.source_sha }}' .github/workflows/release.yml
+if rg -n 'gh workflow run publish.yml|gh run (list|watch).*publish.yml|actions: write' .github/workflows/release.yml; then
+    echo "release must call the immutable publication workflow directly without workflow-dispatch polling" >&2
+    exit 1
+fi
+grep -Fq 'cron: "41 7 * * *"' .github/workflows/audit-ami-resources.yml
+grep -Fq 'AMI_VALIDATION_MAX_AGE_HOURS: 12' .github/workflows/audit-ami-resources.yml
+# This is a literal GitHub Actions expression.
+# shellcheck disable=SC2016
+grep -Fq 'role-to-assume: ${{ vars.AWS_AMI_AUDIT_ROLE_ARN }}' .github/workflows/audit-ami-resources.yml
+if grep -Fq 'AWS_AMI_IMPORT_ROLE_ARN' .github/workflows/audit-ami-resources.yml; then
+    echo "scheduled AMI resource audits must not assume the mutation-capable import role" >&2
+    exit 1
+fi
 grep -Fq 'aws ecr put-image' .github/workflows/release.yml
 grep -Fq 'nix build .#syft --no-link --print-out-paths' .github/workflows/release.yml
 grep -Fq 'predicate-type: https://spdx.dev/Document/v2.3' .github/workflows/release.yml

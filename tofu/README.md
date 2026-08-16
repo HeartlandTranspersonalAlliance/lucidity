@@ -111,12 +111,17 @@ configure these non-secret GitHub repository variables from the OpenTofu outputs
 | GitHub variable | OpenTofu output |
 |---|---|
 | `AWS_AMI_IMPORT_ROLE_ARN` | `github_ami_validation_role_arn` |
+| `AWS_AMI_AUDIT_ROLE_ARN` | `github_ami_audit_role_arn` |
 | `AWS_AMI_SNAPSHOT_KMS_KEY_ARN` | `ami_snapshot_kms_key_arn` |
 | `AWS_AMI_TEST_SUBNET_ID` | `ami_test_subnet_id` |
 | `AWS_AMI_TEST_CONTROLLER_SECURITY_GROUP_ID` | `ami_test_security_group_ids["controller"]` |
 | `AWS_AMI_TEST_WORKER_SECURITY_GROUP_ID` | `ami_test_security_group_ids["worker"]` |
 | `AWS_AMI_TEST_CONTROLLER_INSTANCE_PROFILE_NAME` | `ami_test_instance_profile_names["controller"]` |
 | `AWS_AMI_TEST_WORKER_INSTANCE_PROFILE_NAME` | `ami_test_instance_profile_names["worker"]` |
+
+The audit role is separately least-privileged to the three EC2 describe operations
+used by `.github/workflows/audit-ami-resources.yml`. The daily workflow reports tagged
+disposable validation resources older than 12 hours for operator review.
 
 Then manually run **Validate AMI compatibility** with `run_aws_validation` enabled.
 The workflow resolves pinned `coldsnap 0.10.0` from `flake.lock` and

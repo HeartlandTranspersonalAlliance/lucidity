@@ -5,7 +5,7 @@ CONTROLLER_IMAGE ?= localhost/coolify-bootc-controller:dev
 TOFU_DIR ?= tofu/environments/aws
 TOFU_STATE_DIR ?= tofu/bootstrap/state
 
-.PHONY: build build-controller build-worker lint test validate validate-controller image-controller image-worker ami-controller ami-worker validate-disk-controller validate-disk-worker vm-init-controller vm-init-worker vm-start-controller vm-start-worker vm-validate-controller vm-validate-worker vm-registry-start-controller vm-registry-start-worker vm-update-rollback-controller vm-update-rollback-worker vm-registry-stop-controller vm-registry-stop-worker vm-stop-controller vm-stop-worker vm-clean-controller vm-clean-worker tofu-fmt tofu-fmt-check tofu-init tofu-validate tofu-test tofu-state-init tofu-state-validate tofu-state-test tofu-check clean
+.PHONY: build build-controller build-worker style lint test validate validate-controller image-controller image-worker ami-controller ami-worker validate-disk-controller validate-disk-worker vm-init-controller vm-init-worker vm-start-controller vm-start-worker vm-validate-controller vm-validate-worker vm-registry-start-controller vm-registry-start-worker vm-update-rollback-controller vm-update-rollback-worker vm-registry-stop-controller vm-registry-stop-worker vm-stop-controller vm-stop-worker vm-clean-controller vm-clean-worker tofu-fmt tofu-fmt-check tofu-init tofu-validate tofu-test tofu-state-init tofu-state-validate tofu-state-test tofu-check clean
 
 build: build-worker
 
@@ -15,13 +15,19 @@ build-controller:
 build-worker:
 	IMAGE_NAME=$(IMAGE) ./scripts/build.sh worker
 
-lint:
+style:
+	@command -v codespell >/dev/null || { echo "codespell is required" >&2; exit 1; }
+	git diff --check 4b825dc642cb6eb9a060e54bf8d69288fbee4904 HEAD
+	codespell
+
+lint: style
 	@command -v shellcheck >/dev/null || { echo "shellcheck is required" >&2; exit 1; }
 	shellcheck scripts/*.sh tests/*.sh
 
 test:
 	./tests/test-image.sh
 	./tests/test-ami-import.sh
+	./tests/test-ami-resource-audit.sh
 	./tests/test-controller.sh
 	./tests/test-worker.sh
 

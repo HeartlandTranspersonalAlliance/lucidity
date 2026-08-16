@@ -107,8 +107,11 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      - name: Install Determinate Nix
+        uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
+
       - name: Lint shell and test repository logic
-        run: make lint test
+        run: nix develop --command make lint test
 
       - name: Lint GitHub Actions workflows
         run: |

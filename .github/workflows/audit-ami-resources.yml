@@ -1,0 +1,37 @@
+name: Audit disposable AMI resources
+
+on:
+  schedule:
+    - cron: "41 7 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: audit-disposable-ami-resources
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  audit:
+    if: vars.AWS_AMI_AUDIT_ROLE_ARN != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Configure read-only audit credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          allowed-account-ids: 467590374785
+          aws-region: us-east-2
+          role-to-assume: ${{ vars.AWS_AMI_AUDIT_ROLE_ARN }}
+          role-duration-seconds: 900
+          role-session-name: lucidity-ami-audit-${{ github.run_id }}
+
+      - name: Reject leaked disposable validation resources
+        env:
+          AMI_VALIDATION_MAX_AGE_HOURS: 12
+          AWS_REGION: us-east-2
+        run: ./scripts/audit-ami-validation-resources.sh

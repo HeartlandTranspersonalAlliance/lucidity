@@ -258,6 +258,11 @@ output "github_ami_validation_role_arn" {
   value       = module.ami_import_validation.github_role_arn
 }
 
+output "github_ami_audit_role_arn" {
+  description = "Read-only GitHub Actions role ARN for the scheduled disposable AMI resource audit."
+  value       = module.ami_import_validation.github_audit_role_arn
+}
+
 output "github_ami_validation_subject" {
   description = "Exact GitHub OIDC subject allowed to run AMI snapshot validation."
   value       = module.ami_import_validation.github_subject
