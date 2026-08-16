@@ -15,14 +15,15 @@ publish and deploy lucidity bootc images:
 - a rotating AMI snapshot KMS key and EBS Direct API permissions for disposable validation and retained releases;
 - hardened, versioned EC2 launch templates gated on explicit self-owned controller and worker AMI IDs;
 - explicitly gated controller and worker EC2 instances with stable Elastic IPs and API termination protection;
+- explicitly gated daily, crash-consistent AWS Backup recovery points with governance-mode Vault Lock and dedicated backup and restore roles;
 - an account-level GitHub Actions OIDC provider, unless an existing provider ARN is supplied;
 - a repository-scoped IAM role that only trusts `main` for the immutable owner and repository IDs of `HeartlandTranspersonalAlliance/lucidity`;
 - least-privilege permissions to authenticate to ECR and push to these two repositories.
 
 It does not create EC2 instances, AMIs, state storage, or secret values by default. The
 GitHub workflow creates retained AMIs only after an explicit manual release dispatch.
-Networking, instance management, runtime secrets, launch templates, and production
-instances remain explicitly gated in that order.
+Networking, instance management, runtime secrets, launch templates, production
+instances, and their backup plan remain explicitly gated in that order.
 
 The initial compute contract is AMD64 with `t3a.small` for the controller and
 `t3a.large` for the worker. ARM64 remains configurable but deferred.
@@ -199,7 +200,8 @@ available AMD64 UEFI HVM EBS images with ENA and IMDSv2 support.
 
 The templates use the proposal defaults: `t3a.small` with 40 GiB gp3 for the
 controller and `t3a.large` with 80 GiB gp3 for the worker. Root volumes are encrypted
-with the AMI snapshot KMS key, CPU credits are standard, detailed monitoring is on,
+with the AMI snapshot KMS key and retained if an instance is terminated. CPU credits
+are standard, detailed monitoring is on,
 IMDSv2 is required with container-compatible hop limit 2, and no key pair, subnet,
 or public address is embedded. The controller user data contains only the root-only
 Secrets Manager reference file; the worker has none. Consumers must pin the numeric
@@ -222,6 +224,7 @@ enable_runtime_secrets      = true
 enable_instance_management  = true
 enable_ec2_launch_templates = true
 enable_ec2_instances        = true
+enable_node_backups          = true
 
 controller_ami_id = "ami-CONTROLLER"
 worker_ami_id     = "ami-WORKER"
@@ -237,9 +240,19 @@ traffic. There is no key pair or public TCP/22 ingress.
 
 Review the complete plan before apply. Direct EC2 API termination protection defaults
 to enabled, but OpenTofu can still propose replacement when an immutable instance
-argument changes. Back up mutable Coolify and Docker state before approving any
-replacement. A launch-template update alone does not affect a running instance until
-its pinned numeric version is deliberately changed in this deployment.
+argument changes. Root volumes are retained on termination, and the optional AWS
+Backup plan creates daily crash-consistent EC2 recovery points with 14-day retention.
+Do not approve replacement until a current `COMPLETED` recovery point is verified. A
+launch-template update alone does not affect a running instance until its pinned
+numeric version is deliberately changed in this deployment.
+
+AWS Backup stores only incremental changed blocks after the first EBS snapshot. The
+plan uses one backup-only service role and a separate restore role; only the latter
+can pass the two exact node runtime roles back to EC2. Governance-mode Vault Lock
+enforces retention between 7 and 365 days without making the configuration permanently
+immutable. Cross-Region copies and cold storage remain off to avoid cost and long
+restore times until a stronger failure model requires them. Follow
+[`docs/node-recovery.md`](../docs/node-recovery.md) for verification and drills.
 
 After apply, use `ec2_instance_ids` for Session Manager, `ec2_private_ips.worker` when
 registering the worker with Coolify, and `ec2_public_ips` for external DNS. Public IPv4

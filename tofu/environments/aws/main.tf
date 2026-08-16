@@ -138,3 +138,16 @@ module "ec2_nodes" {
   subnet_ids                    = local.ec2_node_subnet_ids
   tags                          = var.tags
 }
+
+module "node_backups" {
+  count  = var.enable_node_backups ? 1 : 0
+  source = "../../modules/node-backups"
+
+  environment        = var.environment
+  instance_arns      = module.ec2_nodes[0].instance_arns
+  instance_role_arns = module.instance_management[0].role_arns
+  kms_key_arn        = module.ami_import_validation.snapshot_kms_key_arn
+  project_name       = var.vpc_name
+  retention_days     = var.node_backup_retention_days
+  tags               = var.tags
+}

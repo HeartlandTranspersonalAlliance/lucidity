@@ -39,8 +39,21 @@ mock_provider "aws" {
   mock_resource "aws_instance" {
     defaults = {
       availability_zone = "us-east-2a"
+      arn               = "arn:aws:ec2:us-east-2:123456789012:instance/i-0123456789abcdef0"
       id                = "i-0123456789abcdef0"
       private_ip        = "10.20.0.10"
+    }
+  }
+
+  mock_resource "aws_backup_plan" {
+    defaults = {
+      id = "mock-node-backup-plan"
+    }
+  }
+
+  mock_resource "aws_backup_vault" {
+    defaults = {
+      arn = "arn:aws:backup:us-east-2:123456789012:backup-vault:lucidity-production-nodes"
     }
   }
 
@@ -159,7 +172,9 @@ run "default_registry_and_oidc_contract" {
       length(output.ec2_launch_template_ids) == 0 &&
       length(output.selected_ami_ids) == 0 &&
       length(output.ec2_instance_ids) == 0 &&
-      length(output.ec2_public_ips) == 0
+      length(output.ec2_public_ips) == 0 &&
+      output.node_backup_vault_arn == null &&
+      output.node_backup_plan_id == null
     )
     error_message = "Launch templates and production nodes must remain absent until retained AMI IDs and deployment are explicitly selected."
   }
@@ -177,7 +192,6 @@ run "default_registry_and_oidc_contract" {
     condition     = output.controller_runtime_secret_name == null
     error_message = "The initial image-pipeline bootstrap must not create billed runtime secrets before controller deployment."
   }
-
 
   assert {
     condition = (
@@ -322,6 +336,48 @@ run "production_ec2_nodes_contract" {
       output.ec2_instance_settings.controller.subnet_id == "subnet-0123456789abcdef0"
     )
     error_message = "Production nodes must suppress ephemeral public IPs, protect termination, stop on guest shutdown, and pin a numeric launch template version."
+  }
+
+
+  assert {
+    condition = (
+      output.ec2_root_volume_settings.controller.delete_on_termination == false &&
+      output.ec2_root_volume_settings.worker.delete_on_termination == false &&
+      output.ec2_root_volume_settings.controller.encrypted == true &&
+      output.ec2_root_volume_settings.worker.volume_type == "gp3"
+    )
+    error_message = "Production root volumes must be encrypted gp3 storage retained independently of instance termination."
+  }
+}
+
+run "production_node_backup_contract" {
+  command = plan
+
+  variables {
+    controller_ami_id           = "ami-01111111111111111"
+    enable_ec2_instances        = true
+    enable_ec2_launch_templates = true
+    enable_instance_management  = true
+    enable_network              = true
+    enable_node_backups         = true
+    enable_runtime_secrets      = true
+    worker_ami_id               = "ami-02222222222222222"
+  }
+
+  assert {
+    condition = (
+      output.node_backup_vault_arn == "arn:aws:backup:us-east-2:123456789012:backup-vault:lucidity-production-nodes" &&
+      output.node_backup_plan_id == "mock-node-backup-plan" &&
+      output.node_backup_retention_days == 14 &&
+      output.node_backup_service_role_arn == "arn:aws:iam::123456789012:role/lucidity-mock-role" &&
+      output.node_restore_service_role_arn == "arn:aws:iam::123456789012:role/lucidity-mock-role" &&
+      output.node_backup_settings.schedule == "cron(0 5 ? * * *)" &&
+      output.node_backup_settings.minimum_retention_days == 7 &&
+      output.node_backup_settings.maximum_retention_days == 365 &&
+      output.node_backup_settings.vault_lock_mode == "governance" &&
+      toset(output.node_backup_settings.protected_roles) == toset(["controller", "worker"])
+    )
+    error_message = "Enabled production backups must expose the protected vault, plan, backup-only role, and 14-day retention."
   }
 }
 

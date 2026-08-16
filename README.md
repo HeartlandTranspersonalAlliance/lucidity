@@ -358,7 +358,7 @@ df -h /var/lib/docker
 getenforce
 ```
 
-Automatic OS reboots are enabled for changed bootc images in the daily update window. Release promotion must still build, test, and publish a candidate before moving the tracked production reference. Exact recovery and rollback runbooks will be added after a two-version lifecycle test rather than guessed in advance.
+Automatic OS reboots are enabled for changed bootc images in the daily update window. Release promotion must still build, test, and publish a candidate before moving the tracked production reference. The two-version lifecycle is proven in hosted KVM. The [AWS node recovery runbook](docs/node-recovery.md) defines the backup boundary, isolated restore drill, retained-volume handling, and production cutover; its recovery-time objective remains unset until both AWS restore drills pass.
 
 ## AWS direction
 
@@ -386,7 +386,7 @@ Those services can be added later only when a concrete operational requirement j
 
 AMD64 is preferred for the first deployment and maximum third-party image compatibility. ARM64/Graviton remains a future optimization when every required application image is multi-architecture. Production x86 emulation on ARM is not enabled implicitly.
 
-The AWS foundation is implemented under [`tofu/`](tofu/README.md). Its first apply creates immutable scanned ECR repositories, branch-restricted GitHub identities, and disposable AMI snapshot validation resources. Networking, the empty encrypted controller secret, launch templates, and production instances are independently gated until retained AMIs are accepted and deployment begins. Pull-request artifact validation does not require AWS credentials. An authorized operator must perform the initial bootstrap apply, then manual snapshot validation can use OIDC without storing AWS access keys in GitHub.
+The AWS foundation is implemented under [`tofu/`](tofu/README.md). Its first apply creates immutable scanned ECR repositories, branch-restricted GitHub identities, and disposable AMI snapshot validation resources. Networking, the empty encrypted controller secret, launch templates, production instances, and daily node backups are independently gated until retained AMIs are accepted and deployment begins. Pull-request artifact validation does not require AWS credentials. An authorized operator must perform the initial bootstrap apply, then manual snapshot validation can use OIDC without storing AWS access keys in GitHub.
 
 See [proposal.md](proposal.md) for the complete staged implementation and acceptance criteria.
 

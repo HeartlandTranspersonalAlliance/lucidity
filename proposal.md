@@ -1577,6 +1577,14 @@ public addresses or SSH keys, receive stable Elastic IPs, and enable direct EC2 
 termination protection. Both default to the first selected public subnet to avoid
 unnecessary cross-AZ management traffic; placement remains explicitly configurable.
 
+Implemented behind `enable_node_backups`: both exact instance ARNs receive daily,
+crash-consistent AWS Backup recovery points with cost-conscious 14-day retention.
+Their encrypted root volumes survive instance termination, the vault uses governance-
+mode retention controls, and separate backup and restore roles keep normal backup
+permissions apart from restore permissions. The restore role can pass only the two
+node runtime roles to EC2. The recovery runbook requires isolated, timed controller
+and worker drills before assigning an AWS recovery-time objective.
+
 ---
 
 ## Milestone 10 — End-to-end AWS validation
@@ -1869,7 +1877,7 @@ The initial project is complete when all of the following are true:
 [ ] README explains initial deployment.
 [ ] README explains updates.
 [ ] README explains rollback.
-[ ] README explains recovery.
+[x] README explains recovery.
 ```
 
 After initialization, print a concise summary containing:

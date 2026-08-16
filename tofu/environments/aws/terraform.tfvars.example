@@ -8,6 +8,7 @@ enable_instance_management = false
 enable_ami_launch_validation = false
 enable_ec2_launch_templates  = false
 enable_ec2_instances         = false
+enable_node_backups          = false
 
 # After both roles have retained, boot-validated AMIs and the controller secret has
 # been populated out of band, enable networking, instance management, runtime secrets,
@@ -16,6 +17,7 @@ enable_ec2_instances         = false
 # worker_ami_id     = "ami-0fedcba9876543210"
 # enable_ec2_launch_templates = true
 # enable_ec2_instances        = true
+# enable_node_backups         = true
 
 # Both nodes default to the first selected public subnet to avoid cross-AZ traffic.
 # Override either index to spread nodes after accepting the availability and transfer trade-off.
@@ -27,6 +29,10 @@ ec2_node_availability_zone_indices = {
 # Direct API termination protection is enabled by default. OpenTofu changes can still
 # replace resources, so review every production plan and back up mutable state first.
 enable_ec2_termination_protection = true
+
+# AWS Backup stores crash-consistent recovery points for both nodes every day
+# at 05:00 UTC. The cost-conscious default retains 14 days of incremental changes.
+node_backup_retention_days = 14
 
 controller_root_volume_size_gib = 40
 worker_root_volume_size_gib     = 80

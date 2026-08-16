@@ -72,7 +72,7 @@ resource "aws_launch_template" "node" {
     device_name = "/dev/xvda"
 
     ebs {
-      delete_on_termination = true
+      delete_on_termination = false
       encrypted             = true
       kms_key_id            = var.root_volume_kms_key_arn
       volume_size           = var.root_volume_sizes[each.key]
