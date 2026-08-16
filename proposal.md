@@ -851,6 +851,11 @@ line endings, final newlines, and trimmed trailing whitespace consistently in ed
 local development, and hosted validation. Keep those tools in the pinned development
 environment so local and hosted validation use the same versions.
 
+Keep static quality targets in a dedicated included make fragment. The lifecycle path
+classifier should recognize that fragment and its focused checker fixtures as static-only,
+while treating the root Makefile and classifier implementation as shared lifecycle control
+surfaces.
+
 Affected roles must still build and validate their disk artifact on pull requests.
 Keep the real accelerated guest boot, sequential image switch, update, rollback, and
 persistence reboots as a path-scoped integration gate on merge-queue candidates. Run
