@@ -1292,7 +1292,10 @@ build artifacts
 AMI temporary files
 ```
 
-OpenTofu state may ultimately be migrated to a protected remote backend, but do not require that just to perform the first local build.
+Production OpenTofu state uses a separately bootstrapped account-regional S3 backend
+with encryption, versioning, TLS-only access, native conditional-write locking, ABAC,
+and private S3 server access logs. The state bootstrap begins locally because it must
+create its own backend, then migrates itself before the main AWS stack is applied.
 
 Use GitHub Actions OIDC instead of stored AWS access keys. Put CI-only values
 in GitHub Secrets, AWS-hosted runtime secrets in AWS Secrets Manager, and

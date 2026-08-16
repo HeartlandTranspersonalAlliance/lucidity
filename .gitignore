@@ -12,7 +12,10 @@
 *.tfstate.*
 *.tfvars
 !*.tfvars.example
+*.tfbackend
+!*.tfbackend.example
 .terraform/
+/tofu/bootstrap/state/backend.tf
 override.tf
 override.tf.json
 *_override.tf

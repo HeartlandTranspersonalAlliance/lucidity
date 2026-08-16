@@ -1,0 +1,15 @@
+# Copy this file to backend.s3.tfbackend and replace the account ID after applying
+# tofu/bootstrap/state. This file contains identifiers only, never credentials.
+bucket       = "lucidity-production-tofu-state-123456789012-us-east-2-an"
+key          = "lucidity/production/terraform.tfstate"
+region       = "us-east-2"
+encrypt      = true
+use_lockfile = true
+
+state_tags = {
+  "object:type" = "state"
+}
+
+lock_tags = {
+  "object:type" = "lock"
+}

@@ -1,0 +1,14 @@
+# Replace the account ID after the initial bootstrap apply. Identifiers only.
+bucket       = "lucidity-production-tofu-state-123456789012-us-east-2-an"
+key          = "lucidity/production/bootstrap.tfstate"
+region       = "us-east-2"
+encrypt      = true
+use_lockfile = true
+
+state_tags = {
+  "object:type" = "state"
+}
+
+lock_tags = {
+  "object:type" = "lock"
+}
