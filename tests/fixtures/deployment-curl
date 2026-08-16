@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+url=${!#}
+[[ ${url} == https://* ]]
+printf '%s\n' "${url}" >> "${MOCK_DEPLOYMENT_LOG:-/dev/null}"

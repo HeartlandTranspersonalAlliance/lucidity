@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+service=${1:-}
+operation=${2:-}
+shift 2
+
+scenario=${MOCK_DEPLOYMENT_SCENARIO:-healthy}
+log=${MOCK_DEPLOYMENT_LOG:-/dev/null}
+printf '%s %s %s\n' "${service}" "${operation}" "$*" >> "${log}"
+
+argument_value() {
+    local name=$1
+    shift
+    while (($# > 0)); do
+        if [[ $1 == "${name}" ]]; then
+            printf '%s\n' "$2"
+            return 0
+        fi
+        shift
+    done
+    return 1
+}
+
+case "${service} ${operation}" in
+    "ec2 describe-instances")
+        role=worker
+        [[ " $* " == *"Values=controller"* ]] && role=controller
+        if [[ ${role} == controller ]]; then
+            instance_id=i-01111111111111111
+            private_ip=10.20.0.10
+            volume_id=vol-01111111111111111
+        else
+            instance_id=i-02222222222222222
+            private_ip=10.20.0.20
+            volume_id=vol-02222222222222222
+        fi
+        instance=$(jq -nc \
+            --arg id "${instance_id}" \
+            --arg ip "${private_ip}" \
+            --arg volume "${volume_id}" \
+            '{InstanceId: $id, PrivateIpAddress: $ip, VpcId: "vpc-01111111111111111", Architecture: "x86_64", RootDeviceName: "/dev/xvda", State: {Name: "running"}, MetadataOptions: {HttpTokens: "required"}, BlockDeviceMappings: [{DeviceName: "/dev/xvda", Ebs: {VolumeId: $volume}}]}')
+        if [[ ${scenario} == duplicate-controller && ${role} == controller ]]; then
+            jq -nc --argjson instance "${instance}" '{Reservations: [{Instances: [$instance, $instance]}]}'
+        else
+            jq -nc --argjson instance "${instance}" '{Reservations: [{Instances: [$instance]}]}'
+        fi
+        ;;
+    "ec2 describe-volumes")
+        encrypted=true
+        [[ ${scenario} == unencrypted ]] && encrypted=false
+        jq -nc --argjson encrypted "${encrypted}" '{Volumes: [{Encrypted: $encrypted, State: "in-use"}]}'
+        ;;
+    "ssm describe-instance-information")
+        instance_id=$(argument_value --filters "$@")
+        instance_id=${instance_id##*Values=}
+        jq -nc --arg id "${instance_id}" '{InstanceInformationList: [{InstanceId: $id, PingStatus: "Online"}]}'
+        ;;
+    "ssm send-command")
+        comment=$(argument_value --comment "$@")
+        case "${comment}" in
+            *"controller host") command_id=11111111-1111-1111-1111-111111111111 ;;
+            *"worker host") command_id=22222222-2222-2222-2222-222222222222 ;;
+            *"controller services") command_id=33333333-3333-3333-3333-333333333333 ;;
+            *"read controller public key") command_id=44444444-4444-4444-4444-444444444444 ;;
+            *"enroll controller public key") command_id=55555555-5555-5555-5555-555555555555 ;;
+            *"worker enrollment") command_id=66666666-6666-6666-6666-666666666666 ;;
+            *"read worker SSH host key") command_id=77777777-7777-7777-7777-777777777777 ;;
+            *"controller to worker SSH") command_id=88888888-8888-8888-8888-888888888888 ;;
+            *) echo "unexpected SSM comment: ${comment}" >&2; exit 2 ;;
+        esac
+        printf '%s\n' "${command_id}"
+        ;;
+    "ssm get-command-invocation")
+        command_id=$(argument_value --command-id "$@")
+        status=Success
+        stdout=
+        stderr=
+        case "${command_id}" in
+            33333333-3333-3333-3333-333333333333)
+                if [[ ${scenario} == controller-failure ]]; then
+                    status=Failed
+                    stderr="controller service assertion failed"
+                fi
+                ;;
+            44444444-4444-4444-4444-444444444444)
+                stdout="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMockControllerPublicKey controller"
+                ;;
+            77777777-7777-7777-7777-777777777777)
+                stdout="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMockWorkerHostPublicKey root@worker"
+                ;;
+        esac
+        jq -nc \
+            --arg status "${status}" \
+            --arg stdout "${stdout}" \
+            --arg stderr "${stderr}" \
+            '{Status: $status, StandardOutputContent: $stdout, StandardErrorContent: $stderr}'
+        ;;
+    *)
+        echo "unexpected mock AWS operation: ${service} ${operation}" >&2
+        exit 2
+        ;;
+esac

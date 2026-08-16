@@ -1,0 +1,54 @@
+name: Validate production deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      enroll_worker:
+        description: Enroll the controller public key on the worker before validation
+        required: true
+        type: boolean
+        default: true
+      controller_url:
+        description: Optional public HTTPS URL for the Coolify controller
+        required: false
+        type: string
+        default: ""
+      worker_url:
+        description: Optional public HTTPS URL for a worker-hosted application
+        required: false
+        type: string
+        default: ""
+
+concurrency:
+  group: production-deployment-validation
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Configure deployment-validation credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          allowed-account-ids: 467590374785
+          aws-region: us-east-2
+          role-to-assume: ${{ vars.AWS_DEPLOYMENT_VALIDATION_ROLE_ARN }}
+          role-duration-seconds: 1800
+          role-session-name: lucidity-deployment-${{ github.run_id }}
+
+      - name: Enroll and validate production nodes
+        env:
+          AWS_REGION: us-east-2
+          DEPLOYMENT_CONTROLLER_URL: ${{ inputs.controller_url }}
+          DEPLOYMENT_ENROLL_WORKER: ${{ inputs.enroll_worker }}
+          DEPLOYMENT_ENVIRONMENT: production
+          DEPLOYMENT_PROJECT: lucidity
+          DEPLOYMENT_WORKER_URL: ${{ inputs.worker_url }}
+        run: ./scripts/validate-deployment.sh

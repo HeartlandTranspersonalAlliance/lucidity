@@ -17,6 +17,7 @@ required_files=(
     ci/controller-changes.sh
     ci/worker-changes.sh
     .github/workflows/publish.yml
+    .github/workflows/validate-deployment.yml
     .github/workflows/ami-switch-benchmark.yml
     roles/common/etc/docker/daemon.json
     roles/common/etc/selinux/config
@@ -40,6 +41,7 @@ required_files=(
     scripts/build-disk.sh
     scripts/validate-disk.sh
     scripts/validate-ami-import.sh
+    scripts/validate-deployment.sh
     scripts/validate-image.sh
     scripts/vm-init.sh
     scripts/vm-start.sh
@@ -48,6 +50,8 @@ required_files=(
     scripts/vm-validate-update.sh
     scripts/vm-stop.sh
     tests/fixtures/aws
+    tests/fixtures/aws-deployment-validation
+    tests/fixtures/deployment-curl
     tests/fixtures/bootc
     tests/fixtures/coldsnap
     tests/fixtures/controller-asm-exec
@@ -57,11 +61,16 @@ required_files=(
     tests/fixtures/controller-openssl
     tests/fixtures/controller-restorecon
     tests/test-ami-import.sh
+    tests/test-deployment-validation.sh
     image/image-builder.env
     tofu/modules/ami-import-validation/main.tf
     tofu/modules/ami-import-validation/outputs.tf
     tofu/modules/ami-import-validation/variables.tf
     tofu/modules/ami-import-validation/versions.tf
+    tofu/modules/deployment-validation/main.tf
+    tofu/modules/deployment-validation/outputs.tf
+    tofu/modules/deployment-validation/variables.tf
+    tofu/modules/deployment-validation/versions.tf
     tofu/modules/instance-management/main.tf
     tofu/modules/instance-management/outputs.tf
     tofu/modules/instance-management/variables.tf
@@ -486,6 +495,11 @@ grep -Fq 'cpu_credits = "standard"' tofu/modules/ec2-launch-templates/main.tf
 grep -Fq 'volume_type           = "gp3"' tofu/modules/ec2-launch-templates/main.tf
 grep -Fq 'update_default_version = false' tofu/modules/ec2-launch-templates/main.tf
 grep -Fq 'user_data = each.key == "controller" ? base64encode(local.controller_user_data) : null' tofu/modules/ec2-launch-templates/main.tf
+grep -Fq 'document/AWS-RunShellScript' tofu/modules/deployment-validation/main.tf
+grep -Fq 'variable = "ssm:resourceTag/Project"' tofu/modules/deployment-validation/main.tf
+grep -Fq 'variable = "ssm:resourceTag/Environment"' tofu/modules/deployment-validation/main.tf
+grep -Fq 'variable = "ssm:resourceTag/Role"' tofu/modules/deployment-validation/main.tf
+grep -Fq 'values   = ["controller", "worker"]' tofu/modules/deployment-validation/main.tf
 grep -Fq 'path        = "/etc/coolify-controller/runtime-secrets.env"' tofu/modules/ec2-launch-templates/main.tf
 grep -Fq 'permissions = "0600"' tofu/modules/ec2-launch-templates/main.tf
 # These are literal OpenTofu interpolation expressions.
@@ -511,6 +525,7 @@ fi
 [[ $(printf '%s\n' README.md roles/worker/usr/example | ci/worker-changes.sh) == true ]]
 [[ $(printf '%s\n' scripts/bootstrap-controller.sh tests/test-controller.sh | ci/worker-changes.sh) == false ]]
 [[ $(printf '%s\n' mk/quality.mk scripts/check-text-style.sh tests/test-text-style.sh | ci/worker-changes.sh) == false ]]
+[[ $(printf '%s\n' .github/workflows/validate-deployment.yml scripts/validate-deployment.sh tests/test-deployment-validation.sh tests/fixtures/aws-deployment-validation | ci/worker-changes.sh) == false ]]
 [[ $(printf '%s\n' Makefile | ci/worker-changes.sh) == true ]]
 [[ $(printf '%s\n' .github/workflows/validate.yml | ci/worker-changes.sh) == true ]]
 [[ $(printf '%s\n' README.md tofu/environments/aws/main.tf roles/worker/usr/example | ci/controller-changes.sh) == false ]]
@@ -519,6 +534,7 @@ fi
 [[ $(printf '%s\n' README.md roles/controller/usr/example | ci/controller-changes.sh) == true ]]
 [[ $(printf '%s\n' scripts/bootstrap-worker.sh tests/test-worker.sh | ci/controller-changes.sh) == false ]]
 [[ $(printf '%s\n' mk/quality.mk scripts/check-text-style.sh tests/test-text-style.sh | ci/controller-changes.sh) == false ]]
+[[ $(printf '%s\n' .github/workflows/validate-deployment.yml scripts/validate-deployment.sh tests/test-deployment-validation.sh tests/fixtures/aws-deployment-validation | ci/controller-changes.sh) == false ]]
 [[ $(printf '%s\n' Makefile | ci/controller-changes.sh) == true ]]
 [[ $(printf '%s\n' .github/workflows/validate.yml | ci/controller-changes.sh) == true ]]
 grep -Fq 'merge_group:' .github/workflows/validate.yml

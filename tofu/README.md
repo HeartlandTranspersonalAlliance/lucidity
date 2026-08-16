@@ -276,6 +276,31 @@ registering the worker with Coolify, and `ec2_public_ips` for external DNS. Publ
 addresses incur hourly AWS charges even when their instances are stopped; disable the
 deployment or release addresses only as part of an intentional teardown.
 
+Configure the non-secret repository variable
+`AWS_DEPLOYMENT_VALIDATION_ROLE_ARN` from
+`github_deployment_validation_role_arn`, then dispatch **Validate production
+deployment** from `main`. The dedicated OIDC role can discover EC2 and EBS metadata,
+inspect SSM health, and run only `AWS-RunShellScript` on instances tagged for this
+project, environment, and the controller or worker role. The workflow:
+
+1. requires exactly one running AMD64 controller and worker with IMDSv2-only metadata
+   and attached encrypted root volumes;
+2. waits for both SSM agents and validates cloud-init, Docker, SSH, bootc, SELinux,
+   and the unattended-update timer;
+3. validates the controller storage mount, bootstrap units, complete running Compose
+   service set, persistent key material, and relevant SELinux audit state;
+4. enrolls only the controller public key on the worker through its idempotent service;
+5. obtains the worker public SSH host key through SSM and uses it to prove the
+   controller-to-worker private SSH path with strict host-key checking; and
+6. probes the optional controller and worker application HTTPS URLs from the hosted
+   runner when supplied at dispatch.
+
+Keep `enroll_worker` enabled on the first run and after an intentional controller SSH
+identity rotation. Subsequent validation runs may disable enrollment to verify the
+existing worker state. A passing run completes the live Milestone 10 infrastructure
+and private-management checks; supply Cloudflare-backed HTTPS URLs to include the
+public application path.
+
 ## ECR candidate publication
 
 Configure these non-secret repository variables from the applied OpenTofu outputs:
@@ -285,6 +310,7 @@ Configure these non-secret repository variables from the applied OpenTofu output
 | `AWS_ECR_PUBLISH_ROLE_ARN` | `github_publish_role_arn` |
 | `AWS_ECR_CONTROLLER_REPOSITORY_URL` | `ecr_repository_urls["controller"]` |
 | `AWS_ECR_WORKER_REPOSITORY_URL` | `ecr_repository_urls["worker"]` |
+| `AWS_DEPLOYMENT_VALIDATION_ROLE_ARN` | `github_deployment_validation_role_arn` |
 
 `.github/workflows/publish.yml` runs only on `main`, assumes the branch-restricted
 publishing role through GitHub OIDC, and publishes validated AMD64 controller and
