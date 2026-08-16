@@ -74,7 +74,7 @@ variable "controller_instance_type" {
 variable "worker_instance_type" {
   description = "EC2 instance type used by the worker launch template."
   type        = string
-  default     = "t3a.large"
+  default     = "t3a.medium"
 }
 
 variable "enable_network" {
@@ -266,7 +266,7 @@ variable "enable_node_backups" {
 variable "node_backup_retention_days" {
   description = "Days each daily controller and worker recovery point remains available."
   type        = number
-  default     = 14
+  default     = 7
 
   validation {
     condition     = var.node_backup_retention_days >= 7 && var.node_backup_retention_days <= 365 && floor(var.node_backup_retention_days) == var.node_backup_retention_days
@@ -405,7 +405,18 @@ variable "application_outbound_tcp_ports" {
 variable "flow_log_retention_days" {
   description = "CloudWatch Logs retention for VPC Flow Logs."
   type        = number
-  default     = 90
+  default     = 30
+}
+
+variable "flow_log_traffic_type" {
+  description = "Traffic captured by VPC Flow Logs. REJECT retains denied-traffic evidence without billing for accepted application traffic."
+  type        = string
+  default     = "REJECT"
+
+  validation {
+    condition     = contains(["ACCEPT", "ALL", "REJECT"], var.flow_log_traffic_type)
+    error_message = "VPC Flow Logs traffic type must be ACCEPT, ALL, or REJECT."
+  }
 }
 
 variable "secret_recovery_window_in_days" {

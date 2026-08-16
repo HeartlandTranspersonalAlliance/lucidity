@@ -8,9 +8,9 @@ publish and deploy lucidity bootc images:
 - public and isolated private subnets, with AZ-local NAT Gateways available but disabled by default;
 - an Internet Gateway, AZ-local route tables, and VPC DNS support;
 - web, controller, application, and database security groups with no public management ingress;
-- VPC Flow Logs delivered to a 90-day CloudWatch Logs group;
-- one empty controller-runtime Secrets Manager secret encrypted by a dedicated rotating KMS key;
-- SSM-enabled controller and worker instance profiles, with the controller optionally restricted to that secret and KMS key;
+- rejected-traffic VPC Flow Logs delivered to a 30-day CloudWatch Logs group;
+- one empty controller-runtime Secrets Manager secret encrypted by the AWS managed `aws/secretsmanager` key;
+- SSM-enabled controller and worker instance profiles, with the controller optionally restricted to that secret;
 - immutable controller and worker ECR version tags, one controlled mutable `stable` channel, scan-on-push, and untagged-image cleanup that preserves releases;
 - a rotating AMI snapshot KMS key and EBS Direct API permissions for disposable validation and retained releases;
 - hardened, versioned EC2 launch templates gated on explicit self-owned controller and worker AMI IDs;
@@ -40,7 +40,7 @@ exceeds 100 percent. Credits and refunds do not reduce the monitored amount. It 
 Budget Action and cannot stop resources or change IAM policy.
 
 The initial compute contract is AMD64 with `t3a.small` for the controller and
-`t3a.large` for the worker. ARM64 remains configurable but deferred.
+`t3a.medium` for the worker. ARM64 remains configurable but deferred.
 
 The default `allowed_web_cidrs` value is `0.0.0.0/0` because application HTTP and
 HTTPS must be reachable from the internet. There is no administrator SSH security
@@ -78,9 +78,9 @@ through an out-of-band operator workflow after apply. Never put that value in HC
 tfvars, user data, an AMI, CI logs, or OpenTofu state.
 
 The controller launch template attaches `controller_instance_profile_name`.
-Its SSM-enabled role can describe and read only this secret and can decrypt only
-through Secrets Manager in the configured region. The worker uses
-`worker_instance_profile_name` and receives no secret permission. Each role can obtain
+Its SSM-enabled role can describe and read only this secret. The AWS managed key can
+be used only through Secrets Manager on behalf of authorized account principals. The
+worker uses `worker_instance_profile_name` and receives no secret permission. Each role can obtain
 an ECR authorization token and pull layers only from its matching private bootc
 repository; this supports the ephemeral bootc ECR credential helper without granting
 cross-role repository access. Runtime secret consumers must use the output pattern:
@@ -99,12 +99,10 @@ root-only file with the seven reference strings before `cloud-final.service` com
 it contains no resolved value. The worker template has no user data. Never put resolved
 values in user data.
 
-At the pricing reviewed during implementation, one secret plus one customer-managed
-KMS key costs about USD 1.40 per month before negligible API request charges. AWS KMS
-currently adds monthly charges after the first two automatic rotations, which can
-raise that baseline to about USD 2.40 and USD 3.40. Check the current
-[Secrets Manager pricing](https://aws.amazon.com/secrets-manager/pricing/) and
-[KMS pricing](https://aws.amazon.com/kms/pricing/) before apply.
+At the pricing reviewed during implementation, one secret costs about USD 0.40 per
+month before negligible API request charges. The AWS managed Secrets Manager KMS key
+has no monthly key-storage charge. Check the current [Secrets Manager
+pricing](https://aws.amazon.com/secrets-manager/pricing/) before apply.
 
 ## AMI compatibility validation
 
@@ -220,7 +218,7 @@ to those exact IDs, enable networking, instance management, and runtime secrets,
 available AMD64 UEFI HVM EBS images with ENA and IMDSv2 support.
 
 The templates use the proposal defaults: `t3a.small` with 40 GiB gp3 for the
-controller and `t3a.large` with 80 GiB gp3 for the worker. Root volumes are encrypted
+controller and `t3a.medium` with 80 GiB gp3 for the worker. Root volumes are encrypted
 with the AMI snapshot KMS key and retained if an instance is terminated. CPU credits
 are standard, EC2 basic monitoring supplies the selected metrics,
 IMDSv2 is required with container-compatible hop limit 2, and no key pair, subnet,
@@ -277,7 +275,7 @@ is a non-secret identifier and may be configured as a GitHub variable.
 Review the complete plan before apply. Direct EC2 API termination protection defaults
 to enabled, but OpenTofu can still propose replacement when an immutable instance
 argument changes. Root volumes are retained on termination, and the optional AWS
-Backup plan creates daily crash-consistent EC2 recovery points with 14-day retention.
+Backup plan creates daily crash-consistent EC2 recovery points with 7-day retention.
 Do not approve replacement until a current `COMPLETED` recovery point is verified. A
 launch-template update alone does not affect a running instance until its pinned
 numeric version is deliberately changed in this deployment.

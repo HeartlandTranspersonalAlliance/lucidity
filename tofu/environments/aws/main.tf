@@ -33,6 +33,7 @@ module "network" {
   enable_nat_gateways            = var.enable_nat_gateways
   environment                    = var.environment
   flow_log_retention_days        = var.flow_log_retention_days
+  flow_log_traffic_type          = var.flow_log_traffic_type
   tags                           = var.tags
   vpc_cidr                       = var.vpc_cidr
   vpc_name                       = var.vpc_name
@@ -42,7 +43,6 @@ module "runtime_secrets" {
   count  = var.enable_runtime_secrets ? 1 : 0
   source = "../../modules/runtime-secrets"
 
-  aws_region              = var.aws_region
   environment             = var.environment
   project_name            = var.vpc_name
   recovery_window_in_days = var.secret_recovery_window_in_days

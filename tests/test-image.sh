@@ -343,12 +343,15 @@ if rg -n '(^|[^[:alnum:]])(latest|stable)([^[:alnum:]]|$)' .github/workflows/pub
     exit 1
 fi
 grep -Fq 'resource "aws_secretsmanager_secret" "controller_runtime"' tofu/modules/runtime-secrets/main.tf
-grep -Fq 'enable_key_rotation     = true' tofu/modules/runtime-secrets/main.tf
-grep -Fq 'variable = "kms:ViaService"' tofu/modules/runtime-secrets/main.tf
+grep -Fq 'kms_key_id              = "alias/aws/secretsmanager"' tofu/modules/runtime-secrets/main.tf
+if rg -n 'resource "aws_kms_(key|alias)"' tofu/modules/runtime-secrets; then
+    echo "runtime secrets must use the AWS managed Secrets Manager key without a billed customer key" >&2
+    exit 1
+fi
 grep -Fq '{{resolve:secretsmanager:' tofu/modules/runtime-secrets/outputs.tf
 grep -Fq 'default     = "amd64"' tofu/environments/aws/variables.tf
 grep -Fq 'default     = "t3a.small"' tofu/environments/aws/variables.tf
-grep -Fq 'default     = "t3a.large"' tofu/environments/aws/variables.tf
+grep -Fq 'default     = "t3a.medium"' tofu/environments/aws/variables.tf
 grep -Fq 'enable_ami_launch_validation' tofu/environments/aws/variables.tf
 grep -Fq 'run_aws_launch:' .github/workflows/ami.yml
 grep -Fq 'run_aws_validation:' .github/workflows/ami.yml

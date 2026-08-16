@@ -327,7 +327,7 @@ resource "aws_flow_log" "this" {
   log_destination          = aws_cloudwatch_log_group.flow_logs.arn
   log_destination_type     = "cloud-watch-logs"
   max_aggregation_interval = 60
-  traffic_type             = "ALL"
+  traffic_type             = var.flow_log_traffic_type
   vpc_id                   = aws_vpc.this.id
 
   tags = merge(local.common_tags, { Name = "${var.vpc_name}-flow-log" })

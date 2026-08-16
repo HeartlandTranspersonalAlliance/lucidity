@@ -11,7 +11,7 @@ Coolify backup milestone.
 When `enable_node_backups=true`, OpenTofu configures:
 
 - a daily backup at 05:00 UTC;
-- 14-day retention by default;
+- 7-day retention by default;
 - exact selection of the controller and worker instance ARNs;
 - a customer-managed KMS key;
 - governance-mode Vault Lock with 7-to-365-day retention bounds;

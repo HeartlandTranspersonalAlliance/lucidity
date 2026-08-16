@@ -38,6 +38,8 @@ a complete IPv6 egress path.
 
 ## Current low-idle-cost choices
 
+- The AMD64 controller uses `t3a.small`; the worker starts at `t3a.medium` and moves
+  to `t3a.large` only when measured memory peaks require it.
 - T3a burstable instances use fixed-cost standard credits.
 - The controller and worker share one Availability Zone by default, keeping their
   private traffic free of cross-AZ data-transfer charges.
@@ -46,7 +48,10 @@ a complete IPv6 egress path.
   layers.
 - EC2 basic monitoring supplies the one-minute
   status checks and five-minute CPU and credit metrics used by the alarms.
-- AWS Backup keeps 14 daily incremental recovery points in warm regional storage.
+- VPC Flow Logs capture rejected traffic only and expire after 30 days.
+- AWS Backup keeps 7 daily incremental recovery points in warm regional storage.
+- The bundled runtime secret uses the AWS managed `aws/secretsmanager` KMS key, so it
+  does not create another customer-managed key with a monthly storage charge.
 - The optional account-wide AWS Budget alerts at 80 percent actual spend, 100 percent
   forecasted spend, and 100 percent actual spend without enabling automated actions.
 
@@ -59,6 +64,15 @@ Review instance memory, CPU credits, gp3 consumption, backup storage, CloudWatch
 and internet egress after the first month. Resize only from measured peaks: the Matrix
 database, media, bridge processes, application containers, and Coolify builds share the
 worker's memory and disk budget.
+
+Using the us-east-2 prices reviewed on 2026-08-16, the conservative two-node annual
+baseline is about USD 809.66: USD 494.06 for on-demand compute, USD 87.60 for two
+public IPv4 addresses, USD 115.20 for 120 GiB of gp3, USD 24.00 for the AMI and alarm
+customer-managed KMS keys, USD 4.80 for the runtime secret, and USD 84.00 for 140 GiB
+of snapshot storage. This leaves about USD 290.34 of the USD 1,100 gross annual budget
+for flow-log ingestion, incremental backup churn, ECR, S3 state, internet transfer,
+and growth. The budget intentionally excludes credits and refunds, while the expiring
+grant credits reduce the invoice separately.
 
 ## References
 
