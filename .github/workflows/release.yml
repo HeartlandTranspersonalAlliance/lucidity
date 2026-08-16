@@ -1,4 +1,4 @@
-name: Release bootc AMI
+name: Release bootc appliance
 
 on:
   workflow_dispatch:
@@ -333,15 +333,98 @@ jobs:
           REPOSITORY_URL: ${{ matrix.repository_url }}
         run: docker logout "${REPOSITORY_URL%%/*}"
 
-  release:
-    name: Validate AMI and publish immutable release
+  inventory:
+    name: Validate role release inventories
     needs:
       - prepare
       - images
     runs-on: ubuntu-24.04
-    timeout-minutes: 210
     permissions:
-      actions: write
+      contents: read
+    outputs:
+      controller_digest: ${{ steps.inventory.outputs.controller_digest }}
+      controller_sbom_sha256: ${{ steps.inventory.outputs.controller_sbom_sha256 }}
+      worker_digest: ${{ steps.inventory.outputs.worker_digest }}
+      worker_sbom_sha256: ${{ steps.inventory.outputs.worker_sbom_sha256 }}
+    steps:
+      - name: Download image inventories
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          merge-multiple: true
+          path: release
+          pattern: release-*
+
+      - name: Validate and expose role metadata
+        id: inventory
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          mapfile -t metadata_files < <(find release -maxdepth 1 -type f -name '*.metadata.json' -print | sort)
+          [[ ${#metadata_files[@]} -eq 2 ]] || { echo "expected controller and worker release inventories" >&2; exit 1; }
+          jq -s -e --arg release_tag "${RELEASE_TAG}" '
+            length == 2 and
+            ([.[].role] | sort == ["controller","worker"]) and
+            all(.[]; (.digest | test("^sha256:[0-9a-f]{64}$"))) and
+            all(.[]; (.sbom_sha256 | test("^[0-9a-f]{64}$"))) and
+            all(.[]; .release_tag == $release_tag)
+          ' "${metadata_files[@]}" >/dev/null
+          for role in controller worker; do
+            metadata=$(jq -c --arg role "${role}" 'select(.role == $role)' "${metadata_files[@]}")
+            {
+              echo "${role}_digest=$(jq -r .digest <<< "${metadata}")"
+              echo "${role}_sbom_sha256=$(jq -r .sbom_sha256 <<< "${metadata}")"
+            } >> "${GITHUB_OUTPUT}"
+          done
+
+  controller-ami:
+    name: Retain and validate controller AMI
+    needs:
+      - prepare
+      - inventory
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    uses: ./.github/workflows/ami.yml
+    with:
+      ami_role: controller
+      run_aws_validation: true
+      ami_lifecycle: retained
+      run_aws_launch: true
+      release_version: ${{ needs.prepare.outputs.tag }}
+      source_image_digest: ${{ needs.inventory.outputs.controller_digest }}
+      sbom_sha256: ${{ needs.inventory.outputs.controller_sbom_sha256 }}
+
+  worker-ami:
+    name: Retain and validate worker AMI
+    needs:
+      - prepare
+      - inventory
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    uses: ./.github/workflows/ami.yml
+    with:
+      ami_role: worker
+      run_aws_validation: true
+      ami_lifecycle: retained
+      run_aws_launch: true
+      release_version: ${{ needs.prepare.outputs.tag }}
+      source_image_digest: ${{ needs.inventory.outputs.worker_digest }}
+      sbom_sha256: ${{ needs.inventory.outputs.worker_sbom_sha256 }}
+
+  release:
+    name: Publish immutable release
+    needs:
+      - prepare
+      - images
+      - inventory
+      - controller-ami
+      - worker-ami
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
       contents: write
       id-token: write
     steps:
@@ -359,57 +442,6 @@ jobs:
           path: release
           pattern: release-*
 
-      - name: Validate inventories and dispatch retained AMI
-        id: ami
-        env:
-          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
-          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
-        run: |
-          mapfile -t metadata_files < <(find release -maxdepth 1 -type f -name '*.metadata.json' -print | sort)
-          [[ ${#metadata_files[@]} -eq 2 ]] || { echo "expected controller and worker release inventories" >&2; exit 1; }
-          jq -s -e --arg release_tag "${RELEASE_TAG}" '
-            length == 2 and
-            ([.[].role] | sort == ["controller","worker"]) and
-            all(.[]; (.digest | test("^sha256:[0-9a-f]{64}$"))) and
-            all(.[]; .release_tag == $release_tag)
-          ' "${metadata_files[@]}" >/dev/null
-          worker_metadata=$(jq -c 'select(.role == "worker")' "${metadata_files[@]}")
-          worker_digest=$(jq -r .digest <<< "${worker_metadata}")
-          worker_sbom_sha256=$(jq -r .sbom_sha256 <<< "${worker_metadata}")
-
-          remote_sha=$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)
-          [[ "${remote_sha}" == "${SOURCE_SHA}" ]] || { echo "main advanced before AMI validation; start a new release run" >&2; exit 1; }
-
-          previous_run_id=$(gh run list \
-            --workflow ami.yml \
-            --event workflow_dispatch \
-            --commit "${SOURCE_SHA}" \
-            --limit 1 \
-            --json databaseId \
-            --jq '.[0].databaseId // empty')
-          gh workflow run ami.yml --ref main \
-            -f run_aws_validation=true \
-            -f ami_lifecycle=retained \
-            -f run_aws_launch=true \
-            -f "release_version=${RELEASE_TAG}" \
-            -f "source_image_digest=${worker_digest}" \
-            -f "sbom_sha256=${worker_sbom_sha256}"
-          run_id=''
-          for _ in {1..24}; do
-            run_id=$(gh run list \
-              --workflow ami.yml \
-              --event workflow_dispatch \
-              --commit "${SOURCE_SHA}" \
-              --limit 5 \
-              --json databaseId \
-              --jq ".[] | select((.databaseId | tostring) != \"${previous_run_id}\") | .databaseId" | head -n 1)
-            [[ -z "${run_id}" ]] || break
-            sleep 5
-          done
-          [[ -n "${run_id}" ]] || { echo "could not locate the retained AMI run" >&2; exit 1; }
-          echo "run_id=${run_id}" >> "${GITHUB_OUTPUT}"
-          gh run watch "${run_id}" --exit-status
-
       - name: Configure short-lived AMI metadata credentials
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
@@ -421,56 +453,79 @@ jobs:
 
       - name: Create the release manifest
         env:
-          AMI_RUN_ID: ${{ steps.ami.outputs.run_id }}
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
         run: |
           images=$(jq -s 'sort_by(.role)' release/*.metadata.json)
-          worker_digest=$(jq -r '.[] | select(.role == "worker") | .digest' <<< "${images}")
-          worker_sbom_sha256=$(jq -r '.[] | select(.role == "worker") | .sbom_sha256' <<< "${images}")
-          ami_response=$(aws ec2 describe-images \
-            --region "${AWS_REGION}" \
-            --owners self \
-            --filters \
-              'Name=tag:Project,Values=lucidity' \
-              'Name=tag:Purpose,Values=ami-release' \
-              'Name=tag:Role,Values=worker' \
-              "Name=tag:SourceRevision,Values=${SOURCE_SHA}" \
-              "Name=tag:ReleaseVersion,Values=${RELEASE_TAG}" \
-              "Name=tag:SourceImageDigest,Values=${worker_digest}" \
-              "Name=tag:SbomSha256,Values=${worker_sbom_sha256}" \
-              'Name=tag:ReleaseStatus,Values=validated' \
-            --output json)
-          [[ $(jq '.Images | length' <<< "${ami_response}") -eq 1 ]] || { echo "expected exactly one validated retained release AMI" >&2; exit 1; }
-          ami_id=$(jq -r '.Images[0].ImageId' <<< "${ami_response}")
-          snapshot_id=$(jq -r '.Images[0].BlockDeviceMappings[0].Ebs.SnapshotId' <<< "${ami_response}")
-          [[ "${ami_id}" =~ ^ami-[0-9a-f]+$ && "${snapshot_id}" =~ ^snap-[0-9a-f]+$ ]]
-          snapshot_response=$(aws ec2 describe-snapshots \
-            --region "${AWS_REGION}" \
-            --snapshot-ids "${snapshot_id}" \
-            --output json)
-          [[ $(jq -r '.Snapshots[0].Encrypted' <<< "${snapshot_response}") == true ]]
-          snapshot_kms_key_arn=$(jq -r '.Snapshots[0].KmsKeyId // empty' <<< "${snapshot_response}")
-          snapshot_volume_size_gib=$(jq -r '.Snapshots[0].VolumeSize // empty' <<< "${snapshot_response}")
-          [[ "${snapshot_kms_key_arn}" =~ ^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/[0-9a-f-]+$ ]]
-          [[ "${snapshot_volume_size_gib}" =~ ^[1-9][0-9]*$ ]]
-          for expected_tag in \
-            "ReleaseVersion=${RELEASE_TAG}" \
-            "SourceImageDigest=${worker_digest}" \
-            "SbomSha256=${worker_sbom_sha256}" \
-            'ReleaseStatus=validated'; do
-            tag_key=${expected_tag%%=*}
-            tag_value=${expected_tag#*=}
-            jq -e --arg key "${tag_key}" --arg value "${tag_value}" \
-              'any(.Snapshots[0].Tags[]?; .Key == $key and .Value == $value)' \
-              <<< "${snapshot_response}" >/dev/null || { echo "retained snapshot is missing ${tag_key}=${tag_value}" >&2; exit 1; }
+          amis='{}'
+          for role in controller worker; do
+            image_digest=$(jq -r --arg role "${role}" '.[] | select(.role == $role) | .digest' <<< "${images}")
+            sbom_sha256=$(jq -r --arg role "${role}" '.[] | select(.role == $role) | .sbom_sha256' <<< "${images}")
+            ami_response=$(aws ec2 describe-images \
+              --region "${AWS_REGION}" \
+              --owners self \
+              --filters \
+                'Name=tag:Project,Values=lucidity' \
+                'Name=tag:Purpose,Values=ami-release' \
+                "Name=tag:Role,Values=${role}" \
+                "Name=tag:SourceRevision,Values=${SOURCE_SHA}" \
+                "Name=tag:ReleaseVersion,Values=${RELEASE_TAG}" \
+                "Name=tag:SourceImageDigest,Values=${image_digest}" \
+                "Name=tag:SbomSha256,Values=${sbom_sha256}" \
+                'Name=tag:ReleaseStatus,Values=validated' \
+              --output json)
+            [[ $(jq '.Images | length' <<< "${ami_response}") -eq 1 ]] || {
+              echo "expected exactly one validated retained ${role} release AMI" >&2
+              exit 1
+            }
+            ami_id=$(jq -r '.Images[0].ImageId' <<< "${ami_response}")
+            snapshot_id=$(jq -r '.Images[0].BlockDeviceMappings[0].Ebs.SnapshotId' <<< "${ami_response}")
+            [[ "${ami_id}" =~ ^ami-[0-9a-f]+$ && "${snapshot_id}" =~ ^snap-[0-9a-f]+$ ]]
+            snapshot_response=$(aws ec2 describe-snapshots \
+              --region "${AWS_REGION}" \
+              --snapshot-ids "${snapshot_id}" \
+              --output json)
+            [[ $(jq -r '.Snapshots[0].Encrypted' <<< "${snapshot_response}") == true ]]
+            snapshot_kms_key_arn=$(jq -r '.Snapshots[0].KmsKeyId // empty' <<< "${snapshot_response}")
+            snapshot_volume_size_gib=$(jq -r '.Snapshots[0].VolumeSize // empty' <<< "${snapshot_response}")
+            [[ "${snapshot_kms_key_arn}" =~ ^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/[0-9a-f-]+$ ]]
+            [[ "${snapshot_volume_size_gib}" =~ ^[1-9][0-9]*$ ]]
+            for expected_tag in \
+              "Role=${role}" \
+              "ReleaseVersion=${RELEASE_TAG}" \
+              "SourceImageDigest=${image_digest}" \
+              "SbomSha256=${sbom_sha256}" \
+              'ReleaseStatus=validated'; do
+              tag_key=${expected_tag%%=*}
+              tag_value=${expected_tag#*=}
+              jq -e --arg key "${tag_key}" --arg value "${tag_value}" \
+                'any(.Snapshots[0].Tags[]?; .Key == $key and .Value == $value)' \
+                <<< "${snapshot_response}" >/dev/null || {
+                  echo "retained ${role} snapshot is missing ${tag_key}=${tag_value}" >&2
+                  exit 1
+                }
+            done
+            ami_record=$(jq -n \
+              --arg ami_id "${ami_id}" \
+              --arg name "$(jq -r '.Images[0].Name // empty' <<< "${ami_response}")" \
+              --arg created_at "$(jq -r '.Images[0].CreationDate // empty' <<< "${ami_response}")" \
+              --arg snapshot_id "${snapshot_id}" \
+              --arg snapshot_kms_key_arn "${snapshot_kms_key_arn}" \
+              --argjson snapshot_volume_size_gib "${snapshot_volume_size_gib}" \
+              --arg source_image_digest "${image_digest}" \
+              --arg sbom_sha256 "${sbom_sha256}" \
+              --arg validation_run "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+              '{ami_id:$ami_id,name:$name,created_at:$created_at,snapshot_id:$snapshot_id,snapshot_kms_key_arn:$snapshot_kms_key_arn,snapshot_volume_size_gib:$snapshot_volume_size_gib,source_image_digest:$source_image_digest,sbom_sha256:$sbom_sha256,validation_run:$validation_run}')
+            amis=$(jq -cn \
+              --argjson current "${amis}" \
+              --arg role "${role}" \
+              --argjson record "${ami_record}" \
+              '$current + {($role):$record}')
           done
-          ami_name=$(jq -r '.Images[0].Name // empty' <<< "${ami_response}")
-          ami_created_at=$(jq -r '.Images[0].CreationDate // empty' <<< "${ami_response}")
           created_at=$(date --utc +%Y-%m-%dT%H:%M:%SZ)
           jq -n \
-            --argjson schema_version 1 \
+            --argjson schema_version 2 \
             --arg version "${RELEASE_VERSION}" \
             --arg tag "${RELEASE_TAG}" \
             --arg source_commit "${SOURCE_SHA}" \
@@ -478,17 +533,16 @@ jobs:
             --arg region "${AWS_REGION}" \
             --arg repository "${GITHUB_REPOSITORY}" \
             --arg release_run "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-            --arg ami_validation_run "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${AMI_RUN_ID}" \
-            --arg ami_id "${ami_id}" \
-            --arg ami_name "${ami_name}" \
-            --arg ami_created_at "${ami_created_at}" \
-            --arg snapshot_id "${snapshot_id}" \
-            --arg snapshot_kms_key_arn "${snapshot_kms_key_arn}" \
-            --argjson snapshot_volume_size_gib "${snapshot_volume_size_gib}" \
             --argjson images "${images}" \
-            '{schema_version:$schema_version,version:$version,tag:$tag,source_commit:$source_commit,created_at:$created_at,repository:$repository,release_run:$release_run,images:$images,aws:{region:$region,worker_ami:{ami_id:$ami_id,name:$ami_name,created_at:$ami_created_at,snapshot_id:$snapshot_id,snapshot_kms_key_arn:$snapshot_kms_key_arn,snapshot_volume_size_gib:$snapshot_volume_size_gib,validation_run:$ami_validation_run}}}' \
+            --argjson amis "${amis}" \
+            '{schema_version:$schema_version,version:$version,tag:$tag,source_commit:$source_commit,created_at:$created_at,repository:$repository,release_run:$release_run,images:$images,aws:{region:$region,amis:$amis}}' \
             > release/release-manifest.json
-          jq -e '.schema_version == 1 and (.images | length) == 2 and (.aws.worker_ami.ami_id | test("^ami-"))' release/release-manifest.json >/dev/null
+          jq -e '
+            .schema_version == 2 and
+            (.images | length) == 2 and
+            (.aws.amis | keys | sort == ["controller","worker"]) and
+            all(.aws.amis[]; (.ami_id | test("^ami-")) and (.snapshot_id | test("^snap-")))
+          ' release/release-manifest.json >/dev/null
           (
             cd release
             sha256sum release-manifest.json > release-manifest.json.sha256
@@ -523,5 +577,5 @@ jobs:
           {
             echo "## Immutable Lucidity release ${RELEASE_TAG}"
             echo
-            echo "Published tested ECR digests, SPDX SBOMs, checksums, and the retained EBS Direct AMI manifest without rebuilding the images."
+            echo "Published tested ECR digests, SPDX SBOMs, checksums, and both retained EBS Direct AMIs without rebuilding the images."
           } >> "${GITHUB_STEP_SUMMARY}"

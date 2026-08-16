@@ -3,11 +3,14 @@ data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
 
 locals {
-  account_id                             = data.aws_caller_identity.current.account_id
-  github_repository_parts                = split("/", var.github_repository)
-  github_subject                         = "repo:${local.github_repository_parts[0]}@${var.github_repository_owner_id}/${local.github_repository_parts[1]}@${var.github_repository_id}:ref:refs/heads/${var.github_branch}"
-  resource_prefix                        = "${var.project_name}-${var.environment}"
-  launch_validation_instance_profile_arn = var.launch_validation_instance_profile_name == null ? null : "arn:${data.aws_partition.current.partition}:iam::${local.account_id}:instance-profile/${var.launch_validation_instance_profile_name}"
+  account_id              = data.aws_caller_identity.current.account_id
+  github_repository_parts = split("/", var.github_repository)
+  github_subject          = "repo:${local.github_repository_parts[0]}@${var.github_repository_owner_id}/${local.github_repository_parts[1]}@${var.github_repository_id}:ref:refs/heads/${var.github_branch}"
+  resource_prefix         = "${var.project_name}-${var.environment}"
+  launch_validation_instance_profile_arns = toset([
+    for profile_name in var.launch_validation_instance_profile_names :
+    "arn:${data.aws_partition.current.partition}:iam::${local.account_id}:instance-profile/${profile_name}"
+  ])
   launch_validation_subnet_arns = toset([
     for subnet_id in var.launch_validation_subnet_ids :
     "arn:${data.aws_partition.current.partition}:ec2:${var.aws_region}:${local.account_id}:subnet/${subnet_id}"
@@ -76,10 +79,10 @@ resource "aws_iam_role" "github" {
       condition = !var.enable_launch_validation || (
         length(var.launch_validation_subnet_ids) > 0 &&
         length(var.launch_validation_security_group_ids) > 0 &&
-        var.launch_validation_instance_profile_name != null &&
-        var.launch_validation_role_arn != null
+        length(var.launch_validation_instance_profile_names) > 0 &&
+        length(var.launch_validation_role_arns) > 0
       )
-      error_message = "Launch validation requires at least one subnet and security group plus a worker instance profile and role."
+      error_message = "Launch validation requires at least one subnet and security group plus role-specific instance profiles and roles."
     }
   }
 }
@@ -269,7 +272,7 @@ data "aws_iam_policy_document" "github" {
       condition {
         test     = "StringEquals"
         variable = "ec2:InstanceProfile"
-        values   = [local.launch_validation_instance_profile_arn]
+        values   = tolist(local.launch_validation_instance_profile_arns)
       }
 
       condition {
@@ -399,7 +402,7 @@ data "aws_iam_policy_document" "github" {
       sid       = "PassValidationInstanceRole"
       effect    = "Allow"
       actions   = ["iam:PassRole"]
-      resources = [var.launch_validation_role_arn]
+      resources = var.launch_validation_role_arns
 
       condition {
         test     = "StringEquals"

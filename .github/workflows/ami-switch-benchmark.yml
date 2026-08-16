@@ -41,15 +41,15 @@ jobs:
         env:
           AMI_ROLE_ARN: ${{ vars.AWS_AMI_IMPORT_ROLE_ARN }}
           SNAPSHOT_KMS_KEY_ARN: ${{ vars.AWS_AMI_SNAPSHOT_KMS_KEY_ARN }}
-          TEST_INSTANCE_PROFILE: ${{ vars.AWS_AMI_TEST_INSTANCE_PROFILE_NAME }}
-          TEST_SECURITY_GROUP: ${{ vars.AWS_AMI_TEST_SECURITY_GROUP_ID }}
+          TEST_INSTANCE_PROFILE: ${{ vars.AWS_AMI_TEST_WORKER_INSTANCE_PROFILE_NAME }}
+          TEST_SECURITY_GROUP: ${{ vars.AWS_AMI_TEST_WORKER_SECURITY_GROUP_ID }}
           TEST_SUBNET: ${{ vars.AWS_AMI_TEST_SUBNET_ID }}
           WORKER_REPOSITORY_URL: ${{ vars.AWS_ECR_WORKER_REPOSITORY_URL }}
         run: |
           test -n "${AMI_ROLE_ARN}" || { echo "AWS_AMI_IMPORT_ROLE_ARN repository variable is required" >&2; exit 1; }
           test -n "${SNAPSHOT_KMS_KEY_ARN}" || { echo "AWS_AMI_SNAPSHOT_KMS_KEY_ARN repository variable is required" >&2; exit 1; }
-          test -n "${TEST_INSTANCE_PROFILE}" || { echo "AWS_AMI_TEST_INSTANCE_PROFILE_NAME repository variable is required" >&2; exit 1; }
-          test -n "${TEST_SECURITY_GROUP}" || { echo "AWS_AMI_TEST_SECURITY_GROUP_ID repository variable is required" >&2; exit 1; }
+          test -n "${TEST_INSTANCE_PROFILE}" || { echo "AWS_AMI_TEST_WORKER_INSTANCE_PROFILE_NAME repository variable is required" >&2; exit 1; }
+          test -n "${TEST_SECURITY_GROUP}" || { echo "AWS_AMI_TEST_WORKER_SECURITY_GROUP_ID repository variable is required" >&2; exit 1; }
           test -n "${TEST_SUBNET}" || { echo "AWS_AMI_TEST_SUBNET_ID repository variable is required" >&2; exit 1; }
           [[ "${WORKER_REPOSITORY_URL}" =~ ^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[a-z0-9]+([._/-][a-z0-9]+)*$ ]] || {
             echo "AWS_ECR_WORKER_REPOSITORY_URL must be a private commercial-region ECR repository" >&2
@@ -143,9 +143,9 @@ jobs:
           AMI_SNAPSHOT_KMS_KEY_ARN: ${{ vars.AWS_AMI_SNAPSHOT_KMS_KEY_ARN }}
           AMI_SOURCE_REVISION: ${{ env.TARGET_REVISION }}
           AMI_SWITCH_TARGET_REF: ${{ env.WORKER_IMAGE_REF }}
-          AMI_TEST_INSTANCE_PROFILE_NAME: ${{ vars.AWS_AMI_TEST_INSTANCE_PROFILE_NAME }}
+          AMI_TEST_INSTANCE_PROFILE_NAME: ${{ vars.AWS_AMI_TEST_WORKER_INSTANCE_PROFILE_NAME }}
           AMI_TEST_INSTANCE_TYPE: t3a.small
-          AMI_TEST_SECURITY_GROUP_ID: ${{ vars.AWS_AMI_TEST_SECURITY_GROUP_ID }}
+          AMI_TEST_SECURITY_GROUP_ID: ${{ vars.AWS_AMI_TEST_WORKER_SECURITY_GROUP_ID }}
           AMI_TEST_SUBNET_ID: ${{ vars.AWS_AMI_TEST_SUBNET_ID }}
         run: ./scripts/validate-ami-import.sh image-output/worker/lucidity-centos-bootstrap-ami.raw
 

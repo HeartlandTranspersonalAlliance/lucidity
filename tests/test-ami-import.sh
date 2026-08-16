@@ -18,9 +18,10 @@ touch "${artifact}" "${direct_log}" "${release_log}" "${release_output}" "${reru
 AWS_MOCK_LOG="${direct_log}" \
 AWS_MOCK_SNAPSHOT_ID=snap-123abc \
 AWS_REGION=us-east-2 \
+AMI_ROLE=controller \
 AMI_LAUNCH_VALIDATION=true \
 AMI_SNAPSHOT_KMS_KEY_ARN="${kms_key_arn}" \
-AMI_TEST_INSTANCE_PROFILE_NAME=mock-worker-profile \
+AMI_TEST_INSTANCE_PROFILE_NAME=mock-controller-profile \
 AMI_TEST_INSTANCE_TYPE=t3a.small \
 AMI_TEST_SECURITY_GROUP_ID=sg-test \
 AMI_TEST_SUBNET_ID=subnet-test \
@@ -39,6 +40,9 @@ grep -Fq -- '"VolumeSize":12' "${direct_log}"
 grep -Fq -- '--credit-specification CpuCredits=standard' "${direct_log}"
 grep -Fq 'HttpEndpoint=enabled,HttpTokens=required,HttpPutResponseHopLimit=2,InstanceMetadataTags=enabled' "${direct_log}"
 grep -Fq 'ssm send-command' "${direct_log}"
+grep -Fq 'coolify-controller-bootstrap.service' "${direct_log}"
+grep -Fq 'coolify-controller-storage.service' "${direct_log}"
+grep -Fq '/data/coolify/.controller-bootstrap-complete' "${direct_log}"
 grep -Fq 'ec2 terminate-instances' "${direct_log}"
 grep -Fq 'ec2 deregister-image' "${direct_log}"
 grep -Fq 'ec2 delete-snapshot' "${direct_log}"

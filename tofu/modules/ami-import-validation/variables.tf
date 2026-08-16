@@ -83,18 +83,16 @@ variable "launch_validation_security_group_ids" {
   default     = []
 }
 
-variable "launch_validation_instance_profile_name" {
-  description = "SSM-enabled worker instance profile attached to the disposable validation instance."
-  type        = string
-  default     = null
-  nullable    = true
+variable "launch_validation_instance_profile_names" {
+  description = "Role-specific SSM-enabled instance profiles that may be attached to disposable validation instances."
+  type        = set(string)
+  default     = []
 }
 
-variable "launch_validation_role_arn" {
-  description = "EC2 role ARN that GitHub may pass only to the disposable validation instance."
-  type        = string
-  default     = null
-  nullable    = true
+variable "launch_validation_role_arns" {
+  description = "Role-specific EC2 role ARNs that GitHub may pass only to disposable validation instances."
+  type        = set(string)
+  default     = []
 }
 
 variable "launch_validation_instance_type" {

@@ -1520,9 +1520,11 @@ verifies the AMI metadata, then deletes the AMI and snapshot. No S3 staging or l
 VM Import worker is retained.
 
 For production delivery, an explicit retained mode uses only EBS Direct and requires
-the launch gate. It retains the validated encrypted snapshot and immutable AMI, records
-the full source revision, and returns the exact AMI ID without changing any running
-instance. Launch-template inputs remain a separate reviewed deployment decision.
+the launch gate. The release runs controller and worker AMI gates in parallel, verifies
+the controller bootstrap before accepting that role, retains both validated encrypted
+snapshots and immutable AMIs, and records their exact IDs in the schema-v2 release
+manifest without changing any running instance. Launch-template inputs remain a
+separate reviewed deployment decision.
 
 Validate actual EC2 boot.
 

@@ -214,7 +214,9 @@ if grep -Fq 'aws ec2 import-image' scripts/validate-ami-import.sh; then
     exit 1
 fi
 grep -Fq 'trap cleanup EXIT' scripts/validate-ami-import.sh
-grep -Fq 'image-output/worker/coolify-worker-ami.raw' .github/workflows/ami.yml
+# This is a literal workflow shell expression.
+# shellcheck disable=SC2016
+grep -Fq 'AMI_ARTIFACT=image-output/${AMI_ROLE}/coolify-${AMI_ROLE}-ami.raw' .github/workflows/ami.yml
 if grep -Fq 'image-output/worker/coolify-worker-ami.ami' .github/workflows/ami.yml; then
     echo "AMI workflow must use the raw artifact emitted by build-disk.sh" >&2
     exit 1
@@ -256,7 +258,9 @@ if rg -n 'ec2:\$\{var\.aws_region\}:\$\{local\.account_id\}:(image|snapshot)/\*'
     exit 1
 fi
 grep -Fq 'allowed-account-ids: 467590374785' .github/workflows/ami.yml
-grep -Fq 'ci/setup-build-cache.sh worker' .github/workflows/ami.yml
+# This is a literal workflow shell expression.
+# shellcheck disable=SC2016
+grep -Fq 'ci/setup-build-cache.sh "${AMI_ROLE}"' .github/workflows/ami.yml
 # This is a literal GitHub Actions expression.
 # shellcheck disable=SC2016
 grep -Fq "GHCR_CACHE_WRITE: \${{ github.event_name != 'pull_request' }}" .github/workflows/ami.yml
@@ -298,26 +302,32 @@ grep -Fq 'enable_ami_launch_validation' tofu/environments/aws/variables.tf
 grep -Fq 'run_aws_launch:' .github/workflows/ami.yml
 grep -Fq 'run_aws_validation:' .github/workflows/ami.yml
 grep -Fq 'ami_lifecycle:' .github/workflows/ami.yml
+grep -Fq 'workflow_call:' .github/workflows/ami.yml
+grep -Fq 'ami_role:' .github/workflows/ami.yml
 # This is a literal GitHub Actions expression.
 # shellcheck disable=SC2016
-grep -Fq 'AMI_LIFECYCLE: ${{ inputs.ami_lifecycle }}' .github/workflows/ami.yml
-grep -Fq "sudo podman pull \"\${WORKER_IMAGE_REF}\"" .github/workflows/ami.yml
+grep -Fq "AMI_LIFECYCLE: \${{ inputs.ami_lifecycle || 'disposable' }}" .github/workflows/ami.yml
+# This is a literal workflow shell expression.
+# shellcheck disable=SC2016
+grep -Fq 'sudo podman pull "${IMAGE_REF}"' .github/workflows/ami.yml
 # This is a literal GitHub Actions shell expression.
 # shellcheck disable=SC2016
-grep -Fq 'sudo env CONTAINER_ENGINE=podman ./scripts/validate-image.sh "${WORKER_IMAGE_REF}"' .github/workflows/ami.yml
+grep -Fq 'sudo env CONTAINER_ENGINE=podman ./scripts/validate-image.sh "${IMAGE_REF}"' .github/workflows/ami.yml
 grep -Fq 'sudo podman build' .github/workflows/ami.yml
 grep -Fq 'CONTAINER_ENGINE=docker' .github/workflows/ami.yml
 grep -Fq 'GHCR_CACHE_ENGINE: podman' .github/workflows/ami-switch-benchmark.yml
+grep -Fq 'AWS_ECR_CONTROLLER_REPOSITORY_URL' .github/workflows/ami.yml
 grep -Fq 'AWS_ECR_WORKER_REPOSITORY_URL' .github/workflows/ami.yml
 # These are literal workflow shell expressions.
 # shellcheck disable=SC2016
-grep -Fq 'worker_image_ref="${ECR_REPOSITORY_URL}:${RELEASE_VERSION}"' .github/workflows/ami.yml
+grep -Fq 'image_ref="${ecr_repository_url}:${RELEASE_VERSION}"' .github/workflows/ami.yml
 # shellcheck disable=SC2016
-grep -Fq 'worker_image_ref="${ECR_REPOSITORY_URL}:sha-${GITHUB_SHA}"' .github/workflows/ami.yml
-grep -Fq 'retained AMIs require the disposable EC2 launch gate' scripts/validate-ami-import.sh
+grep -Fq 'image_ref="${ecr_repository_url}:sha-${GITHUB_SHA}"' .github/workflows/ami.yml
+grep -Fq 'retained AMIs require the EC2 launch gate' scripts/validate-ami-import.sh
 grep -Fq 'artifact_purpose=ami-release' scripts/validate-ami-import.sh
 grep -Fq 'completed_successfully=true' scripts/validate-ami-import.sh
 grep -Fq 'AMI_SWITCH_TARGET_REF' scripts/validate-ami-import.sh
+grep -Fq 'coolify-controller-bootstrap.service' scripts/validate-ami-import.sh
 grep -Fq 'CENTOS_BOOTC_IMAGE: quay.io/centos-bootc/centos-bootc:stream10@sha256:' .github/workflows/ami-switch-benchmark.yml
 grep -Fq './scripts/build.sh benchmark-base' .github/workflows/ami-switch-benchmark.yml
 grep -Fq 'ci/setup-build-cache.sh benchmark-base' .github/workflows/ami-switch-benchmark.yml
@@ -340,7 +350,7 @@ grep -Fq 'nix build --no-link --print-out-paths .#coldsnap' .github/workflows/am
 grep -Fq 'coldsnap = pkgs.coldsnap;' flake.nix
 grep -Fq 'syft = pkgs.syft;' flake.nix
 grep -Fxq '0.1.0' VERSION
-grep -Fq 'name: Release bootc AMI' .github/workflows/release.yml
+grep -Fq 'name: Release bootc appliance' .github/workflows/release.yml
 # This is a literal workflow shell variable.
 # shellcheck disable=SC2016
 grep -Fq 'git rev-parse --verify --quiet "refs/tags/${tag}^{commit}"' .github/workflows/release.yml
@@ -353,7 +363,14 @@ grep -Fq 'gh workflow run publish.yml --ref main' .github/workflows/release.yml
 grep -Fq 'aws ecr put-image' .github/workflows/release.yml
 grep -Fq 'nix build .#syft --no-link --print-out-paths' .github/workflows/release.yml
 grep -Fq 'predicate-type: https://spdx.dev/Document/v2.3' .github/workflows/release.yml
-grep -Fq 'gh workflow run ami.yml --ref main' .github/workflows/release.yml
+[[ $(grep -Fc 'uses: ./.github/workflows/ami.yml' .github/workflows/release.yml) -eq 2 ]]
+grep -Fq 'ami_role: controller' .github/workflows/release.yml
+grep -Fq 'ami_role: worker' .github/workflows/release.yml
+grep -Fq '.aws.amis | keys | sort == ["controller","worker"]' .github/workflows/release.yml
+if grep -Fq 'gh workflow run ami.yml' .github/workflows/release.yml; then
+    echo "the release must call the AMI workflow directly instead of dispatching and polling it" >&2
+    exit 1
+fi
 # These are literal shell and GitHub Actions expressions in the workflows under test.
 # shellcheck disable=SC2016
 grep -Fq 'gh release create "${RELEASE_TAG}"' .github/workflows/release.yml
