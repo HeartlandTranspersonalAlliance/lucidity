@@ -311,8 +311,9 @@ project, environment, and the controller or worker role. The workflow:
 
 1. requires exactly one running AMD64 controller and worker with IMDSv2-only metadata
    and attached encrypted root volumes;
-2. waits for both SSM agents and validates cloud-init, Docker, SSH, bootc, SELinux,
-   and the unattended-update timer;
+2. waits for both SSM agents and validates cloud-init, Docker, SSH, bootc,
+   Determinate Nix persistence and a locked flake build, SELinux, and the
+   unattended-update timer;
 3. validates the controller storage mount, bootstrap units, complete running Compose
    service set, persistent key material, and relevant SELinux audit state;
 4. enrolls only the controller public key on the worker through its idempotent service;

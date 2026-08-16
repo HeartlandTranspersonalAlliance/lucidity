@@ -145,6 +145,9 @@ report_assertion_failure() {
     bootc status --booted >&2 || true
     systemctl --no-pager --full status \
         docker.service \
+        determinate-nix-install.service \
+        nix-daemon.service \
+        nix.mount \
         coolify-controller-storage.service \
         coolify-controller-bootstrap.service \
         aws-workload-credentials-provider-sm.service >&2 || true
@@ -160,6 +163,8 @@ report_assertion_failure() {
     exit "${status}"
 }
 trap report_assertion_failure ERR
+assertion="wait for Determinate Nix installation"
+systemctl start determinate-nix-install.service
 [[ $(cat /usr/lib/coolify-aws/image-version) == "${expected_version}" ]]
 assertion="read the booted image reference"
 bootc status --booted --format json | grep -Fq "${expected_ref}"
@@ -167,6 +172,20 @@ assertion="verify SELinux enforcing mode"
 [[ $(getenforce) == Enforcing ]]
 assertion="verify Docker is active"
 systemctl is-active --quiet docker.service
+assertion="verify Determinate Nix installation is active"
+systemctl is-active --quiet determinate-nix-install.service
+assertion="verify the Nix daemon is active"
+systemctl is-active --quiet nix-daemon.service
+assertion="verify /nix is mounted from persistent storage"
+mountpoint --quiet /nix
+[[ $(stat -c '%d:%i' /nix) == "$(stat -c '%d:%i' /var/lib/nix)" ]]
+assertion="read the persistent Nix smoke build"
+[[ $(</var/lib/coolify-aws/nix-smoke-result) == "Determinate Nix guest build passed" ]]
+assertion="verify the deployment has no Nix SELinux denials"
+if journalctl -b --no-pager | grep -Eiq 'avc:[[:space:]]+denied.*(/nix|nix-daemon)'; then
+    echo "SELinux denied Determinate Nix access" >&2
+    exit 1
+fi
 
 if [[ ${role} == worker ]]; then
     assertion="read the persistent worker volume"
@@ -308,4 +327,4 @@ assert_deployment lifecycle-v1 "${v1_ref}" "${marker}" "${env_hash}" "${key_hash
 timer_masked=false
 trap - EXIT
 
-echo "${role^} VM update/rollback validation passed: v1 -> v2 -> v1 with persistent state and enforcing SELinux preserved"
+echo "${role^} VM update/rollback validation passed: v1 -> v2 -> v1 with Docker, Nix, role state, and enforcing SELinux preserved"

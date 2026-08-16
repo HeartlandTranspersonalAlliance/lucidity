@@ -147,14 +147,35 @@ validate_https_url() {
 common_command='
 set -Eeuo pipefail
 cloud-init status --wait >/dev/null
+if ! systemctl start determinate-nix-install.service; then
+    systemctl --no-pager --full status determinate-nix-install.service nix-directory.service nix.mount nix-daemon.socket nix-daemon.service >&2 || true
+    journalctl --no-pager -n 300 -u determinate-nix-install.service -u nix-directory.service -u nix.mount -u nix-daemon.socket -u nix-daemon.service >&2 || true
+    journalctl -b --no-pager -n 100 _AUDIT_TYPE_NAME=AVC >&2 || true
+    exit 1
+fi
 systemctl is-active --quiet amazon-ssm-agent.service
 systemctl is-active --quiet docker.service
 systemctl is-active --quiet sshd.service
+systemctl is-active --quiet determinate-nix-install.service
+systemctl is-active --quiet nix-daemon.service
 systemctl is-enabled --quiet bootc-fetch-apply-updates.timer
 [[ $(getenforce) == Enforcing ]]
+mountpoint --quiet /nix
+[[ $(stat -c "%d:%i" /nix) == "$(stat -c "%d:%i" /var/lib/nix)" ]]
+[[ -s /nix/receipt.json ]]
 docker info --format "{{json .ServerVersion}}" >/dev/null
 docker compose version >/dev/null
 bootc status >/dev/null
+nix_bin=/nix/var/nix/profiles/default/bin/nix
+"${nix_bin}" --version
+"${nix_bin}" build \
+    --no-write-lock-file \
+    --out-link /var/lib/coolify-aws/nix-smoke-result \
+    /usr/share/coolify-aws/nix-smoke
+[[ $(</var/lib/coolify-aws/nix-smoke-result) == "Determinate Nix guest build passed" ]]
+if journalctl -b --no-pager | grep -Eiq "avc:[[:space:]]+denied.*(/nix|nix-daemon)"; then
+    exit 1
+fi
 [[ $(curl --silent --output /dev/null --write-out "%{http_code}" http://169.254.169.254/latest/meta-data/) == 401 ]]
 '
 
@@ -274,7 +295,7 @@ if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then
     {
         echo "## Production deployment acceptance passed"
         echo
-        echo "- Controller and worker: running, encrypted, IMDSv2-only, SSM online"
+        echo "- Controller and worker: running, encrypted, IMDSv2-only, SSM online, persistent Nix healthy"
         echo "- Controller: Coolify storage and complete Compose service set healthy"
         echo "- Worker: controller public key enrolled and private SSH verified"
         [[ -z ${controller_url} ]] || echo "- Controller HTTPS endpoint healthy"

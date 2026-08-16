@@ -1,0 +1,18 @@
+[Unit]
+Description=Install Determinate Nix with the native OSTree planner
+Documentation=https://github.com/DeterminateSystems/nix-installer
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=15min
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/coolify-aws/install-determinate-nix
+RemainAfterExit=yes
+TimeoutStartSec=30min
+Restart=on-failure
+RestartSec=1min
+
+[Install]
+WantedBy=multi-user.target

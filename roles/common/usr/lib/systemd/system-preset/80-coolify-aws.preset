@@ -7,3 +7,4 @@ enable cloud-config.service
 enable cloud-final.service
 enable bootc-fetch-apply-updates.timer
 enable coolify-bootc-ecr-auth.service
+enable determinate-nix-install.service

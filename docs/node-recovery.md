@@ -76,8 +76,9 @@ running node during a drill.
    role-specific security groups. Do not associate either production Elastic IP.
 4. Wait for EC2 status checks and Systems Manager `Online` state.
 5. Through Session Manager, verify `bootc status`, `getenforce`, `docker info`, disk
-   mounts, and the expected persistent application data. For the controller, also
-   verify the Coolify Compose services and `/data/coolify` bind mount.
+   mounts, `nix-daemon.service`, the `/var/lib/nix` bind mount, and the expected
+   persistent application data. For the controller, also verify the Coolify Compose
+   services and `/data/coolify` bind mount.
 6. Record recovery-point ARN, start and completion times, restored instance ID,
    validation results, and any manual correction required.
 7. Terminate only the drill instance after collecting evidence. Confirm whether its

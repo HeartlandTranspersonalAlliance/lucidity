@@ -39,6 +39,10 @@ FROM ${BASE_IMAGE} AS common
 # Pinned for reproducible AMD64/T3a builds. Select the matching architecture
 # artifact explicitly when the deferred ARM64 milestone begins.
 ARG SSM_AGENT_RPM_URL=https://s3.us-east-2.amazonaws.com/amazon-ssm-us-east-2/3.3.5068.0/linux_amd64/amazon-ssm-agent.rpm
+ARG NIX_INSTALLER_VERSION=3.21.0
+ARG NIX_INSTALLER_COMMIT=9a5e37a9ad25e62337dda5be777007c70c470bfc
+ARG NIX_INSTALLER_SHA256=b9911496659f0c35c642353d592926c024c205b597e8094bf73a42908a75e462
+ARG NIX_INSTALLER_LICENSE_SHA256=36b6d3fa47916943fd5fec313c584784946047ec1337a78b440e5992cb595f89
 
 # Docker documents its RHEL repository as supporting RHEL 10 on amd64 and arm64.
 # The repository's GPG configuration remains enabled; packages are never installed
@@ -78,12 +82,29 @@ RUN dnf -y install dnf-plugins-core && \
 
 COPY roles/common/etc/ /etc/
 COPY roles/common/usr/ /usr/
+COPY nix/smoke/ /usr/share/coolify-aws/nix-smoke/
 COPY --from=ecr-credential-helper \
     /src/amazon-ecr-credential-helper-0.12.0/bin/local/docker-credential-ecr-login \
     /usr/bin/docker-credential-ecr-login
 
-RUN install -d -m 0755 /nix /usr/lib/coolify-aws && \
-    chmod 0755 /usr/libexec/coolify-aws/configure-bootc-ecr-auth && \
+# rpm-ostree normally maps /usr/local to persistent machine-local state in
+# /var. AlmaLinux's bootc base currently leaves it in the immutable /usr tree,
+# but Determinate Nixd is intentionally installed there on first boot.
+RUN rm -rf /usr/local && \
+    ln -s ../var/usrlocal /usr/local && \
+    install -d -m 0755 /nix /usr/lib/coolify-aws /usr/share/licenses/nix-installer && \
+    curl --fail --location --silent --show-error \
+        --output /usr/libexec/coolify-aws/nix-installer \
+        "https://github.com/DeterminateSystems/nix-installer/releases/download/v${NIX_INSTALLER_VERSION}/nix-installer-x86_64-linux" && \
+    echo "${NIX_INSTALLER_SHA256}  /usr/libexec/coolify-aws/nix-installer" | sha256sum --check --strict && \
+    curl --fail --location --silent --show-error \
+        --output /usr/share/licenses/nix-installer/LICENSE \
+        "https://raw.githubusercontent.com/DeterminateSystems/nix-installer/${NIX_INSTALLER_COMMIT}/LICENSE" && \
+    echo "${NIX_INSTALLER_LICENSE_SHA256}  /usr/share/licenses/nix-installer/LICENSE" | sha256sum --check --strict && \
+    chmod 0755 \
+        /usr/libexec/coolify-aws/configure-bootc-ecr-auth \
+        /usr/libexec/coolify-aws/install-determinate-nix \
+        /usr/libexec/coolify-aws/nix-installer && \
     systemctl enable \
         cloud-config.service \
         cloud-final.service \
@@ -91,6 +112,7 @@ RUN install -d -m 0755 /nix /usr/lib/coolify-aws && \
         cloud-init.service \
         bootc-fetch-apply-updates.timer \
         coolify-bootc-ecr-auth.service \
+        determinate-nix-install.service \
         docker.service \
         amazon-ssm-agent.service \
         sshd.service

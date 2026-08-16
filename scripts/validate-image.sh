@@ -28,9 +28,16 @@ esac
     rpm -q amazon-ssm-agent bootc rpm-ostree openssh-server container-selinux cloud-init NetworkManager policycoreutils selinux-policy-targeted
     systemctl is-enabled --quiet amazon-ssm-agent.service
     systemctl is-enabled --quiet coolify-bootc-ecr-auth.service
+    systemctl is-enabled --quiet determinate-nix-install.service
     grep -Eq "^SELINUX=enforcing$" /etc/selinux/config
     grep -Eq "^SELINUXTYPE=targeted$" /etc/selinux/config
     test -d /nix
+    test -x /usr/libexec/coolify-aws/install-determinate-nix
+    test -x /usr/libexec/coolify-aws/nix-installer
+    test -s /usr/share/licenses/nix-installer/LICENSE
+    test -s /usr/share/coolify-aws/nix-smoke/flake.nix
+    test -s /usr/share/coolify-aws/nix-smoke/flake.lock
+    systemd-analyze verify /usr/lib/systemd/system/determinate-nix-install.service
     jq -e '\''.["data-root"] == "/var/lib/docker"'\'' /etc/docker/daemon.json >/dev/null
     ssh-keygen -A
     sshd -t
