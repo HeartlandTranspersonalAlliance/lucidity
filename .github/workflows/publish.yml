@@ -12,6 +12,12 @@ on:
       - roles/**
       - scripts/build.sh
       - scripts/validate-image.sh
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Exact main-branch commit whose immutable candidates must be published
+        required: true
+        type: string
   workflow_dispatch:
 
 concurrency:
@@ -25,7 +31,7 @@ permissions:
 
 env:
   AWS_REGION: us-east-2
-  IMAGE_TAG: sha-${{ github.sha }}
+  IMAGE_TAG: sha-${{ inputs.source_sha || github.sha }}
 
 jobs:
   publish:
@@ -43,6 +49,8 @@ jobs:
             repository_url: ${{ vars.AWS_ECR_WORKER_REPOSITORY_URL }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
 
       - name: Require configured ECR identifiers
         env:

@@ -3,6 +3,11 @@ output "github_role_arn" {
   value       = aws_iam_role.github.arn
 }
 
+output "github_audit_role_arn" {
+  description = "Read-only GitHub Actions role ARN for auditing stale disposable AMI validation resources."
+  value       = aws_iam_role.github_audit.arn
+}
+
 output "snapshot_kms_key_arn" {
   description = "Customer-managed KMS key ARN used by EBS Direct API snapshot uploads."
   value       = aws_kms_key.ami_snapshot.arn

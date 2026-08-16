@@ -227,6 +227,11 @@ run "default_registry_and_oidc_contract" {
   }
 
   assert {
+    condition     = output.github_ami_audit_role_arn == "arn:aws:iam::123456789012:role/lucidity-mock-role"
+    error_message = "AMI validation must expose a dedicated read-only resource-audit role."
+  }
+
+  assert {
     condition = (
       output.ami_launch_validation_enabled == false &&
       output.ami_test_subnet_id == null &&

@@ -31,6 +31,7 @@
         {
           default = pkgs.mkShellNoCC {
             packages = [
+              pkgs.codespell
               pkgs.opentofu
               pkgs.shellcheck
             ];

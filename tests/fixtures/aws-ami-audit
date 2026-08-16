@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+scenario=${MOCK_AUDIT_SCENARIO:-clean}
+command_line=" $* "
+
+case "${command_line}" in
+    *' ec2 describe-instances '*)
+        if [[ ${scenario} == stale ]]; then
+            printf '%s\n' '{"Reservations":[{"Instances":[{"InstanceId":"i-stale","LaunchTime":"2026-08-15T00:00:00Z","State":{"Name":"running"},"Tags":[{"Key":"GitHubRunId","Value":"1001"}]}]}]}'
+        else
+            printf '%s\n' '{"Reservations":[]}'
+        fi
+        ;;
+    *' ec2 describe-images '*)
+        if [[ ${scenario} == stale ]]; then
+            printf '%s\n' '{"Images":[{"ImageId":"ami-stale","CreationDate":"2026-08-15T00:00:00Z","State":"available","Tags":[{"Key":"GitHubRunId","Value":"1001"}]}]}'
+        else
+            printf '%s\n' '{"Images":[]}'
+        fi
+        ;;
+    *' ec2 describe-snapshots '*)
+        if [[ ${scenario} == stale ]]; then
+            printf '%s\n' '{"Snapshots":[{"SnapshotId":"snap-stale","StartTime":"2026-08-15T00:00:00Z","State":"completed","Tags":[{"Key":"GitHubRunId","Value":"1001"}]}]}'
+        else
+            printf '%s\n' '{"Snapshots":[]}'
+        fi
+        ;;
+    *)
+        echo "unexpected mock AWS command:${command_line}" >&2
+        exit 2
+        ;;
+esac

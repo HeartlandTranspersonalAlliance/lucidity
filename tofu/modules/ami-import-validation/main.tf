@@ -418,3 +418,31 @@ resource "aws_iam_role_policy" "github" {
   role   = aws_iam_role.github.id
   policy = data.aws_iam_policy_document.github.json
 }
+
+resource "aws_iam_role" "github_audit" {
+  name                 = "${local.resource_prefix}-github-ami-audit"
+  assume_role_policy   = data.aws_iam_policy_document.github_assume_role.json
+  description          = "Read-only GitHub Actions audit for stale disposable AMI validation resources"
+  max_session_duration = 3600
+
+  tags = local.common_tags
+}
+
+data "aws_iam_policy_document" "github_audit" {
+  statement {
+    sid    = "DescribeDisposableAmiValidationResources"
+    effect = "Allow"
+    actions = [
+      "ec2:DescribeImages",
+      "ec2:DescribeInstances",
+      "ec2:DescribeSnapshots",
+    ]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "github_audit" {
+  name   = "${local.resource_prefix}-ami-audit"
+  role   = aws_iam_role.github_audit.id
+  policy = data.aws_iam_policy_document.github_audit.json
+}

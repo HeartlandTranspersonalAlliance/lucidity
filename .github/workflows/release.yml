@@ -29,9 +29,8 @@ jobs:
   prepare:
     name: Select version and require tested images
     runs-on: ubuntu-24.04
-    timeout-minutes: 75
+    timeout-minutes: 10
     permissions:
-      actions: write
       contents: read
     outputs:
       source_sha: ${{ steps.version.outputs.source_sha }}
@@ -102,52 +101,23 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
           printf 'Selected %s with a %s bump from %s\n' "${tag}" "${selected_bump}" "${last_tag:-VERSION seed}"
 
-      - name: Reuse or dispatch immutable candidate publication
-        id: publish
-        env:
-          SOURCE_SHA: ${{ steps.version.outputs.source_sha }}
-        shell: bash
-        run: |
-          run_id=$(gh run list \
-            --workflow publish.yml \
-            --commit "${SOURCE_SHA}" \
-            --limit 20 \
-            --json conclusion,databaseId \
-            --jq '.[] | select(.conclusion == "success") | .databaseId' | head -n 1)
-          if [[ -z "${run_id}" ]]; then
-            remote_sha=$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)
-            [[ "${remote_sha}" == "${SOURCE_SHA}" ]] || { echo "main advanced after this release was dispatched; start a new release run" >&2; exit 1; }
-            previous_run_id=$(gh run list \
-              --workflow publish.yml \
-              --event workflow_dispatch \
-              --commit "${SOURCE_SHA}" \
-              --limit 1 \
-              --json databaseId \
-              --jq '.[0].databaseId // empty')
-            gh workflow run publish.yml --ref main
-            for _ in {1..24}; do
-              run_id=$(gh run list \
-                --workflow publish.yml \
-                --event workflow_dispatch \
-                --commit "${SOURCE_SHA}" \
-                --limit 5 \
-                --json databaseId \
-                --jq ".[] | select((.databaseId | tostring) != \"${previous_run_id}\") | .databaseId" | head -n 1)
-              [[ -z "${run_id}" ]] || break
-              sleep 5
-            done
-            [[ -n "${run_id}" ]] || { echo "could not locate the candidate publication run" >&2; exit 1; }
-          fi
-          echo "run_id=${run_id}" >> "${GITHUB_OUTPUT}"
 
-      - name: Require successful candidate publication
-        env:
-          RUN_ID: ${{ steps.publish.outputs.run_id }}
-        run: gh run watch "${RUN_ID}" --exit-status
+  candidate:
+    name: Require immutable candidates
+    needs: prepare
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    uses: ./.github/workflows/publish.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.source_sha }}
 
   images:
     name: Promote and inventory ${{ matrix.role }}
-    needs: prepare
+    needs:
+      - prepare
+      - candidate
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
