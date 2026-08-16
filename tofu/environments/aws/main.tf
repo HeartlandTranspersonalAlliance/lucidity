@@ -99,7 +99,8 @@ module "ec2_launch_templates" {
     controller = var.controller_ami_id
     worker     = var.worker_ami_id
   }
-  environment = var.environment
+  controller_runtime_secret_name = module.runtime_secrets[0].secret_name
+  environment                    = var.environment
   instance_profile_names = {
     controller = module.instance_management[0].instance_profile_names.controller
     worker     = module.instance_management[0].instance_profile_names.worker

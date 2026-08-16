@@ -173,10 +173,10 @@ if [[ ${role} == worker ]]; then
     coolify_ssh=("${ssh_base[@]}" -i "${coolify_identity}" root@127.0.0.1)
     "${coolify_ssh[@]}" true
     "${admin_ssh[@]}" systemctl is-active --quiet coolify-worker-authorized-keys.service
-    echo "Worker VM initial validation passed: cloud-init, both SSH identities, Docker, Compose, bootc, SELinux, and unattended-update timer; switch, update, and rollback validate reboot persistence"
+    echo "Worker VM initial validation passed: cloud-init, both SSH identities, Docker, Compose, bootc, SELinux, and unattended-update timer"
     exit 0
 fi
 
 wait_for_controller
 assert_controller
-echo "Controller VM initial validation passed: Coolify initialized with persistent storage and SELinux enforcing; switch, update, and rollback validate reboot persistence"
+echo "Controller VM initial validation passed: Coolify initialized with persistent storage and SELinux enforcing"

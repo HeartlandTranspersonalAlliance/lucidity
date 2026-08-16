@@ -157,7 +157,8 @@ grep -Fq 'coolify-${role}-qcow2.qcow2' scripts/vm-init.sh
 grep -Fq 'coolify-${role}-test.qcow2' scripts/vm-start.sh
 # shellcheck disable=SC2016
 grep -Fq 'coolify-bootc-${role}' scripts/vm-registry.sh
-grep -Fq 'switch, update, and rollback validate reboot persistence' scripts/vm-validate.sh
+grep -Fq 'Worker VM initial validation passed' scripts/vm-validate.sh
+grep -Fq 'Controller VM initial validation passed' scripts/vm-validate.sh
 # shellcheck disable=SC2016
 grep -Fq 'compose+=(up -d --wait --wait-timeout 600 --pull "${pull_policy}" --remove-orphans)' scripts/bootstrap-controller.sh
 grep -Fq '/data/coolify/.update-rollback-marker' scripts/vm-validate-update.sh
@@ -427,18 +428,47 @@ grep -Fq 'http_put_response_hop_limit = 2' tofu/modules/ec2-launch-templates/mai
 grep -Fq 'cpu_credits = "standard"' tofu/modules/ec2-launch-templates/main.tf
 grep -Fq 'volume_type           = "gp3"' tofu/modules/ec2-launch-templates/main.tf
 grep -Fq 'update_default_version = false' tofu/modules/ec2-launch-templates/main.tf
-if rg -n 'key_name|associate_public_ip_address|user_data' tofu/modules/ec2-launch-templates; then
-    echo "launch templates must not embed key pairs, networking placement, or user data" >&2
+grep -Fq 'user_data = each.key == "controller" ? base64encode(local.controller_user_data) : null' tofu/modules/ec2-launch-templates/main.tf
+grep -Fq 'path        = "/etc/coolify-controller/runtime-secrets.env"' tofu/modules/ec2-launch-templates/main.tf
+grep -Fq 'permissions = "0600"' tofu/modules/ec2-launch-templates/main.tf
+# These are literal OpenTofu interpolation expressions.
+# shellcheck disable=SC2016
+grep -Fq '{{resolve:secretsmanager:${var.controller_runtime_secret_name}:SecretString:${json_key}}}' tofu/modules/ec2-launch-templates/main.tf
+for secret_variable in \
+    COOLIFY_APP_ID \
+    COOLIFY_APP_KEY \
+    COOLIFY_DB_PASSWORD \
+    COOLIFY_REDIS_PASSWORD \
+    COOLIFY_PUSHER_APP_ID \
+    COOLIFY_PUSHER_APP_KEY \
+    COOLIFY_PUSHER_APP_SECRET; do
+    grep -Fq "${secret_variable}" tofu/modules/ec2-launch-templates/main.tf
+done
+if rg -n 'key_name|associate_public_ip_address' tofu/modules/ec2-launch-templates; then
+    echo "launch templates must not embed key pairs or networking placement" >&2
     exit 1
 fi
 [[ $(printf '%s\n' README.md tofu/environments/aws/main.tf roles/controller/usr/example | ci/worker-changes.sh) == false ]]
+[[ $(printf '%s\n' ci/controller-changes.sh ci/worker-changes.sh | ci/worker-changes.sh) == true ]]
+[[ $(printf '%s\n' tests/test-image.sh tests/test-ami-import.sh tests/fixtures/aws tests/fixtures/coldsnap | ci/worker-changes.sh) == false ]]
 [[ $(printf '%s\n' README.md roles/worker/usr/example | ci/worker-changes.sh) == true ]]
 [[ $(printf '%s\n' scripts/bootstrap-controller.sh tests/test-controller.sh | ci/worker-changes.sh) == false ]]
 [[ $(printf '%s\n' .github/workflows/validate.yml | ci/worker-changes.sh) == true ]]
 [[ $(printf '%s\n' README.md tofu/environments/aws/main.tf roles/worker/usr/example | ci/controller-changes.sh) == false ]]
+[[ $(printf '%s\n' ci/controller-changes.sh ci/worker-changes.sh | ci/controller-changes.sh) == true ]]
+[[ $(printf '%s\n' tests/test-image.sh tests/test-ami-import.sh tests/fixtures/aws tests/fixtures/coldsnap | ci/controller-changes.sh) == false ]]
 [[ $(printf '%s\n' README.md roles/controller/usr/example | ci/controller-changes.sh) == true ]]
 [[ $(printf '%s\n' scripts/bootstrap-worker.sh tests/test-worker.sh | ci/controller-changes.sh) == false ]]
 [[ $(printf '%s\n' .github/workflows/validate.yml | ci/controller-changes.sh) == true ]]
+grep -Fq 'merge_group:' .github/workflows/validate.yml
+# Pull requests retain a real guest boot; only the additional deployment-cycle reboots are deferred.
+grep -Fq "FULL_LIFECYCLE: \${{ github.event_name != 'pull_request' }}" .github/workflows/validate.yml
+[[ $(grep -Fc "if: env.FULL_LIFECYCLE == 'true'" .github/workflows/validate.yml) == 2 ]]
+[[ $(grep -Fc 'make vm-validate-' .github/workflows/validate.yml) == 2 ]]
+# This is a literal shell expression in the workflow under test.
+# shellcheck disable=SC2016
+[[ $(grep -Fc 'if [[ ${FULL_LIFECYCLE} == true ]]; then' .github/workflows/validate.yml) == 2 ]]
+[[ $(grep -Fc 'make vm-update-rollback-' .github/workflows/validate.yml) == 2 ]]
 unexpected_sudo=$(grep -R -n -E '(^|[[:space:]])sudo[[:space:]]' .github/workflows | \
     grep -Ev 'sudo (tee /etc/udev/rules.d/99-kvm4all.rules|udevadm control --reload-rules|udevadm trigger --name-match=kvm)$' | \
     grep -Ev '^\.github/workflows/(ami|ami-switch-benchmark)\.yml:.*sudo (podman (system df|login|pull|image inspect|build|logout)|env (\\|CONTAINER_ENGINE=podman))' || true)

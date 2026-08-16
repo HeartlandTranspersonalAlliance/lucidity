@@ -59,9 +59,10 @@ variable "enable_ec2_launch_templates" {
   validation {
     condition = !var.enable_ec2_launch_templates || (
       var.enable_network &&
-      var.enable_instance_management
+      var.enable_instance_management &&
+      var.enable_runtime_secrets
     )
-    error_message = "EC2 launch templates require networking and instance management to be enabled."
+    error_message = "EC2 launch templates require networking, instance management, and runtime secrets to be enabled."
   }
 }
 
