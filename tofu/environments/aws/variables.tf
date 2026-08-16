@@ -4,6 +4,56 @@ variable "aws_region" {
   default     = "us-east-2"
 }
 
+variable "enable_account_cost_budget" {
+  description = "Create a free monitoring-only annual budget for all costs in the AWS account."
+  type        = bool
+  default     = false
+
+  validation {
+    condition = !var.enable_account_cost_budget || (
+      var.account_cost_budget_notification_email != null
+    )
+    error_message = "The account cost budget requires a notification email."
+  }
+}
+
+variable "account_annual_cost_limit_usd" {
+  description = "Annual account-wide AWS cost limit in US dollars."
+  type        = number
+  default     = 1100
+
+  validation {
+    condition     = var.account_annual_cost_limit_usd >= 1 && var.account_annual_cost_limit_usd <= 1000000
+    error_message = "The annual account cost limit must be between 1 and 1,000,000 USD."
+  }
+}
+
+variable "account_cost_budget_warning_percentage" {
+  description = "Actual-spend percentage that sends an early warning before the annual account limit."
+  type        = number
+  default     = 80
+
+  validation {
+    condition     = var.account_cost_budget_warning_percentage >= 1 && var.account_cost_budget_warning_percentage < 100
+    error_message = "The account cost warning percentage must be at least 1 and below 100."
+  }
+}
+
+variable "account_cost_budget_notification_email" {
+  description = "Email address receiving actual and forecasted annual account budget alerts."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition = (
+      var.account_cost_budget_notification_email == null ||
+      can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", var.account_cost_budget_notification_email))
+    )
+    error_message = "The account budget notification endpoint must be null or a syntactically valid email address."
+  }
+}
+
 variable "deployment_architecture" {
   description = "CPU architecture for the initial EC2 deployment. ARM64 remains a future option."
   type        = string

@@ -51,6 +51,13 @@ mock_provider "aws" {
     }
   }
 
+  mock_resource "aws_budgets_budget" {
+    defaults = {
+      arn = "arn:aws:budgets::123456789012:budget/lucidity-production-account-annual-cost"
+      id  = "123456789012:lucidity-production-account-annual-cost"
+    }
+  }
+
   mock_resource "aws_backup_vault" {
     defaults = {
       arn = "arn:aws:backup:us-east-2:123456789012:backup-vault:lucidity-production-nodes"
@@ -182,9 +189,11 @@ run "default_registry_and_oidc_contract" {
   assert {
     condition = (
       output.controller_instance_type == "t3a.small" &&
-      output.worker_instance_type == "t3a.large"
+      output.worker_instance_type == "t3a.large" &&
+      output.account_cost_budget_arn == null &&
+      output.account_cost_budget_settings == null
     )
-    error_message = "The initial controller and worker must retain the selected T3a defaults."
+    error_message = "The initial controller and worker must retain the selected T3a defaults without enabling an account budget implicitly."
   }
 
   assert {
@@ -256,6 +265,32 @@ run "default_registry_and_oidc_contract" {
       length(output.ami_test_instance_profile_names) == 0
     )
     error_message = "Disposable EC2 launch permissions and identifiers must remain disabled during the initial image-pipeline bootstrap."
+  }
+}
+
+run "account_cost_budget_contract" {
+  command = plan
+
+  variables {
+    account_cost_budget_notification_email = "operations@example.org"
+    enable_account_cost_budget             = true
+  }
+
+  assert {
+    condition = (
+      output.account_cost_budget_arn == "arn:aws:budgets::123456789012:budget/lucidity-production-account-annual-cost" &&
+      output.account_cost_budget_name == "lucidity-production-account-annual-cost" &&
+      output.account_cost_budget_settings.scope == "account" &&
+      output.account_cost_budget_settings.limit_amount_usd == 1100 &&
+      output.account_cost_budget_settings.time_unit == "ANNUALLY" &&
+      output.account_cost_budget_settings.actual_warning_percentage == 80 &&
+      output.account_cost_budget_settings.actual_limit_percentage == 100 &&
+      output.account_cost_budget_settings.forecast_limit_percentage == 100 &&
+      output.account_cost_budget_settings.actions_enabled == false &&
+      output.account_cost_budget_settings.include_credits == false &&
+      output.account_cost_budget_settings.include_refunds == false
+    )
+    error_message = "The account budget must retain its monitoring-only 1,100 USD annual limit and actual/forecast notification contract."
   }
 }
 

@@ -43,6 +43,21 @@ output "worker_instance_type" {
   value       = var.worker_instance_type
 }
 
+output "account_cost_budget_arn" {
+  description = "ARN of the account-wide annual cost budget, or null until explicitly enabled."
+  value       = var.enable_account_cost_budget ? module.account_cost_budget[0].arn : null
+}
+
+output "account_cost_budget_name" {
+  description = "Name of the account-wide annual cost budget, or null until explicitly enabled."
+  value       = var.enable_account_cost_budget ? module.account_cost_budget[0].name : null
+}
+
+output "account_cost_budget_settings" {
+  description = "Account-wide cost limit and alert thresholds, or null until explicitly enabled."
+  value       = var.enable_account_cost_budget ? module.account_cost_budget[0].settings : null
+}
+
 output "ec2_launch_template_ids" {
   description = "Hardened EC2 launch template IDs keyed by node role, or an empty map until explicitly enabled."
   value       = var.enable_ec2_launch_templates ? module.ec2_launch_templates[0].launch_template_ids : {}

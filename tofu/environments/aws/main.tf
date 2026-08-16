@@ -10,6 +10,18 @@ locals {
   } : {}
 }
 
+module "account_cost_budget" {
+  count  = var.enable_account_cost_budget ? 1 : 0
+  source = "../../modules/account-cost-budget"
+
+  actual_warning_percentage = var.account_cost_budget_warning_percentage
+  environment               = var.environment
+  annual_limit_usd          = var.account_annual_cost_limit_usd
+  notification_email        = var.account_cost_budget_notification_email
+  project_name              = var.vpc_name
+  tags                      = var.tags
+}
+
 module "network" {
   count  = var.enable_network ? 1 : 0
   source = "../../modules/network"

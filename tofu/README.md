@@ -18,6 +18,7 @@ publish and deploy lucidity bootc images:
 - explicitly gated Cloudflare A records that proxy the controller and worker Elastic IPs;
 - explicitly gated daily, crash-consistent AWS Backup recovery points with governance-mode Vault Lock and dedicated backup and restore roles;
 - explicitly gated status-check, CPU, and T3a credit alarms delivered through encrypted SNS email;
+- an explicitly gated, monitoring-only account-wide annual AWS cost budget with email alerts;
 - an account-level GitHub Actions OIDC provider, unless an existing provider ARN is supplied;
 - a repository-scoped IAM role that only trusts `main` for the immutable owner and repository IDs of `HeartlandTranspersonalAlliance/lucidity`;
 - least-privilege permissions to authenticate to ECR and push to these two repositories.
@@ -30,6 +31,13 @@ instances, and their backup plan remain explicitly gated in that order.
 Cloudflare DNS is gated after the EC2 instances. It manages only the configured
 production hostnames and leaves the zone apex, mail, verification, and other existing
 records unchanged.
+
+The account cost budget is independent of EC2 deployment and can be enabled during
+the foundation apply. It monitors the complete AWS account so unexpected untagged
+resources are not hidden. The default 1,100 USD annual limit sends email when actual
+spend exceeds 80 percent, forecasted spend exceeds 100 percent, or actual spend
+exceeds 100 percent. Credits and refunds do not reduce the monitored amount. It has no
+Budget Action and cannot stop resources or change IAM policy.
 
 The initial compute contract is AMD64 with `t3a.small` for the controller and
 `t3a.large` for the worker. ARM64 remains configurable but deferred.
@@ -233,6 +241,9 @@ out of band and set the following together in the reviewed production tfvars:
 
 ```hcl
 enable_network              = true
+enable_account_cost_budget  = true
+account_annual_cost_limit_usd = 1100
+account_cost_budget_notification_email = "operations@example.org"
 enable_runtime_secrets      = true
 enable_instance_management  = true
 enable_ec2_launch_templates = true
