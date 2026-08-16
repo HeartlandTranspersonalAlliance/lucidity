@@ -845,10 +845,15 @@ It should:
 
 Use pinned or major-version-controlled GitHub Actions rather than arbitrary untrusted actions.
 
-Affected roles must still build and complete a real accelerated guest boot on pull
-requests. Keep the sequential image switch, update, rollback, and persistence reboots
-as an integration gate on merge-queue candidates, `main`, and explicit manual runs so
-the common pull-request path remains fast without replacing guest validation with mocks.
+Affected roles must still build and validate their disk artifact on pull requests.
+Keep the real accelerated guest boot, sequential image switch, update, rollback, and
+persistence reboots as a path-scoped integration gate on merge-queue candidates. Run
+both complete lifecycles weekly and on explicit manual dispatches to catch upstream
+image drift. This avoids booting the same candidate twice without replacing guest
+validation with mocks or repeating it after the candidate reaches `main`.
+Run raw AMI compatibility on pull requests only when the AMI workflow or shared disk
+build and validation scripts change. General role image changes are already covered by
+QCOW2 validation and must not trigger a duplicate worker build.
 
 ---
 

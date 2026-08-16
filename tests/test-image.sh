@@ -146,6 +146,26 @@ grep -Fq 'sudo podman logout' ci/teardown-build-cache.sh
 grep -Fq 'benchmark-base|controller|worker' scripts/validate-image.sh
 grep -Fq 'FROM common AS benchmark-base' Containerfile
 grep -Fq '/usr/lib/coolify-aws/image-version' Containerfile
+controller_setup_line=$(grep -n '^RUN dnf -y install policycoreutils-python-utils python3' Containerfile | cut -d: -f1)
+controller_version_line=$(awk '
+    /^FROM common AS controller$/ { in_controller = 1; next }
+    /^FROM / && in_controller { exit }
+    in_controller && /^ARG IMAGE_VERSION=/ { print NR; exit }
+' Containerfile)
+worker_setup_line=$(grep -n '^RUN chmod 0755 /usr/libexec/coolify-aws/bootstrap-worker' Containerfile | cut -d: -f1)
+worker_version_line=$(awk '
+    /^FROM common AS worker$/ { in_worker = 1; next }
+    /^FROM / && in_worker { exit }
+    in_worker && /^ARG IMAGE_VERSION=/ { print NR; exit }
+' Containerfile)
+[[ -n ${controller_setup_line} && -n ${controller_version_line} && ${controller_setup_line} -lt ${controller_version_line} ]] || {
+    echo "controller release metadata must follow the expensive stable setup layer" >&2
+    exit 1
+}
+[[ -n ${worker_setup_line} && -n ${worker_version_line} && ${worker_setup_line} -lt ${worker_version_line} ]] || {
+    echo "worker release metadata must follow the stable role setup layer" >&2
+    exit 1
+}
 grep -Fq '=~ ^[[:alnum:].:-]+$' scripts/vm-init.sh
 grep -Fq '=~ ^[[:alnum:].:-]+$' scripts/vm-validate-update.sh
 grep -Fq 'CONTAINER_ENGINE' scripts/build-disk.sh
@@ -274,7 +294,14 @@ grep -Fq 'allowed-account-ids: 467590374785' .github/workflows/ami.yml
 grep -Fq 'ci/setup-build-cache.sh "${AMI_ROLE}"' .github/workflows/ami.yml
 # This is a literal GitHub Actions expression.
 # shellcheck disable=SC2016
-grep -Fq "GHCR_CACHE_WRITE: \${{ github.event_name != 'pull_request' }}" .github/workflows/ami.yml
+[[ $(grep -Fc "GHCR_CACHE_WRITE: \${{ github.event_name != 'pull_request' }}" .github/workflows/ami.yml) == 1 ]]
+ami_pr_paths=$(sed -n '/^  pull_request:/,/^  workflow_call:/p' .github/workflows/ami.yml)
+grep -Fq -- '- scripts/build-disk.sh' <<< "${ami_pr_paths}"
+grep -Fq -- '- scripts/validate-disk.sh' <<< "${ami_pr_paths}"
+if grep -Eq -- '- (Containerfile|roles/\*\*|scripts/build\.sh)' <<< "${ami_pr_paths}"; then
+    echo "AMI pull-request validation must not duplicate the normal role image build" >&2
+    exit 1
+fi
 grep -Fq "github.ref == 'refs/heads/main'" .github/workflows/publish.yml
 grep -Fq 'id-token: write' .github/workflows/publish.yml
 grep -Fq 'packages: write' .github/workflows/publish.yml
@@ -471,13 +498,20 @@ fi
 [[ $(printf '%s\n' scripts/bootstrap-worker.sh tests/test-worker.sh | ci/controller-changes.sh) == false ]]
 [[ $(printf '%s\n' .github/workflows/validate.yml | ci/controller-changes.sh) == true ]]
 grep -Fq 'merge_group:' .github/workflows/validate.yml
+# These are literal GitHub Actions expressions in the workflow under test.
+# shellcheck disable=SC2016
+grep -Fq 'MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}' .github/workflows/validate.yml
+# shellcheck disable=SC2016
+grep -Fq 'MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha }}' .github/workflows/validate.yml
+grep -Fq 'schedule|workflow_dispatch)' .github/workflows/validate.yml
+grep -Fq 'cron: "17 5 * * 1"' .github/workflows/validate.yml
 if grep -Fq 'push:' .github/workflows/validate.yml; then
     echo "validate.yml must not repeat the merge queue's full lifecycle after main updates" >&2
     exit 1
 fi
-# Pull requests retain a real guest boot; only the additional deployment-cycle reboots are deferred.
-grep -Fq "FULL_LIFECYCLE: \${{ github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' }}" .github/workflows/validate.yml
-[[ $(grep -Fc "if: env.FULL_LIFECYCLE == 'true'" .github/workflows/validate.yml) == 2 ]]
+# Pull requests build and validate disks; the serial merge queue owns guest lifecycle validation.
+grep -Fq "FULL_LIFECYCLE: \${{ github.event_name != 'pull_request' }}" .github/workflows/validate.yml
+[[ $(grep -Fc "if: env.FULL_LIFECYCLE == 'true'" .github/workflows/validate.yml) == 4 ]]
 [[ $(grep -Fc 'make vm-validate-' .github/workflows/validate.yml) == 2 ]]
 # This is a literal shell expression in the workflow under test.
 # shellcheck disable=SC2016

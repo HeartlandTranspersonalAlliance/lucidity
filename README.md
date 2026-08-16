@@ -122,7 +122,7 @@ proposal.md                   full implementation plan and milestones
 
 ## Remote-first validation
 
-GitHub Actions is the primary build and test environment. Every pull request runs the lightweight and infrastructure checks below. Role-impacting pull requests build and boot each affected controller or worker once. Merge-queue candidates and manual runs execute the complete lifecycle for both roles:
+GitHub Actions is the primary build and test environment. Every pull request runs the lightweight and infrastructure checks below. Role-impacting pull requests build and validate each affected controller or worker image and disk. The merge queue executes the complete guest lifecycle once for each affected role, while manual and weekly runs exercise both roles:
 
 1. OpenTofu formatting, validation, and mocked infrastructure tests in a pinned Nix environment;
 2. ShellCheck, static behavior tests, and actionlint;
@@ -130,12 +130,12 @@ GitHub Actions is the primary build and test environment. Every pull request run
 4. controller image assertions for the native `/nix` mountpoint and enforcing SELinux configuration;
 5. a privileged worker QCOW2 conversion inside the pinned CI tooling container;
 6. QCOW2 consistency checks;
-7. UEFI controller and worker guest boots plus cloud-init, service, and SSH checks on every affected pull request;
-8. on integration runs, registry switches, two-version bootc updates, and rollbacks through disposable guest-reachable registries, with the same persistent state verified after each reboot.
+7. on integration runs, UEFI controller and worker guest boots plus cloud-init, service, and SSH checks;
+8. registry switches, two-version bootc updates, and rollbacks through disposable guest-reachable registries, with the same persistent state verified after each reboot.
 
 The OpenTofu job installs Determinate Nix through a commit-pinned action. Image jobs install no packages onto the hosted runner. Lifecycle jobs use host `sudo` only for GitHub's documented udev rule granting access to the runner's existing `/dev/kvm` device. AMI jobs use narrowly scoped root Podman commands because osbuild consumes the bootc source through shared root container storage. A repository test rejects other workflow uses of `sudo`. KVM accelerates every VM test, while QEMU TCG remains the automatic fallback. Build artifacts stay within the ephemeral job and are not uploaded, avoiding persistent storage cost and accidental publication of disposable SSH identities.
 
-For pull requests, a lightweight `ubuntu-slim` job classifies changed paths before allocating the full VM runners. Documentation, OpenTofu, and role-exclusive changes skip unrelated image roles; unknown, shared, workflow, or classifier changes default to both. Each selected role still builds a QCOW2 and passes a real accelerated guest boot. The slower update-image build plus switch, update, rollback, and three additional reboots run for both roles on `merge_group` and manual events. The required merge queue serializes candidates and makes that complete lifecycle a pre-merge integration gate. A second full run after the same candidate reaches `main` is intentionally omitted. Validation consumes role-scoped GHCR caches read-only, while trusted publication runs refresh those caches with the minimum required token permissions.
+For pull requests and merge groups, a lightweight `ubuntu-slim` job classifies changed paths before allocating the full VM runners. Documentation, OpenTofu, and role-exclusive changes skip unrelated image roles; unknown, shared, workflow, or classifier changes default to both. Each selected pull-request role builds and validates a QCOW2 but does not boot a duplicate guest. The required serial merge queue runs the affected role's initial boot, update, rollback, and persistence checks against the exact candidate merged with current `main`. A weekly Monday run and manual dispatch exercise both complete lifecycles to detect upstream image drift even when no relevant file changed. A second full run after the same candidate reaches `main` is intentionally omitted. Raw AMI compatibility runs on pull requests only when its workflow or the shared disk build and validation scripts change; general role image changes are already covered by QCOW2 validation and do not trigger a duplicate worker build. Validation consumes role-scoped GHCR caches read-only, while trusted publication runs refresh those caches with the minimum required token permissions.
 
 Local commands remain available for development and diagnosis, but a successful local run is not a substitute for the required GitHub checks.
 

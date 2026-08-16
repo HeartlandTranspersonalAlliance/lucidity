@@ -5,6 +5,8 @@ on:
   merge_group:
     types:
       - checks_requested
+  schedule:
+    - cron: "17 5 * * 1"
   workflow_dispatch:
 
 concurrency:
@@ -15,7 +17,7 @@ permissions:
   contents: read
 
 env:
-  FULL_LIFECYCLE: ${{ github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' }}
+  FULL_LIFECYCLE: ${{ github.event_name != 'pull_request' }}
   IMAGE: localhost/coolify-bootc-worker:lifecycle-v1
   UPDATE_IMAGE: localhost/coolify-bootc-worker:lifecycle-v2
   CONTROLLER_IMAGE: localhost/coolify-bootc-controller:lifecycle-v1
@@ -38,20 +40,40 @@ jobs:
         id: filter
         env:
           EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+          PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PULL_REQUEST_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          if [[ "${EVENT_NAME}" != pull_request ]]; then
-            {
-              echo "controller=true"
-              echo "worker=true"
-            } >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
+          case "${EVENT_NAME}" in
+            pull_request)
+              base_sha=${PULL_REQUEST_BASE_SHA}
+              head_sha=${PULL_REQUEST_HEAD_SHA}
+              ;;
+            merge_group)
+              base_sha=${MERGE_GROUP_BASE_SHA}
+              head_sha=${MERGE_GROUP_HEAD_SHA}
+              ;;
+            schedule|workflow_dispatch)
+              {
+                echo "controller=true"
+                echo "worker=true"
+              } >> "${GITHUB_OUTPUT}"
+              exit 0
+              ;;
+            *)
+              echo "Unknown event ${EVENT_NAME}; requiring both lifecycle validations" >&2
+              {
+                echo "controller=true"
+                echo "worker=true"
+              } >> "${GITHUB_OUTPUT}"
+              exit 0
+              ;;
+          esac
 
           changed_paths="${RUNNER_TEMP}/lifecycle-changed-paths"
           if ! git diff --name-only --diff-filter=ACDMRT \
-              "${BASE_SHA}" "${HEAD_SHA}" > "${changed_paths}"; then
+              "${base_sha}" "${head_sha}" > "${changed_paths}"; then
             echo "Could not determine changed paths; requiring both lifecycle validations" >&2
             {
               echo "controller=true"
@@ -160,6 +182,7 @@ jobs:
           make vm-registry-start-controller
 
       - name: Boot and validate controller guest
+        if: env.FULL_LIFECYCLE == 'true'
         env:
           CONTAINER_ENGINE: docker
           VM_TOOL_IMAGE: ${{ env.CI_TOOLS_IMAGE }}
@@ -260,6 +283,7 @@ jobs:
           make vm-registry-start-worker
 
       - name: Boot and validate worker guest
+        if: env.FULL_LIFECYCLE == 'true'
         env:
           CONTAINER_ENGINE: docker
           VM_TOOL_IMAGE: ${{ env.CI_TOOLS_IMAGE }}

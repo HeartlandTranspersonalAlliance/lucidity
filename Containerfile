@@ -97,7 +97,6 @@ RUN install -d -m 0755 /nix /usr/lib/coolify-aws && \
 
 FROM common AS controller
 
-ARG IMAGE_VERSION=dev
 ARG ASM_EXEC_COMMIT=957cf377ea1dffccf1f8a54ded2be8666b6db41c
 ARG ASM_EXEC_SHA256=d55eb38ad33a5b76f584ca180f633ecc120cf39b8fd29427ffbe11a8fbf19556
 ARG ASM_EXEC_LICENSE_SHA256=09e8a9bcec8067104652c168685ab0931e7868f9c8284b66f5ae6edae5f1130b
@@ -134,12 +133,17 @@ RUN dnf -y install policycoreutils-python-utils python3 && \
         /usr/libexec/coolify-aws/workload-credentials-provider-token && \
     install -d -m 0755 /data/coolify && \
     semanage fcontext -a -t container_file_t '/data/coolify(/.*)?' && \
-    printf '%s\n' "${IMAGE_VERSION}" > /usr/lib/coolify-aws/image-version && \
     systemctl enable \
         coolify-controller-bootstrap.service \
         coolify-controller-storage.service \
         aws-workload-credentials-provider-sm.service \
-        aws-workload-credentials-provider-token.service && \
+        aws-workload-credentials-provider-token.service
+
+# Keep release metadata after the expensive, stable controller setup so lifecycle
+# v2 builds reuse its package, download, and SELinux layers.
+ARG IMAGE_VERSION=dev
+
+RUN printf '%s\n' "${IMAGE_VERSION}" > /usr/lib/coolify-aws/image-version && \
     bootc container lint
 
 LABEL org.opencontainers.image.title="Coolify bootc controller" \
@@ -165,14 +169,15 @@ LABEL org.opencontainers.image.title="Lucidity CentOS bootc benchmark base" \
 
 FROM common AS worker
 
-ARG IMAGE_VERSION=dev
-
 COPY scripts/bootstrap-worker.sh /usr/libexec/coolify-aws/bootstrap-worker
 COPY roles/worker/usr/ /usr/
 
+RUN chmod 0755 /usr/libexec/coolify-aws/bootstrap-worker && \
+    systemctl enable coolify-worker-authorized-keys.service
+
+ARG IMAGE_VERSION=dev
+
 RUN printf '%s\n' "${IMAGE_VERSION}" > /usr/lib/coolify-aws/image-version && \
-    chmod 0755 /usr/libexec/coolify-aws/bootstrap-worker && \
-    systemctl enable coolify-worker-authorized-keys.service && \
     bootc container lint
 
 LABEL org.opencontainers.image.title="Coolify bootc worker" \
