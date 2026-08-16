@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+[[ -z ${AWS_TOKEN:-} ]]
+for variable in \
+    COOLIFY_APP_ID \
+    COOLIFY_APP_KEY \
+    COOLIFY_DB_PASSWORD \
+    COOLIFY_REDIS_PASSWORD \
+    COOLIFY_PUSHER_APP_ID \
+    COOLIFY_PUSHER_APP_KEY \
+    COOLIFY_PUSHER_APP_SECRET; do
+    [[ ${!variable} == "resolved-${variable}" ]]
+done
+touch "${CONTROLLER_TEST_STATE}/secret-probe-complete"

@@ -11,8 +11,8 @@ role=${1:-worker}
 image_type=${2:-qcow2}
 
 case "${role}" in
-    worker) ;;
-    *) echo "unsupported role '${role}'; controller image is not implemented" >&2; exit 2 ;;
+    controller|worker) ;;
+    *) echo "unsupported role '${role}'; expected controller or worker" >&2; exit 2 ;;
 esac
 
 case "${image_type}" in

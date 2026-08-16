@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+source_path=${COOLIFY_PERSISTENT_SOURCE:-/var/lib/coolify}
+target_path=${COOLIFY_PERSISTENT_TARGET:-/data/coolify}
+
+install -d -m 0700 "${source_path}"
+if [[ ! -d ${target_path} ]]; then
+    echo "controller storage mountpoint ${target_path} is missing from the bootc image" >&2
+    exit 1
+fi
+if ! mountpoint --quiet "${target_path}"; then
+    mount --bind "${source_path}" "${target_path}"
+fi

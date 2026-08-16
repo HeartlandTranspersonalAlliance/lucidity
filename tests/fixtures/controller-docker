@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+case "${1:-} ${2:-}" in
+    'network inspect')
+        [[ -e ${CONTROLLER_TEST_STATE}/network ]]
+        ;;
+    'network create')
+        touch "${CONTROLLER_TEST_STATE}/network"
+        printf '%s\n' "$*" >>"${CONTROLLER_TEST_STATE}/network-create"
+        ;;
+    'compose --env-file')
+        printf '%q ' "$@" >>"${CONTROLLER_TEST_STATE}/compose"
+        printf '\n' >>"${CONTROLLER_TEST_STATE}/compose"
+        ;;
+    *)
+        echo "unexpected controller Docker command: $*" >&2
+        exit 2
+        ;;
+esac

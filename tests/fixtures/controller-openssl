@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+[[ ${1:-} == rand ]]
+count=0
+if [[ -e ${CONTROLLER_TEST_STATE}/openssl ]]; then
+    count=$(wc -l <"${CONTROLLER_TEST_STATE}/openssl")
+fi
+printf 'fixture-secret-%s\n' "${count}"
+printf '%s\n' "$*" >>"${CONTROLLER_TEST_STATE}/openssl"

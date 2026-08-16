@@ -1,0 +1,12 @@
+[Unit]
+Description=Bind persistent Coolify controller storage
+After=local-fs.target
+Before=coolify-controller-bootstrap.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/coolify-aws/prepare-controller-storage
+
+[Install]
+WantedBy=multi-user.target

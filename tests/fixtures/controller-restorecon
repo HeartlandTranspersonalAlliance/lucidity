@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+printf '%s\n' "$*" >>"${CONTROLLER_TEST_STATE}/restorecon"

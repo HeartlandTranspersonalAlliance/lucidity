@@ -1,6 +1,6 @@
 # Coolify bootc appliance for AWS
 
-This repository builds an image-mode Linux appliance for a small Coolify deployment on EC2. The implemented worker is an AlmaLinux 10 bootc host with Docker Engine, Compose, SSH, cloud-init, SELinux policy, and persistent Docker storage. A controller image foundation now exists, but its Coolify bootstrap is still planned.
+This repository builds an image-mode Linux appliance for a small Coolify deployment on EC2. The worker is an AlmaLinux 10 bootc host with Docker Engine, Compose, SSH, cloud-init, SELinux policy, and persistent Docker storage. The controller image adds persistent Coolify storage and an idempotent first-boot bootstrap. Both roles pass the complete hosted KVM switch, update, and rollback lifecycle; the controller's EC2 lifecycle still needs validation.
 
 > [!WARNING]
 > AlmaLinux's bootc images are experimental upstream. Running Coolify on a custom bootc appliance is also not an officially documented Coolify deployment model. Treat the current repository as development work until boot, update, rollback, persistence, and Coolify integration have been exercised on real EC2 instances.
@@ -25,7 +25,7 @@ Responsibility is deliberately split:
 |---|---|---|
 | Kernel, Docker, SSH, systemd, host utilities | bootc image built from Git | bootc deployments |
 | Docker images, volumes, and application data | Docker/Coolify | `/var/lib/docker` |
-| Coolify database, configuration, and generated keys | Coolify controller (planned) | `/data/coolify` backed by persistent host storage |
+| Coolify database, configuration, and generated keys | Coolify controller | `/data/coolify` bound to `/var/lib/coolify` |
 | Credentials and private keys | Runtime/AWS secret mechanisms | Never the Git repository or OS image |
 
 Coolify itself will remain containerized and retain its own update lifecycle. An OS build must not contain live Coolify state or make a Coolify application upgrade necessary.
@@ -42,6 +42,10 @@ Implemented:
 - Docker data root fixed explicitly at `/var/lib/docker`;
 - key-only root SSH suitable for Coolify remote management;
 - idempotent runtime installation of a Coolify public key;
+- controller storage persisted under `/var/lib/coolify` and bind-mounted at Coolify's required `/data/coolify` path;
+- an idempotent controller bootstrap that preserves its environment and SSH identity across ordinary boots;
+- a narrowly scoped persistent `container_file_t` rule for the Coolify tree while SELinux remains enforcing;
+- checksum-pinned AWS `asm-exec` and AWS Workload Credentials Provider sources for runtime-only controller secret resolution;
 - cloud-init and lightweight repository/image checks;
 - pinned unified image-builder workflow for local QCOW2 and AWS disk artifacts;
 - containerized KVM/QEMU lifecycle validation with disposable NoCloud credentials;
@@ -64,8 +68,11 @@ writes the raw disk directly to EBS. A retained release pulls the immutable priv
 source commit, uses that real registry reference as the bootc source, runs the same EBS
 Direct and T3a/SSM gates, and preserves the validated AMI and encrypted snapshot. EC2 launch
 templates are defined but remain disabled until exact controller and worker AMI IDs are
-selected. The persistent controller bootstrap is still the blocker for launching the
-production pair. No untested AWS deployment code is presented as complete.
+selected. The controller bootstrap now passes the full hosted KVM update/rollback
+lifecycle with its persistent environment, SSH identity, Compose service set, bind mount,
+and SELinux label intact. A retained controller AMI and OpenTofu provisioning of the
+reference-only secret environment remain blockers for launching the production pair. No
+untested AWS deployment code is presented as complete.
 
 Merged-main run `31899706447` measured the 12 GiB EBS Direct upload at about 33
 seconds and reached a launchable AMI about 48 seconds after upload began. The complete
@@ -96,6 +103,7 @@ roles/controller/             controller-only host configuration
 roles/worker/                 worker-only systemd configuration
 tofu/                         AWS network, runtime identity, secrets, ECR, and OIDC bootstrap
 scripts/build.sh              local image build
+scripts/bootstrap-controller.sh idempotent Coolify initialization
 scripts/bootstrap-worker.sh   idempotent public-key provisioning
 scripts/validate-image.sh     bootc and package validation
 scripts/build-disk.sh         privileged qcow2/AMI artifact generation
@@ -109,7 +117,7 @@ proposal.md                   full implementation plan and milestones
 
 ## Remote-first validation
 
-GitHub Actions is the primary build and test environment. Every pull request runs the lightweight and infrastructure checks below. Worker-impacting pull requests, every push to `main`, and every manual run execute the complete image lifecycle:
+GitHub Actions is the primary build and test environment. Every pull request runs the lightweight and infrastructure checks below. Role-impacting pull requests run only the affected controller or worker lifecycle, while every push to `main` and every manual run execute both:
 
 1. OpenTofu formatting, validation, and mocked infrastructure tests in a pinned Nix environment;
 2. ShellCheck, static behavior tests, and actionlint;
@@ -117,12 +125,12 @@ GitHub Actions is the primary build and test environment. Every pull request run
 4. controller image assertions for the native `/nix` mountpoint and enforcing SELinux configuration;
 5. a privileged worker QCOW2 conversion inside the pinned CI tooling container;
 6. QCOW2 consistency checks;
-7. a UEFI worker guest boot, cloud-init and SSH checks, and Docker-volume persistence across reboot;
-8. a two-version bootc update and rollback through a disposable guest-reachable registry, with the same Docker data verified after each reboot.
+7. UEFI controller and worker guest boots plus cloud-init, service, and SSH checks;
+8. registry switches, two-version bootc updates, and rollbacks through disposable guest-reachable registries, with the same persistent state verified after each reboot.
 
-The OpenTofu job installs Determinate Nix through a commit-pinned action. Image jobs install no packages onto the hosted runner. The worker lifecycle job uses host `sudo` only for GitHub's documented udev rule granting access to the runner's existing `/dev/kvm` device. AMI jobs use narrowly scoped root Podman commands because osbuild consumes the bootc source through shared root container storage. A repository test rejects other workflow uses of `sudo`. KVM accelerates the complete VM lifecycle without removing any reboot, update, or rollback checks, while QEMU TCG remains the automatic fallback. Build artifacts stay within the ephemeral job and are not uploaded, avoiding persistent storage cost and accidental publication of disposable SSH identities.
+The OpenTofu job installs Determinate Nix through a commit-pinned action. Image jobs install no packages onto the hosted runner. Lifecycle jobs use host `sudo` only for GitHub's documented udev rule granting access to the runner's existing `/dev/kvm` device. AMI jobs use narrowly scoped root Podman commands because osbuild consumes the bootc source through shared root container storage. A repository test rejects other workflow uses of `sudo`. KVM accelerates the complete VM lifecycle without removing any registry-switch, update, or rollback reboot checks, while QEMU TCG remains the automatic fallback. Build artifacts stay within the ephemeral job and are not uploaded, avoiding persistent storage cost and accidental publication of disposable SSH identities.
 
-For pull requests, the worker lifecycle runs whenever a changed path may affect the worker image or its test harness. It is skipped only when all changes are limited to documentation, OpenTofu, Nix metadata used by OpenTofu, or controller-only role files. Pushes to `main` and manual runs always execute the full lifecycle, so an unknown or newly added path defaults to the safer full validation.
+For pull requests, a lightweight `ubuntu-slim` job classifies changed paths before allocating the full VM runners. Documentation, OpenTofu, and role-exclusive changes skip unrelated image lifecycles; unknown or shared paths default to both. Pushes to `main` and manual runs always execute both lifecycles. Validation consumes role-scoped GHCR caches read-only, while trusted publication runs refresh those caches with the minimum required token permissions.
 
 Local commands remain available for development and diagnosis, but a successful local run is not a substitute for the required GitHub checks.
 
@@ -167,6 +175,7 @@ make lint
 make test
 make build-controller
 make build-worker
+make validate-controller
 make validate
 nix develop --command make tofu-check
 ```
@@ -191,11 +200,13 @@ Nix installation is a post-AMI milestone for both controller and worker, not a p
 
 ## Build a bootable disk artifact
 
-The current upstream path is the unified osbuild `image-builder`; standalone `bootc-image-builder` is deprecated for new integrations. The builder runs privileged through `run0`, consumes the worker from local Podman storage, and is pinned by digest in `image/image-builder.env`.
+The current upstream path is the unified osbuild `image-builder`; standalone `bootc-image-builder` is deprecated for new integrations. The builder runs privileged through `run0`, consumes the selected role image from local Podman storage, and is pinned by digest in `image/image-builder.env`.
 
 Build a local VM disk first:
 
 ```bash
+make image-controller
+make validate-disk-controller
 make image-worker
 make validate-disk-worker
 ```
@@ -203,14 +214,29 @@ make validate-disk-worker
 After VM boot and persistence testing succeeds, generate an AWS-format disk artifact:
 
 ```bash
+make ami-controller
 make ami-worker
 ```
 
 Artifacts are placed under `image-output/` and ignored by Git. An `.ami` artifact is not an EC2 AMI: it still requires upload to an EBS snapshot and explicit EC2 registration. The validation and release path uses the EBS Direct APIs. This command performs no AWS upload and receives no AWS credentials. See [image/README.md](image/README.md) for the boundary.
 
-## Boot and test the worker locally
+## Boot and test the roles locally
 
-The pinned image-builder container also supplies QEMU and OVMF, so the host only needs Podman, KVM access, `qemu-img`, `xorriso`, and OpenSSH. The VM uses an overlay over the generated worker QCOW2 and a NoCloud seed containing two disposable public keys.
+The pinned image-builder container also supplies QEMU and OVMF, so the host only needs Podman, KVM access, `qemu-img`, `xorriso`, and OpenSSH. Each VM uses an overlay over its generated QCOW2 and a NoCloud seed with a disposable administrator key. The worker seed also includes its separate disposable Coolify key.
+
+For the controller:
+
+```bash
+make vm-init-controller
+make vm-start-controller
+make vm-validate-controller
+make vm-registry-start-controller
+make vm-update-rollback-controller
+```
+
+The controller validation waits for the real Compose bootstrap, verifies every configured service is running, and proves that the generated environment, controller SSH identity, persistent marker, bind mount, and SELinux label survive the registry switch, update, and rollback reboots. The initial validation does not add a redundant ordinary reboot. It rejects relevant SELinux AVC denials. The controller VM listens on `127.0.0.1:2223` and uses `image-output/vm-controller/`.
+
+For the worker:
 
 ```bash
 make vm-init-worker
@@ -220,7 +246,7 @@ make vm-registry-start-worker
 make vm-update-rollback-worker
 ```
 
-Validation checks cloud-init, separate administrator and Coolify SSH authentication, Docker, Compose, bootc, enforcing SELinux, the unattended-update timer, and a Docker volume marker across a real guest reboot. The VM remains running on `127.0.0.1:2222` afterward for inspection:
+Validation checks cloud-init, separate administrator and Coolify SSH authentication, Docker, Compose, bootc, enforcing SELinux, the unattended-update timer, and a Docker volume marker across the registry switch, update, and rollback reboots. The VM remains running on `127.0.0.1:2222` afterward for inspection:
 
 ```bash
 ssh -p 2222 -i image-output/vm/admin root@127.0.0.1
@@ -230,6 +256,11 @@ make vm-clean-worker
 ```
 
 `vm-clean-worker` deletes only generated files under `image-output/vm/`. Exact results and current limitations are recorded in [docs/local-vm-validation.md](docs/local-vm-validation.md).
+
+Use `make vm-registry-stop-controller`, `make vm-stop-controller`, and
+`make vm-clean-controller` for the controller. These commands affect only the
+controller's disposable registry, VM container, and generated files under
+`image-output/vm-controller/`.
 
 ## Worker SSH provisioning
 
@@ -253,15 +284,30 @@ The worker also accepts an EC2 administrator key in the local VM test harness. A
 
 `/var/lib/docker` is conventional mutable host storage and remains outside bootc's immutable `/usr` deployment. Docker's data root is explicit in `daemon.json`, the standard `container-selinux` and targeted policy packages are installed, and `/etc/selinux/config` requires enforcing mode. The booted-VM test rejects anything other than `Enforcing`.
 
-Coolify officially lists AlmaLinux among its supported Red Hat-family hosts, but its current production Compose file uses `/data/coolify` bind mounts without SELinux relabel flags. The controller bootstrap must add a persistent, narrowly scoped `container_file_t` file-context rule for the required `/data/coolify` tree and run `restorecon` before starting Coolify. An end-to-end test must reject AVC denials; disabling or weakening SELinux is not an accepted workaround.
+Coolify officially lists AlmaLinux among its supported Red Hat-family hosts, but its current production Compose file uses `/data/coolify` bind mounts without SELinux relabel flags. The controller image adds a persistent, narrowly scoped `container_file_t` file-context rule for the required `/data/coolify` tree, and the bootstrap runs `restorecon` before starting Coolify. An end-to-end test must still reject AVC denials; disabling or weakening SELinux is not an accepted workaround.
+
+The controller implements that boundary with a systemd-managed bind mount from
+`/var/lib/coolify` to `/data/coolify`. Its bootstrap downloads the official Compose,
+production override, environment template, and upgrade scripts only when absent. It
+fills empty initial secret fields, creates the controller SSH identity and attachable
+Docker network only when needed, reapplies the SELinux label, and runs Compose without
+overwriting a working installation. It pulls application images on initial installation
+and uses locally cached images on subsequent OS boots, keeping Coolify upgrades separate
+from the bootc lifecycle. Lightweight tests prove a second run preserves the environment
+and SSH identity. The controller VM harness extends those assertions across the
+registry switch, bootc update, and rollback reboots, and the full hosted KVM run passes.
+The disposable EC2 gate is still required before this persistence path is considered
+production-proven.
 
 The local lifecycle test establishes the intended persistence boundary by:
 
-1. writing data into a Docker volume;
+1. writing data into a worker Docker volume or the controller's persistent Coolify tree;
 2. switching to a v1 image in a disposable local registry and staging a visibly different v2 bootc deployment;
 3. rebooting and verifying the data;
 4. rolling back and rebooting;
-5. verifying the same data and enforcing SELinux state again.
+5. verifying the same data and enforcing SELinux state again. For the controller it
+   also compares hashes of the generated environment and private key and requires the
+   same complete Compose service set after every deployment change.
 
 The registry permits HTTP only on the QEMU host gateway for this disposable test. Production images do not contain that exception and must use authenticated HTTPS ECR references.
 
@@ -316,7 +362,7 @@ Networking spans three Availability Zones by default and provides public and iso
 
 OpenTofu is the infrastructure-as-code CLI for this project. Configuration remains Terraform-compatible where practical so the AWS provider and reusable modules retain broad ecosystem compatibility. Terraform is reserved for a documented incompatibility that cannot be resolved with OpenTofu. CI-only values belong in GitHub Secrets, AWS-hosted runtime secrets belong in AWS Secrets Manager, and provider-neutral or self-hosted secrets may use OpenBao.
 
-The AWS stack creates one empty bundled controller-runtime secret, a dedicated rotating KMS key, and a controller EC2 instance profile scoped to that secret and key. OpenTofu never receives the secret value. The future EC2 bootstrap must resolve individual JSON keys at runtime through the repository-mandated `asm-exec` dynamic-reference flow. An approved `asm-exec` source is not yet present, so secret consumption is not claimed as implemented.
+The AWS stack creates one empty bundled controller-runtime secret, a dedicated rotating KMS key, and a controller EC2 instance profile scoped to that secret and key. OpenTofu never receives the secret value. The controller image builds AWS Workload Credentials Provider 3.1.1 from checksum-pinned source and installs AWS's checksum-pinned `asm-exec`. When `/etc/coolify-controller/runtime-secrets.env` exists, the bootstrap wrapper requires all seven Coolify secret settings to be dynamic references and rejects plaintext. The example file documents the expected JSON keys. Without that file the controller generates local values, which is intended for local validation only; production EC2 provisioning must install the reference-only file before the bootstrap service runs.
 
 OpenTofu cannot safely replace a secret store because a managed secret value would enter its state. Running OpenBao only for this deployment would add more state, backup work, and availability risk than the single AWS secret warrants, so Secrets Manager remains the initial choice. OpenBao can replace it later if provider independence becomes an operational requirement.
 
