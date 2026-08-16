@@ -43,8 +43,12 @@ ec2_node_availability_zone_indices = {
 enable_ec2_termination_protection = true
 
 # AWS Backup stores crash-consistent recovery points for both nodes every day
-# at 05:00 UTC. The cost-conscious default retains 14 days of incremental changes.
-node_backup_retention_days = 14
+# at 05:00 UTC. The cost-conscious default retains 7 days of incremental changes.
+node_backup_retention_days = 7
+
+# Retain denied-flow evidence for 30 days without ingesting accepted application traffic.
+flow_log_retention_days = 30
+flow_log_traffic_type   = "REJECT"
 
 controller_root_volume_size_gib = 40
 worker_root_volume_size_gib     = 80

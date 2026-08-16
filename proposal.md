@@ -23,7 +23,7 @@ Do not create a Kubernetes, ECS, Fargate, or Elastic Beanstalk architecture. Thi
 ## Current AWS implementation decisions
 
 The first AWS deployment targets AMD64 with `t3a.small` for the controller and
-`t3a.large` for the worker. ARM64 remains a supported future direction, but it is
+`t3a.medium` for the worker. ARM64 remains a supported future direction, but it is
 deferred until the AMD64 AMI, deployment, recovery, and application compatibility
 paths are proven end to end.
 
@@ -43,9 +43,9 @@ private SSH, while the worker needs HTTPS and, when Matrix federation requires i
 TCP/8448.
 
 AWS-hosted controller secrets use one bundled AWS Secrets Manager secret encrypted
-with a dedicated rotating KMS key. OpenTofu creates only the empty secret container,
-KMS key, and a least-privilege policy attached to the controller's shared EC2 instance
-profile. Secret values are populated
+with the AWS managed `aws/secretsmanager` KMS key. OpenTofu creates only the empty
+secret container and a least-privilege policy attached to the controller's shared EC2
+instance profile. Secret values are populated
 out of band and resolved on the EC2 instance at runtime; they are never placed in an
 AMI, OpenTofu configuration, plan, or state. The EC2 bootstrap remains gated on an
 approved `asm-exec` package or source.
@@ -615,17 +615,17 @@ t3a.small
 Worker:
 
 ```text
-t3a.large
-8 GiB RAM
+t3a.medium
+4 GiB RAM
 ```
 
 Allow overriding the worker to:
 
 ```text
-t3a.medium
+t3a.large
 ```
 
-for smaller environments.
+after measured memory pressure requires 8 GiB.
 
 Architecture remains parameterized so ARM64/Graviton can be revisited after the
 initial AMD64 deployment and every required Docker workload has been verified as
@@ -1357,9 +1357,10 @@ never resolved secret values. Commit `.terraform.lock.hcl` so provider
 selections and checksums are reviewed and reproducible.
 
 For the AWS controller, OpenTofu provisions one empty Secrets Manager container,
-a dedicated rotating KMS key, and an EC2 instance profile restricted to that secret
-and key. It must not create an `aws_secretsmanager_secret_version` or accept secret
-values as variables. Populate the JSON value through an out-of-band operator workflow.
+uses the AWS managed `aws/secretsmanager` KMS key, and provisions an EC2 instance
+profile restricted to that secret. It must not create an
+`aws_secretsmanager_secret_version` or accept secret values as variables. Populate the
+JSON value through an out-of-band operator workflow.
 At runtime, resolve individual keys using
 `{{resolve:secretsmanager:secret-id:SecretString:json-key}}` with `asm-exec`.
 Do not call Secrets Manager value-reading APIs from automation that can expose their
@@ -1631,7 +1632,7 @@ termination protection. Both default to the first selected public subnet to avoi
 unnecessary cross-AZ management traffic; placement remains explicitly configurable.
 
 Implemented behind `enable_node_backups`: both exact instance ARNs receive daily,
-crash-consistent AWS Backup recovery points with cost-conscious 14-day retention.
+crash-consistent AWS Backup recovery points with cost-conscious 7-day retention.
 Their encrypted root volumes survive instance termination, the vault uses governance-
 mode retention controls, and separate backup and restore roles keep normal backup
 permissions apart from restore permissions. The restore role can pass only the two

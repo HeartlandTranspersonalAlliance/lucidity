@@ -1,8 +1,3 @@
-variable "aws_region" {
-  description = "AWS region containing the secret and KMS key."
-  type        = string
-}
-
 variable "project_name" {
   description = "Project name used in runtime secret and IAM resource names."
   type        = string

@@ -57,3 +57,12 @@ output "flow_log_group_name" {
   description = "CloudWatch Logs group receiving VPC Flow Logs."
   value       = aws_cloudwatch_log_group.flow_logs.name
 }
+
+output "flow_log_settings" {
+  description = "Cost and retention controls applied to VPC Flow Logs."
+  value = {
+    max_aggregation_interval_seconds = aws_flow_log.this.max_aggregation_interval
+    retention_days                   = aws_cloudwatch_log_group.flow_logs.retention_in_days
+    traffic_type                     = aws_flow_log.this.traffic_type
+  }
+}

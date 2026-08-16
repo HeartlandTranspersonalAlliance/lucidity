@@ -3,9 +3,9 @@ output "controller_policy_arn" {
   value       = aws_iam_policy.controller_secrets.arn
 }
 
-output "kms_key_arn" {
-  description = "KMS key ARN encrypting the controller runtime secret."
-  value       = aws_kms_key.runtime_secrets.arn
+output "kms_key_id" {
+  description = "AWS managed KMS key alias encrypting the controller runtime secret."
+  value       = "alias/aws/secretsmanager"
 }
 
 output "secret_arn" {

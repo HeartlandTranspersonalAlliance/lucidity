@@ -228,6 +228,11 @@ output "vpc_flow_log_group_name" {
   value       = var.enable_network ? module.network[0].flow_log_group_name : null
 }
 
+output "vpc_flow_log_settings" {
+  description = "Cost and retention controls applied to VPC Flow Logs."
+  value       = var.enable_network ? module.network[0].flow_log_settings : null
+}
+
 output "controller_instance_profile_name" {
   description = "SSM-enabled instance profile for the controller."
   value       = var.enable_instance_management ? module.instance_management[0].instance_profile_names.controller : null
@@ -263,9 +268,9 @@ output "controller_runtime_secret_reference_pattern" {
   value       = var.enable_runtime_secrets ? module.runtime_secrets[0].dynamic_reference_pattern : null
 }
 
-output "runtime_secrets_kms_key_arn" {
-  description = "KMS key ARN encrypting the controller runtime secret."
-  value       = var.enable_runtime_secrets ? module.runtime_secrets[0].kms_key_arn : null
+output "runtime_secrets_kms_key_id" {
+  description = "AWS managed KMS key alias encrypting the controller runtime secret."
+  value       = var.enable_runtime_secrets ? module.runtime_secrets[0].kms_key_id : null
 }
 
 output "ami_snapshot_kms_key_arn" {

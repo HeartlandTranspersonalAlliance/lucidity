@@ -189,7 +189,7 @@ run "default_registry_and_oidc_contract" {
   assert {
     condition = (
       output.controller_instance_type == "t3a.small" &&
-      output.worker_instance_type == "t3a.large" &&
+      output.worker_instance_type == "t3a.medium" &&
       output.account_cost_budget_arn == null &&
       output.account_cost_budget_settings == null
     )
@@ -336,6 +336,20 @@ run "ec2_foundation_contract" {
     condition     = output.controller_runtime_secret_reference_pattern == "{{resolve:secretsmanager:lucidity/production/controller-runtime:SecretString:json-key}}"
     error_message = "Runtime secret references must use the asm-exec-compatible dynamic reference pattern."
   }
+
+  assert {
+    condition     = output.runtime_secrets_kms_key_id == "alias/aws/secretsmanager"
+    error_message = "The bundled runtime secret must use the no-monthly-charge AWS managed Secrets Manager key."
+  }
+
+  assert {
+    condition = (
+      output.vpc_flow_log_settings.traffic_type == "REJECT" &&
+      output.vpc_flow_log_settings.retention_days == 30 &&
+      output.vpc_flow_log_settings.max_aggregation_interval_seconds == 60
+    )
+    error_message = "The default VPC Flow Log must retain denied traffic for 30 days without ingesting accepted application traffic."
+  }
 }
 
 run "existing_oidc_provider" {
@@ -471,7 +485,7 @@ run "production_node_backup_contract" {
     condition = (
       output.node_backup_vault_arn == "arn:aws:backup:us-east-2:123456789012:backup-vault:lucidity-production-nodes" &&
       output.node_backup_plan_id == "mock-node-backup-plan" &&
-      output.node_backup_retention_days == 14 &&
+      output.node_backup_retention_days == 7 &&
       output.node_backup_service_role_arn == "arn:aws:iam::123456789012:role/lucidity-mock-role" &&
       output.node_restore_service_role_arn == "arn:aws:iam::123456789012:role/lucidity-mock-role" &&
       output.node_backup_settings.schedule == "cron(0 5 ? * * *)" &&
@@ -480,7 +494,7 @@ run "production_node_backup_contract" {
       output.node_backup_settings.vault_lock_mode == "governance" &&
       toset(output.node_backup_settings.protected_roles) == toset(["controller", "worker"])
     )
-    error_message = "Enabled production backups must expose the protected vault, plan, backup-only role, and 14-day retention."
+    error_message = "Enabled production backups must expose the protected vault, plan, backup-only role, and 7-day retention."
   }
 }
 

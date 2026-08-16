@@ -1,7 +1,3 @@
-data "aws_caller_identity" "current" {}
-
-data "aws_partition" "current" {}
-
 locals {
   resource_prefix = "${var.project_name}-${var.environment}"
   common_tags = merge(
@@ -13,41 +9,10 @@ locals {
   )
 }
 
-data "aws_iam_policy_document" "kms" {
-  statement {
-    sid       = "EnableAccountAdministration"
-    effect    = "Allow"
-    actions   = ["kms:*"]
-    resources = ["*"]
-
-    principals {
-      type = "AWS"
-      identifiers = [
-        "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:root",
-      ]
-    }
-  }
-}
-
-resource "aws_kms_key" "runtime_secrets" {
-  description             = "Encrypts ${var.project_name} ${var.environment} runtime secrets"
-  deletion_window_in_days = 30
-  enable_key_rotation     = true
-  key_usage               = "ENCRYPT_DECRYPT"
-  policy                  = data.aws_iam_policy_document.kms.json
-
-  tags = merge(local.common_tags, { Name = "${local.resource_prefix}-runtime-secrets" })
-}
-
-resource "aws_kms_alias" "runtime_secrets" {
-  name          = "alias/${local.resource_prefix}-runtime-secrets"
-  target_key_id = aws_kms_key.runtime_secrets.key_id
-}
-
 resource "aws_secretsmanager_secret" "controller_runtime" {
   name                    = "${var.project_name}/${var.environment}/controller-runtime"
   description             = "Runtime-only controller secrets for ${var.project_name} ${var.environment}"
-  kms_key_id              = aws_kms_key.runtime_secrets.arn
+  kms_key_id              = "alias/aws/secretsmanager"
   recovery_window_in_days = var.recovery_window_in_days
 
   tags = merge(local.common_tags, { Name = "${local.resource_prefix}-controller-runtime" })
@@ -67,22 +32,6 @@ data "aws_iam_policy_document" "controller_secrets" {
       test     = "Bool"
       variable = "aws:SecureTransport"
       values   = ["true"]
-    }
-  }
-
-  statement {
-    sid    = "DecryptControllerRuntimeSecret"
-    effect = "Allow"
-    actions = [
-      "kms:Decrypt",
-      "kms:DescribeKey",
-    ]
-    resources = [aws_kms_key.runtime_secrets.arn]
-
-    condition {
-      test     = "StringEquals"
-      variable = "kms:ViaService"
-      values   = ["secretsmanager.${var.aws_region}.${data.aws_partition.current.dns_suffix}"]
     }
   }
 }

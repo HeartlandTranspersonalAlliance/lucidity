@@ -84,7 +84,7 @@ variable "application_outbound_tcp_ports" {
 variable "flow_log_retention_days" {
   description = "CloudWatch Logs retention for VPC Flow Logs."
   type        = number
-  default     = 90
+  default     = 30
 
   validation {
     condition = contains([
@@ -92,6 +92,17 @@ variable "flow_log_retention_days" {
       731, 1096, 1827, 2192, 2557, 2922, 3288, 3653,
     ], var.flow_log_retention_days)
     error_message = "Flow-log retention must be a CloudWatch Logs supported retention period."
+  }
+}
+
+variable "flow_log_traffic_type" {
+  description = "Traffic captured by VPC Flow Logs."
+  type        = string
+  default     = "REJECT"
+
+  validation {
+    condition     = contains(["ACCEPT", "ALL", "REJECT"], var.flow_log_traffic_type)
+    error_message = "VPC Flow Logs traffic type must be ACCEPT, ALL, or REJECT."
   }
 }
 
