@@ -3,6 +3,11 @@ output "instance_ids" {
   value       = { for role, instance in aws_instance.node : role => instance.id }
 }
 
+output "instance_arns" {
+  description = "EC2 instance ARNs keyed by node role."
+  value       = { for role, instance in aws_instance.node : role => instance.arn }
+}
+
 output "private_ips" {
   description = "Private VPC IPv4 addresses keyed by node role."
   value       = { for role, instance in aws_instance.node : role => instance.private_ip }

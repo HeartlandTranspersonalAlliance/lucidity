@@ -53,6 +53,11 @@ output "ec2_launch_template_latest_versions" {
   value       = var.enable_ec2_launch_templates ? module.ec2_launch_templates[0].launch_template_latest_versions : {}
 }
 
+output "ec2_root_volume_settings" {
+  description = "Encrypted root-volume retention settings keyed by node role."
+  value       = var.enable_ec2_launch_templates ? module.ec2_launch_templates[0].root_volume_settings : {}
+}
+
 output "selected_ami_ids" {
   description = "Self-owned AMI IDs explicitly selected for EC2 launch templates."
   value       = var.enable_ec2_launch_templates ? module.ec2_launch_templates[0].selected_ami_ids : {}
@@ -86,6 +91,36 @@ output "ec2_availability_zones" {
 output "ec2_instance_settings" {
   description = "Auditable production placement, protection, addressing, and pinned template settings keyed by node role."
   value       = var.enable_ec2_instances ? module.ec2_nodes[0].instance_settings : {}
+}
+
+output "node_backup_vault_arn" {
+  description = "Governance-locked backup vault protecting production nodes, or null until enabled."
+  value       = var.enable_node_backups ? module.node_backups[0].vault_arn : null
+}
+
+output "node_backup_plan_id" {
+  description = "Daily AWS Backup plan ID, or null until enabled."
+  value       = var.enable_node_backups ? module.node_backups[0].plan_id : null
+}
+
+output "node_backup_retention_days" {
+  description = "Daily node recovery-point retention, or null until backups are enabled."
+  value       = var.enable_node_backups ? module.node_backups[0].retention_days : null
+}
+
+output "node_backup_service_role_arn" {
+  description = "Backup-only service role ARN, or null until backups are enabled."
+  value       = var.enable_node_backups ? module.node_backups[0].service_role_arn : null
+}
+
+output "node_restore_service_role_arn" {
+  description = "Dedicated AWS Backup restore role ARN, or null until backups are enabled."
+  value       = var.enable_node_backups ? module.node_backups[0].restore_role_arn : null
+}
+
+output "node_backup_settings" {
+  description = "Auditable schedule, retention, Vault Lock mode, and protected node roles."
+  value       = var.enable_node_backups ? module.node_backups[0].settings : null
 }
 
 output "vpc_id" {

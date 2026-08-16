@@ -131,6 +131,28 @@ variable "enable_ec2_termination_protection" {
   default     = true
 }
 
+variable "enable_node_backups" {
+  description = "Protect both production EC2 nodes with daily crash-consistent AWS Backup recovery points and governance-mode Vault Lock."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !var.enable_node_backups || var.enable_ec2_instances
+    error_message = "Node backups require the production EC2 instances to be enabled."
+  }
+}
+
+variable "node_backup_retention_days" {
+  description = "Days each daily controller and worker recovery point remains available."
+  type        = number
+  default     = 14
+
+  validation {
+    condition     = var.node_backup_retention_days >= 7 && var.node_backup_retention_days <= 365 && floor(var.node_backup_retention_days) == var.node_backup_retention_days
+    error_message = "Node backup retention must be a whole number from 7 through 365 days."
+  }
+}
+
 variable "controller_ami_id" {
   description = "Explicit retained controller AMI ID. No newest-image lookup or automatic rollout is performed."
   type        = string
