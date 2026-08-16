@@ -1691,6 +1691,15 @@ confirm persistent data remains
 
 Document exact results.
 
+Implemented as the manual **Validate bootc switch and rollback delivery** workflow.
+It uses one disposable, keyless T3a instance and the existing tag-restricted AMI
+validation role. Before switching from the digest-pinned CentOS bootstrap image to an
+immutable AlmaLinux worker candidate, it records the source deployment and writes a
+Docker-volume marker. It validates the candidate after reboot, queues `bootc rollback`,
+then validates the original deployment, the same marker, Docker, SSM, and enforcing
+SELinux after the second reboot. All EC2, AMI, and snapshot resources are removed by
+the existing cleanup trap.
+
 Commit.
 
 ---

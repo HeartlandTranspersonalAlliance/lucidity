@@ -1,10 +1,10 @@
-name: Benchmark bootc switch delivery
+name: Validate bootc switch and rollback delivery
 
 on:
   workflow_dispatch:
     inputs:
-      confirm_benchmark:
-        description: Build a disposable CentOS bootc AMI, switch it to the current AlmaLinux worker image, test it, and clean up
+      confirm_update_rollback:
+        description: Build a disposable CentOS bootc AMI, switch to the AlmaLinux worker, roll back, validate persistent state, and clean up
         required: true
         type: boolean
         default: false
@@ -14,7 +14,7 @@ on:
         type: string
 
 concurrency:
-  group: ami-switch-benchmark-${{ github.ref }}
+  group: ami-switch-rollback-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -31,7 +31,7 @@ env:
 
 jobs:
   benchmark:
-    if: github.ref == 'refs/heads/main' && inputs.confirm_benchmark
+    if: github.ref == 'refs/heads/main' && inputs.confirm_update_rollback
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     steps:
@@ -135,7 +135,7 @@ jobs:
           test -x "${coldsnap_path}/bin/coldsnap"
           echo "COLDSNAP_COMMAND=${coldsnap_path}/bin/coldsnap" >> "${GITHUB_ENV}"
 
-      - name: Upload, boot, switch, reboot, and self-validate
+      - name: Upload, boot, switch, roll back, and validate persistent state
         env:
           AMI_LAUNCH_VALIDATION: true
           AMI_LIFECYCLE: disposable

@@ -4,7 +4,7 @@ set -Eeuo pipefail
 required=false
 while IFS= read -r path; do
     case "${path}" in
-        AGENTS.md|LICENSE|README.md|proposal.md|docs/*|image/README.md|tofu/*|flake.nix|flake.lock|mk/quality.mk|.github/workflows/validate-deployment.yml|roles/worker/*|scripts/bootstrap-worker.sh|scripts/check-text-style.sh|scripts/validate-deployment.sh|tests/test-worker.sh|tests/test-image.sh|tests/test-ami-import.sh|tests/test-text-style.sh|tests/test-deployment-validation.sh|tests/fixtures/aws|tests/fixtures/aws-deployment-validation|tests/fixtures/coldsnap|tests/fixtures/worker-*)
+        AGENTS.md|LICENSE|README.md|proposal.md|docs/*|image/README.md|tofu/*|flake.nix|flake.lock|mk/quality.mk|.github/workflows/ami-switch-benchmark.yml|.github/workflows/validate-deployment.yml|roles/worker/*|scripts/bootstrap-worker.sh|scripts/check-text-style.sh|scripts/validate-ami-import.sh|scripts/validate-deployment.sh|tests/test-worker.sh|tests/test-image.sh|tests/test-ami-import.sh|tests/test-text-style.sh|tests/test-deployment-validation.sh|tests/fixtures/aws|tests/fixtures/aws-deployment-validation|tests/fixtures/coldsnap|tests/fixtures/worker-*)
             ;;
         *)
             required=true

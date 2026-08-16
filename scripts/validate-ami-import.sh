@@ -448,6 +448,11 @@ if [[ ${launch_validation} == true ]]; then
             --arg target "${switch_target_ref}" \
             '{commands:[
                 "set -eu",
+                "install -d -m 0700 /var/lib/lucidity-update-rollback",
+                "source_image=$(bootc status --format=json --format-version=1 --booted | jq -r .status.booted.image.image.image); test -n \"${source_image}\"; test \"${source_image}\" != null; printf \u0027%s\\n\u0027 \"${source_image}\" > /var/lib/lucidity-update-rollback/source-image-ref",
+                "docker volume create lucidity-update-rollback >/dev/null",
+                "volume_path=$(docker volume inspect lucidity-update-rollback | jq -r \u0027.[0].Mountpoint\u0027); printf \u0027%s\\n\u0027 lucidity-update-rollback-marker > \"${volume_path}/marker\"",
+                "sync",
                 "install -d -m 0700 /run/ostree",
                 ("printf \u0027%s\u0027 \u0027" + $auth_base64 + "\u0027 | base64 --decode > /run/ostree/auth.json"),
                 "chmod 0600 /run/ostree/auth.json",
@@ -520,6 +525,8 @@ if [[ ${launch_validation} == true ]]; then
                 "echo LUCIDITY_SWITCH_TARGET_BOOTED",
                 "systemctl is-active --quiet coolify-bootc-ecr-auth.service",
                 "test \"$(jq -r '.credHelpers[]' /run/ostree/auth.json)\" = ecr-login",
+                "test -s /var/lib/lucidity-update-rollback/source-image-ref",
+                "volume_path=$(docker volume inspect lucidity-update-rollback | jq -r \u0027.[0].Mountpoint\u0027); test \"$(cat \"${volume_path}/marker\")\" = lucidity-update-rollback-marker",
                 "bootc upgrade --check"
             ]
         elif $lifecycle == "retained" then
@@ -613,18 +620,146 @@ if [[ ${launch_validation} == true ]]; then
     [[ ${command_succeeded} == true ]] || { echo "SSM guest validation did not complete within the polling window" >&2; exit 1; }
     if [[ -n ${switch_target_ref} ]]; then
         switch_validated_at=$(date +%s)
+        rollback_started_at=${switch_validated_at}
+        rollback_commands=$(jq -cn '{commands:[
+            "set -eu",
+            "bootc rollback",
+            "systemd-run --unit=lucidity-bootc-rollback-validation-reboot --on-active=10s /usr/bin/systemctl reboot"
+        ]}')
+        command_response=$(aws ssm send-command \
+            --region "${region}" \
+            --document-name AWS-RunShellScript \
+            --instance-ids "${instance_id}" \
+            --comment "lucidity bootc rollback validation ${run_id}" \
+            --parameters "${rollback_commands}" \
+            --timeout-seconds 600 \
+            --output json)
+        command_id=$(jq -r '.Command.CommandId // empty' <<< "${command_response}")
+        [[ -n ${command_id} ]] || { echo "SSM did not return a bootc rollback command ID" >&2; exit 1; }
+
+        rollback_staged=false
+        for _ in {1..120}; do
+            set +e
+            invocation=$(aws ssm get-command-invocation \
+                --region "${region}" \
+                --command-id "${command_id}" \
+                --instance-id "${instance_id}" \
+                --output json 2>/dev/null)
+            invocation_status=$?
+            set -e
+            if ((invocation_status != 0)); then
+                sleep 5
+                continue
+            fi
+            command_status=$(jq -r '.Status' <<< "${invocation}")
+            case "${command_status}" in
+                Success)
+                    rollback_staged=true
+                    jq -r '.StandardOutputContent' <<< "${invocation}"
+                    break
+                    ;;
+                Pending|InProgress|Delayed) sleep 5 ;;
+                *)
+                    jq -r '.StandardOutputContent, .StandardErrorContent' <<< "${invocation}" >&2
+                    echo "SSM bootc rollback failed with status ${command_status}" >&2
+                    exit 1
+                    ;;
+            esac
+        done
+        [[ ${rollback_staged} == true ]] || { echo "SSM bootc rollback did not complete within the polling window" >&2; exit 1; }
+        rollback_staged_at=$(date +%s)
+        sleep "${ssm_reboot_wait_seconds}"
+
+        rollback_validation_commands=$(jq -cn '{commands:[
+            "set -eu",
+            "test \"$(uname -m)\" = x86_64",
+            "test \"$(getenforce)\" = Enforcing",
+            "systemctl is-active --quiet amazon-ssm-agent.service",
+            "systemctl is-active --quiet docker.service",
+            "source_image=$(cat /var/lib/lucidity-update-rollback/source-image-ref); test -n \"${source_image}\"; test \"${source_image}\" != null; test \"$(bootc status --format=json --format-version=1 --booted | jq -r .status.booted.image.image.image)\" = \"${source_image}\"",
+            "volume_path=$(docker volume inspect lucidity-update-rollback | jq -r \u0027.[0].Mountpoint\u0027); test \"$(cat \"${volume_path}/marker\")\" = lucidity-update-rollback-marker",
+            "echo LUCIDITY_ROLLBACK_SOURCE_BOOTED"
+        ]}')
+        rollback_validated=false
+        for _ in {1..90}; do
+            command_response=$(aws ssm send-command \
+                --region "${region}" \
+                --document-name AWS-RunShellScript \
+                --instance-ids "${instance_id}" \
+                --comment "lucidity bootc rollback guest validation ${run_id}" \
+                --parameters "${rollback_validation_commands}" \
+                --output json 2>/dev/null || true)
+            if [[ -n ${command_response} ]]; then
+                command_id=$(jq -r '.Command.CommandId // empty' <<< "${command_response}")
+            else
+                command_id=""
+            fi
+            if [[ -z ${command_id} ]]; then
+                sleep 10
+                continue
+            fi
+
+            command_finished=false
+            for _ in {1..60}; do
+                set +e
+                invocation=$(aws ssm get-command-invocation \
+                    --region "${region}" \
+                    --command-id "${command_id}" \
+                    --instance-id "${instance_id}" \
+                    --output json 2>/dev/null)
+                invocation_status=$?
+                set -e
+                if ((invocation_status != 0)); then
+                    sleep 5
+                    continue
+                fi
+                command_status=$(jq -r '.Status' <<< "${invocation}")
+                case "${command_status}" in
+                    Success)
+                        rollback_validated=true
+                        command_finished=true
+                        jq -r '.StandardOutputContent' <<< "${invocation}"
+                        break
+                        ;;
+                    Pending|InProgress|Delayed) sleep 5 ;;
+                    *)
+                        command_finished=true
+                        command_output=$(jq -r '.StandardOutputContent' <<< "${invocation}")
+                        if grep -Fq LUCIDITY_ROLLBACK_SOURCE_BOOTED <<< "${command_output}"; then
+                            jq -r '.StandardOutputContent, .StandardErrorContent' <<< "${invocation}" >&2
+                            echo "SSM rollback guest validation failed with status ${command_status}" >&2
+                            exit 1
+                        fi
+                        break
+                        ;;
+                esac
+            done
+            [[ ${rollback_validated} == true ]] && break
+            [[ ${command_finished} == true ]] || break
+            sleep 10
+        done
+        [[ ${rollback_validated} == true ]] || { echo "SSM rollback guest validation did not complete within the polling window" >&2; exit 1; }
+
+        rollback_validated_at=$(date +%s)
         switch_stage_seconds=$((switch_staged_at - switch_started_at))
         switch_reboot_validation_seconds=$((switch_validated_at - switch_staged_at))
         switch_total_seconds=$((switch_validated_at - switch_started_at))
-        echo "Bootc switch benchmark: stage=${switch_stage_seconds}s reboot-and-validation=${switch_reboot_validation_seconds}s total=${switch_total_seconds}s"
+        rollback_stage_seconds=$((rollback_staged_at - rollback_started_at))
+        rollback_reboot_validation_seconds=$((rollback_validated_at - rollback_staged_at))
+        lifecycle_total_seconds=$((rollback_validated_at - switch_started_at))
+        echo "Bootc switch and rollback validation: switch=${switch_total_seconds}s rollback-stage=${rollback_stage_seconds}s rollback-reboot-and-validation=${rollback_reboot_validation_seconds}s total=${lifecycle_total_seconds}s"
         if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then
             {
-                echo "## CentOS bootc to AlmaLinux worker switch benchmark"
+                echo "## Disposable bootc switch and rollback validation"
                 echo
                 echo "- Target: \`${switch_target_ref}\`"
                 echo "- Switch pull and stage: ${switch_stage_seconds}s"
                 echo "- Reboot and guest validation: ${switch_reboot_validation_seconds}s"
-                echo "- Switch through validated guest: ${switch_total_seconds}s"
+                echo "- Switch through validated target: ${switch_total_seconds}s"
+                echo "- Rollback stage: ${rollback_stage_seconds}s"
+                echo "- Rollback reboot and source validation: ${rollback_reboot_validation_seconds}s"
+                echo "- Complete switch and rollback lifecycle: ${lifecycle_total_seconds}s"
+                echo "- Docker volume marker: preserved through both reboots"
                 echo "- Benchmark AMI, snapshot, and T3a instance: disposable and removed during cleanup"
             } >> "${GITHUB_STEP_SUMMARY}"
         fi
