@@ -845,9 +845,11 @@ It should:
 
 Use pinned or major-version-controlled GitHub Actions rather than arbitrary untrusted actions.
 
-Repository lint should enforce spelling and whole-tree whitespace in addition to
-ShellCheck and actionlint. Keep those tools in the pinned development environment so
-local and hosted validation use the same versions.
+Repository lint should enforce spelling and tracked-text style in addition to
+ShellCheck and actionlint. Root EditorConfig rules and a tracked-file check enforce LF
+line endings, final newlines, and trimmed trailing whitespace consistently in editors,
+local development, and hosted validation. Keep those tools in the pinned development
+environment so local and hosted validation use the same versions.
 
 Affected roles must still build and validate their disk artifact on pull requests.
 Keep the real accelerated guest boot, sequential image switch, update, rollback, and
