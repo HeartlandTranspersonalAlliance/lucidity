@@ -10,9 +10,10 @@ service. Any number of application records can share that worker origin address.
 
 | Record | Target | Cloudflare mode |
 |---|---|---|
-| `coolify.example.org` | controller Elastic IP | Proxied |
-| `*.apps.example.org` | worker Elastic IP | Proxied |
-| `matrix.example.org` | worker Elastic IP | Proxied |
+| `coolify.heartlandta.org` | controller Elastic IP | Proxied |
+| `apps.heartlandta.org` | worker Elastic IP | Proxied |
+| `*.apps.heartlandta.org` | worker Elastic IP | Proxied |
+| `matrix.heartlandta.org` | worker Elastic IP | Proxied |
 
 Cloudflare returns its shared anycast addresses to clients for proxied records and
 connects to the Elastic IP origin. Use HTTPS port 443 for Matrix client and federation

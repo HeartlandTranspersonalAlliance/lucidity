@@ -1178,6 +1178,11 @@ matrix.example.org
 
 Many DNS records may reuse the same worker address. Cloudflare's shared anycast proxy
 addresses are the public frontend; the stable worker Elastic IP remains the origin.
+The production OpenTofu stack manages the controller, application, wildcard
+application, and Matrix A records only when `enable_cloudflare_dns` is explicitly
+enabled after the EC2 Elastic IPs exist. Provider authentication is supplied through
+the `CLOUDFLARE_API_TOKEN` runtime environment variable and never stored in HCL or
+OpenTofu state.
 Keep public IPv4 connectivity for the nodes because required container registries and
 Discord bridge endpoints currently depend on IPv4 egress. The two Elastic IPs cost less
 than providing that path through AWS DNS64/NAT64 and a NAT Gateway.
