@@ -7,6 +7,8 @@ on:
     paths:
       - .github/workflows/publish.yml
       - Containerfile
+      - ci/setup-build-cache.sh
+      - ci/teardown-build-cache.sh
       - roles/**
       - scripts/build.sh
       - scripts/validate-image.sh
@@ -19,6 +21,7 @@ concurrency:
 permissions:
   contents: read
   id-token: write
+  packages: write
 
 env:
   AWS_REGION: us-east-2
@@ -31,6 +34,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
+      max-parallel: 4
       matrix:
         include:
           - role: controller
@@ -94,6 +98,13 @@ jobs:
           aws ecr get-login-password --region "${AWS_REGION}" | \
             docker login --username AWS --password-stdin "${{ steps.image.outputs.registry }}"
 
+      - name: Prepare role-scoped GHCR build cache
+        if: steps.image.outputs.exists != 'true'
+        env:
+          GHCR_CACHE_WRITE: true
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ci/setup-build-cache.sh "${{ matrix.role }}"
+
       - name: Build and validate AMD64 bootc image
         if: steps.image.outputs.exists != 'true'
         env:
@@ -132,3 +143,7 @@ jobs:
       - name: Remove ECR login
         if: always() && steps.image.outputs.registry != ''
         run: docker logout "${{ steps.image.outputs.registry }}"
+
+      - name: Remove GHCR login and BuildKit builder
+        if: always()
+        run: ci/teardown-build-cache.sh

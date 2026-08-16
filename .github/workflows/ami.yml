@@ -6,6 +6,8 @@ on:
       - .github/workflows/ami.yml
       - Containerfile
       - ci/Containerfile
+      - ci/setup-build-cache.sh
+      - ci/teardown-build-cache.sh
       - flake.lock
       - flake.nix
       - image/**
@@ -42,6 +44,7 @@ concurrency:
 permissions:
   contents: read
   id-token: write
+  packages: write
 
 env:
   AWS_REGION: us-east-2
@@ -59,6 +62,7 @@ jobs:
         run: |
           df -h /
           docker system df
+          sudo podman system df
 
       - name: Resolve worker image reference
         env:
@@ -90,26 +94,44 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.ami_lifecycle == 'retained'
         run: |
           registry=${WORKER_IMAGE_REF%%/*}
-          aws ecr get-login-password --region "${AWS_REGION}" | docker login --username AWS --password-stdin "${registry}"
-          docker pull "${WORKER_IMAGE_REF}"
-          CONTAINER_ENGINE=docker ./scripts/validate-image.sh "${WORKER_IMAGE_REF}"
-          [[ $(docker image inspect --format '{{.Os}}/{{.Architecture}}' "${WORKER_IMAGE_REF}") == linux/amd64 ]] || {
+          aws ecr get-login-password --region "${AWS_REGION}" | sudo podman login --username AWS --password-stdin "${registry}"
+          sudo podman pull "${WORKER_IMAGE_REF}"
+          sudo env CONTAINER_ENGINE=podman ./scripts/validate-image.sh "${WORKER_IMAGE_REF}"
+          [[ $(sudo podman image inspect --format '{{.Os}}/{{.Architecture}}' "${WORKER_IMAGE_REF}") == linux/amd64 ]] || {
             echo "retained AMI source is not linux/amd64" >&2
             exit 1
           }
 
       - name: Build pinned image tooling
+        env:
+          AMI_LIFECYCLE: ${{ inputs.ami_lifecycle }}
         run: |
           source image/image-builder.env
-          docker build \
-            --build-arg "IMAGE_BUILDER_IMAGE=${IMAGE_BUILDER_IMAGE}" \
-            --tag "${CI_TOOLS_IMAGE}" \
-            --file ci/Containerfile \
-            .
+          if [[ "${AMI_LIFECYCLE}" == retained ]]; then
+            sudo podman build \
+              --build-arg "IMAGE_BUILDER_IMAGE=${IMAGE_BUILDER_IMAGE}" \
+              --tag "${CI_TOOLS_IMAGE}" \
+              --file ci/Containerfile \
+              .
+          else
+            docker build \
+              --build-arg "IMAGE_BUILDER_IMAGE=${IMAGE_BUILDER_IMAGE}" \
+              --tag "${CI_TOOLS_IMAGE}" \
+              --file ci/Containerfile \
+              .
+          fi
+
+      - name: Prepare role-scoped GHCR build cache
+        if: github.event_name != 'workflow_dispatch' || inputs.ami_lifecycle != 'retained'
+        env:
+          GHCR_CACHE_WRITE: ${{ github.event_name != 'pull_request' }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ci/setup-build-cache.sh worker
 
       - name: Build AMD64 worker bootc image
         if: github.event_name != 'workflow_dispatch' || inputs.ami_lifecycle != 'retained'
         env:
+          ARCH: amd64
           CONTAINER_ENGINE: docker
           IMAGE_NAME: ${{ env.WORKER_IMAGE_REF }}
           IMAGE_VERSION: ami-validation
@@ -117,12 +139,27 @@ jobs:
 
       - name: Build and validate raw AMI artifact
         env:
-          CONTAINER_ENGINE: docker
-          IMAGE_NAME: ${{ env.WORKER_IMAGE_REF }}
-          VM_TOOL_IMAGE: ${{ env.CI_TOOLS_IMAGE }}
+          AMI_LIFECYCLE: ${{ inputs.ami_lifecycle }}
         run: |
-          ./scripts/build-disk.sh worker ami
-          ./scripts/validate-disk.sh image-output/worker/coolify-worker-ami.raw
+          if [[ "${AMI_LIFECYCLE}" == retained ]]; then
+            sudo env \
+              CONTAINER_ENGINE=podman \
+              IMAGE_NAME="${WORKER_IMAGE_REF}" \
+              VM_TOOL_IMAGE="${CI_TOOLS_IMAGE}" \
+              ./scripts/build-disk.sh worker ami
+            sudo env \
+              CONTAINER_ENGINE=podman \
+              VM_TOOL_IMAGE="${CI_TOOLS_IMAGE}" \
+              ./scripts/validate-disk.sh image-output/worker/coolify-worker-ami.raw
+          else
+            CONTAINER_ENGINE=docker \
+              IMAGE_NAME="${WORKER_IMAGE_REF}" \
+              VM_TOOL_IMAGE="${CI_TOOLS_IMAGE}" \
+              ./scripts/build-disk.sh worker ami
+            CONTAINER_ENGINE=docker \
+              VM_TOOL_IMAGE="${CI_TOOLS_IMAGE}" \
+              ./scripts/validate-disk.sh image-output/worker/coolify-worker-ami.raw
+          fi
 
       - name: Require configured AWS validation identifiers
         if: github.event_name == 'workflow_dispatch'
@@ -194,4 +231,8 @@ jobs:
 
       - name: Remove retained ECR login
         if: always() && github.event_name == 'workflow_dispatch' && inputs.ami_lifecycle == 'retained'
-        run: docker logout "${WORKER_IMAGE_REF%%/*}"
+        run: sudo podman logout "${WORKER_IMAGE_REF%%/*}"
+
+      - name: Remove GHCR login and BuildKit builder
+        if: always()
+        run: ci/teardown-build-cache.sh

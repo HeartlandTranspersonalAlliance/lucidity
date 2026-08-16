@@ -20,6 +20,7 @@ concurrency:
 permissions:
   contents: read
   id-token: write
+  packages: write
 
 env:
   AWS_REGION: us-east-2
@@ -83,34 +84,47 @@ jobs:
           jq -e '(.failures | length) == 0 and (.images | length) == 1' <<< "${image}" >/dev/null
           echo "Benchmark target digest: $(jq -r '.images[0].imageId.imageDigest' <<< "${image}")"
 
-      - name: Build management-enabled CentOS bootc bootstrap image
+      - name: Prepare role-scoped GHCR build cache
         env:
-          BASE_IMAGE: ${{ env.CENTOS_BOOTC_IMAGE }}
-          CONTAINER_ENGINE: docker
-          IMAGE_NAME: ${{ env.BOOTSTRAP_IMAGE }}
-          IMAGE_VERSION: benchmark-${{ github.sha }}
+          GHCR_CACHE_ENGINE: podman
+          GHCR_CACHE_WRITE: true
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ci/setup-build-cache.sh benchmark-base
+
+      - name: Build management-enabled CentOS bootc bootstrap image
         run: |
-          ./scripts/build.sh benchmark-base
-          ./scripts/validate-image.sh "${BOOTSTRAP_IMAGE}"
+          sudo env \
+            BASE_IMAGE="${CENTOS_BOOTC_IMAGE}" \
+            BUILD_CACHE_FROM="${BUILD_CACHE_FROM}" \
+            BUILD_CACHE_TO="${BUILD_CACHE_TO}" \
+            CONTAINER_ENGINE=podman \
+            IMAGE_NAME="${BOOTSTRAP_IMAGE}" \
+            IMAGE_VERSION="benchmark-${GITHUB_SHA}" \
+            REGISTRY_AUTH_FILE="${REGISTRY_AUTH_FILE}" \
+            ./scripts/build.sh benchmark-base
+          sudo env CONTAINER_ENGINE=podman ./scripts/validate-image.sh "${BOOTSTRAP_IMAGE}"
 
       - name: Build pinned image tooling
         run: |
           source image/image-builder.env
-          docker build \
+          sudo podman build \
             --build-arg "IMAGE_BUILDER_IMAGE=${IMAGE_BUILDER_IMAGE}" \
             --tag "${CI_TOOLS_IMAGE}" \
             --file ci/Containerfile \
             .
 
       - name: Build and validate CentOS bootc raw AMI artifact
-        env:
-          CONTAINER_ENGINE: docker
-          IMAGE_NAME: ${{ env.BOOTSTRAP_IMAGE }}
-          IMAGE_OUTPUT_NAME: lucidity-centos-bootstrap-ami
-          VM_TOOL_IMAGE: ${{ env.CI_TOOLS_IMAGE }}
         run: |
-          ./scripts/build-disk.sh worker ami
-          ./scripts/validate-disk.sh image-output/worker/lucidity-centos-bootstrap-ami.raw
+          sudo env \
+            CONTAINER_ENGINE=podman \
+            IMAGE_NAME="${BOOTSTRAP_IMAGE}" \
+            IMAGE_OUTPUT_NAME=lucidity-centos-bootstrap-ami \
+            VM_TOOL_IMAGE="${CI_TOOLS_IMAGE}" \
+            ./scripts/build-disk.sh worker ami
+          sudo env \
+            CONTAINER_ENGINE=podman \
+            VM_TOOL_IMAGE="${CI_TOOLS_IMAGE}" \
+            ./scripts/validate-disk.sh image-output/worker/lucidity-centos-bootstrap-ami.raw
 
       - name: Install Determinate Nix for the pinned EBS uploader
         uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
@@ -134,3 +148,7 @@ jobs:
           AMI_TEST_SECURITY_GROUP_ID: ${{ vars.AWS_AMI_TEST_SECURITY_GROUP_ID }}
           AMI_TEST_SUBNET_ID: ${{ vars.AWS_AMI_TEST_SUBNET_ID }}
         run: ./scripts/validate-ami-import.sh image-output/worker/lucidity-centos-bootstrap-ami.raw
+
+      - name: Remove GHCR login and BuildKit builder
+        if: always()
+        run: ci/teardown-build-cache.sh
