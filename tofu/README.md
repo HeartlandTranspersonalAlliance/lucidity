@@ -159,19 +159,21 @@ AMI metadata, while the separate disposable T3a gate proves boot and guest behav
 For the controller role, the SSM gate waits for storage preparation and the controller
 bootstrap marker before the retained image can be marked validated.
 
-### Disposable bootc switch benchmark
+### Disposable bootc switch and rollback validation
 
-`Benchmark bootc switch delivery` is an opt-in experiment for comparing retained AMI
-delivery with a reusable bootc bootstrap AMI. It builds a management-enabled CentOS
+`Validate bootc switch and rollback delivery` is an opt-in EC2 lifecycle gate for
+proving retained AMI delivery from a reusable bootc bootstrap AMI. It builds a management-enabled CentOS
 Stream 10 bootc image from a digest-pinned upstream base, converts and registers that
 base through the same encrypted EBS Direct path, and launches it as a keyless
-`t3a.small`. SSM then configures instance-role ECR authentication, runs `bootc switch`
-to the current main commit's immutable AlmaLinux worker image, schedules a reboot, and
-repeats the production guest assertions after the new deployment boots. The job reports
-switch/pull and reboot/validation durations separately and always terminates the
-instance, deregisters the benchmark AMI, and deletes its snapshot.
+`t3a.small`. Before the update, it records the booted source image and writes a marker
+into a Docker volume. SSM then configures instance-role ECR authentication, runs
+`bootc switch` to the current main commit's immutable AlmaLinux worker image, reboots,
+and validates the target plus the marker. It next runs `bootc rollback`, reboots to the
+recorded source image, and validates the marker and enforcing SELinux again. The job
+reports each stage separately and always terminates the instance, deregisters the
+disposable AMI, and deletes its snapshot.
 
-The experiment deliberately uses private ECR rather than GHCR so the AMI strategy is
+The gate deliberately uses private ECR rather than GHCR so the AMI strategy is
 the only changed variable and no static registry credential is introduced. The
 upstream image-builder `--aws-*` uploader is not used: its documented AMI path requires
 an S3 bucket and the VM Import service role. Only dispatch this workflow from `main`

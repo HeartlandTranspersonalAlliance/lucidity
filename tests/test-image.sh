@@ -526,6 +526,7 @@ fi
 [[ $(printf '%s\n' scripts/bootstrap-controller.sh tests/test-controller.sh | ci/worker-changes.sh) == false ]]
 [[ $(printf '%s\n' mk/quality.mk scripts/check-text-style.sh tests/test-text-style.sh | ci/worker-changes.sh) == false ]]
 [[ $(printf '%s\n' .github/workflows/validate-deployment.yml scripts/validate-deployment.sh tests/test-deployment-validation.sh tests/fixtures/aws-deployment-validation | ci/worker-changes.sh) == false ]]
+[[ $(printf '%s\n' .github/workflows/ami-switch-benchmark.yml scripts/validate-ami-import.sh tests/test-ami-import.sh | ci/worker-changes.sh) == false ]]
 [[ $(printf '%s\n' Makefile | ci/worker-changes.sh) == true ]]
 [[ $(printf '%s\n' .github/workflows/validate.yml | ci/worker-changes.sh) == true ]]
 [[ $(printf '%s\n' README.md tofu/environments/aws/main.tf roles/worker/usr/example | ci/controller-changes.sh) == false ]]
@@ -535,6 +536,7 @@ fi
 [[ $(printf '%s\n' scripts/bootstrap-worker.sh tests/test-worker.sh | ci/controller-changes.sh) == false ]]
 [[ $(printf '%s\n' mk/quality.mk scripts/check-text-style.sh tests/test-text-style.sh | ci/controller-changes.sh) == false ]]
 [[ $(printf '%s\n' .github/workflows/validate-deployment.yml scripts/validate-deployment.sh tests/test-deployment-validation.sh tests/fixtures/aws-deployment-validation | ci/controller-changes.sh) == false ]]
+[[ $(printf '%s\n' .github/workflows/ami-switch-benchmark.yml scripts/validate-ami-import.sh tests/test-ami-import.sh | ci/controller-changes.sh) == false ]]
 [[ $(printf '%s\n' Makefile | ci/controller-changes.sh) == true ]]
 [[ $(printf '%s\n' .github/workflows/validate.yml | ci/controller-changes.sh) == true ]]
 grep -Fq 'merge_group:' .github/workflows/validate.yml

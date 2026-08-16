@@ -156,17 +156,31 @@ GITHUB_RUN_ID=mock-switch \
 PATH="${repo_root}/tests/fixtures:${PATH}" \
     "${repo_root}/scripts/validate-ami-import.sh" "${artifact}"
 
-[[ $(grep -c 'ssm send-command' "${switch_log}") -ge 2 ]] || {
-    echo "switch benchmark must stage the target and validate it after reboot" >&2
+[[ $(grep -c 'ssm send-command' "${switch_log}") -ge 4 ]] || {
+    echo "switch validation must stage and validate both the target and rollback boots" >&2
     exit 1
 }
 grep -Fq "bootc switch '123456789012.dkr.ecr.us-east-2.amazonaws.com/lucidity/bootc/worker:sha-0123456789abcdef0123456789abcdef01234567'" "${switch_log}"
 switch_auth_json='{"auths":{"123456789012.dkr.ecr.us-east-2.amazonaws.com":{}},"credHelpers":{"123456789012.dkr.ecr.us-east-2.amazonaws.com":"ecr-login"}}'
 switch_auth_base64=$(printf '%s' "${switch_auth_json}" | base64 --wrap=0)
 grep -Fq "printf '%s' '${switch_auth_base64}' | base64 --decode > /run/ostree/auth.json" "${switch_log}"
+grep -Fq 'docker volume create lucidity-update-rollback' "${switch_log}"
+grep -Fq 'lucidity-update-rollback-marker' "${switch_log}"
 grep -Fq 'lucidity-bootc-switch-benchmark-reboot' "${switch_log}"
+grep -Fq 'bootc rollback' "${switch_log}"
+grep -Fq 'lucidity-bootc-rollback-validation-reboot' "${switch_log}"
+grep -Fq 'LUCIDITY_ROLLBACK_SOURCE_BOOTED' "${switch_log}"
+
+switch_line=$(grep -n -m1 -- '--comment lucidity bootc switch benchmark' "${switch_log}" | cut -d: -f1)
+target_validation_line=$(grep -n -m1 -- '--comment lucidity bootc AMI validation' "${switch_log}" | cut -d: -f1)
+rollback_line=$(grep -n -m1 -- '--comment lucidity bootc rollback validation' "${switch_log}" | cut -d: -f1)
+rollback_validation_line=$(grep -n -m1 -- '--comment lucidity bootc rollback guest validation' "${switch_log}" | cut -d: -f1)
+((switch_line < target_validation_line && target_validation_line < rollback_line && rollback_line < rollback_validation_line)) || {
+    echo "switch, target validation, rollback, and rollback validation must run in order" >&2
+    exit 1
+}
 grep -Fq 'ec2 terminate-instances' "${switch_log}"
 grep -Fq 'ec2 deregister-image' "${switch_log}"
 grep -Fq 'ec2 delete-snapshot' "${switch_log}"
 
-echo "mocked EBS Direct API, retained release, switch benchmark, and T3a launch assertions passed"
+echo "mocked EBS Direct API, retained release, update/rollback lifecycle, and T3a launch assertions passed"
