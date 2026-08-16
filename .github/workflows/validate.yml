@@ -17,20 +17,23 @@ permissions:
 env:
   IMAGE: localhost/coolify-bootc-worker:lifecycle-v1
   UPDATE_IMAGE: localhost/coolify-bootc-worker:lifecycle-v2
-  CONTROLLER_IMAGE: localhost/coolify-bootc-controller:ci
+  CONTROLLER_IMAGE: localhost/coolify-bootc-controller:lifecycle-v1
+  CONTROLLER_UPDATE_IMAGE: localhost/coolify-bootc-controller:lifecycle-v2
   CI_TOOLS_IMAGE: localhost/coolify-aws-ci-tools:ci
 
 jobs:
-  worker-changes:
-    runs-on: ubuntu-24.04
+  lifecycle-changes:
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
     outputs:
-      required: ${{ steps.filter.outputs.required }}
+      controller: ${{ steps.filter.outputs.controller }}
+      worker: ${{ steps.filter.outputs.worker }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
-      - name: Decide whether worker lifecycle validation is required
+      - name: Decide which lifecycle validations are required
         id: filter
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -38,23 +41,34 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           if [[ "${EVENT_NAME}" != pull_request ]]; then
-            echo "required=true" >> "${GITHUB_OUTPUT}"
+            {
+              echo "controller=true"
+              echo "worker=true"
+            } >> "${GITHUB_OUTPUT}"
             exit 0
           fi
 
-          changed_paths="${RUNNER_TEMP}/worker-changed-paths"
+          changed_paths="${RUNNER_TEMP}/lifecycle-changed-paths"
           if ! git diff --name-only --diff-filter=ACDMRT \
               "${BASE_SHA}" "${HEAD_SHA}" > "${changed_paths}"; then
-            echo "Could not determine changed paths; requiring full worker validation" >&2
-            echo "required=true" >> "${GITHUB_OUTPUT}"
+            echo "Could not determine changed paths; requiring both lifecycle validations" >&2
+            {
+              echo "controller=true"
+              echo "worker=true"
+            } >> "${GITHUB_OUTPUT}"
             exit 0
           fi
 
-          required=$(ci/worker-changes.sh < "${changed_paths}")
-          echo "required=${required}" >> "${GITHUB_OUTPUT}"
+          controller=$(ci/controller-changes.sh < "${changed_paths}")
+          worker=$(ci/worker-changes.sh < "${changed_paths}")
+          {
+            echo "controller=${controller}"
+            echo "worker=${worker}"
+          } >> "${GITHUB_OUTPUT}"
 
   opentofu:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -66,6 +80,7 @@ jobs:
 
   shell-and-static:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -80,25 +95,43 @@ jobs:
             --workdir /repo \
           "${ACTIONLINT_IMAGE}" -color
 
-  controller-image:
+  controller-lifecycle:
+    needs: lifecycle-changes
+    if: needs.lifecycle-changes.outputs.controller == 'true'
     permissions:
       contents: read
-      packages: write
+      packages: read
     runs-on: ubuntu-24.04
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Prepare role-scoped GHCR build cache
         env:
-          GHCR_CACHE_WRITE: ${{ github.event_name != 'pull_request' }}
+          GHCR_CACHE_WRITE: false
           GITHUB_TOKEN: ${{ github.token }}
         run: ci/setup-build-cache.sh controller
+
+      - name: Enable KVM acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Build pinned CI tooling image
+        run: |
+          source image/image-builder.env
+          docker build \
+            --build-arg "IMAGE_BUILDER_IMAGE=${IMAGE_BUILDER_IMAGE}" \
+            --tag "${CI_TOOLS_IMAGE}" \
+            --file ci/Containerfile \
+            .
 
       - name: Build controller image
         env:
           CONTAINER_ENGINE: docker
           IMAGE_NAME: ${{ env.CONTROLLER_IMAGE }}
-          IMAGE_VERSION: controller-ci
+          IMAGE_VERSION: lifecycle-v1
         run: ./scripts/build.sh controller
 
       - name: Validate controller bootc image, persistence policy, and secret tooling
@@ -106,16 +139,56 @@ jobs:
           CONTAINER_ENGINE: docker
         run: ./scripts/validate-image.sh "${CONTROLLER_IMAGE}"
 
+      - name: Build and validate controller QCOW2
+        env:
+          CONTAINER_ENGINE: docker
+          IMAGE_NAME: ${{ env.CONTROLLER_IMAGE }}
+          VM_TOOL_IMAGE: ${{ env.CI_TOOLS_IMAGE }}
+        run: |
+          ./scripts/build-disk.sh controller qcow2
+          make validate-disk-controller
+
+      - name: Build controller update image and publish lifecycle images locally
+        env:
+          CONTAINER_ENGINE: docker
+          IMAGE_NAME: ${{ env.CONTROLLER_UPDATE_IMAGE }}
+          IMAGE_VERSION: lifecycle-v2
+        run: |
+          ./scripts/build.sh controller
+          make vm-registry-start-controller
+
+      - name: Boot controller and validate switch, update, and rollback persistence
+        env:
+          CONTAINER_ENGINE: docker
+          VM_TOOL_IMAGE: ${{ env.CI_TOOLS_IMAGE }}
+          VM_WAIT_ATTEMPTS: 300
+          VM_CONTROLLER_WAIT_ATTEMPTS: 600
+        run: |
+          cleanup() {
+            status=$?
+            if ((status != 0)); then
+              docker logs coolify-controller-vm || true
+            fi
+            make vm-stop-controller || true
+            make vm-registry-stop-controller || true
+            exit "${status}"
+          }
+          trap cleanup EXIT
+          make vm-init-controller
+          make vm-start-controller
+          make vm-validate-controller
+          make vm-update-rollback-controller
+
       - name: Remove GHCR login and BuildKit builder
         if: always()
         run: ci/teardown-build-cache.sh
 
   worker-lifecycle:
-    needs: worker-changes
-    if: needs.worker-changes.outputs.required == 'true'
+    needs: lifecycle-changes
+    if: needs.lifecycle-changes.outputs.worker == 'true'
     permissions:
       contents: read
-      packages: write
+      packages: read
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -123,7 +196,7 @@ jobs:
 
       - name: Prepare role-scoped GHCR build cache
         env:
-          GHCR_CACHE_WRITE: ${{ github.event_name != 'pull_request' }}
+          GHCR_CACHE_WRITE: false
           GITHUB_TOKEN: ${{ github.token }}
         run: ci/setup-build-cache.sh worker
 
@@ -181,7 +254,7 @@ jobs:
           ./scripts/build.sh worker
           make vm-registry-start-worker
 
-      - name: Boot worker and validate reboot, update, and rollback persistence
+      - name: Boot worker and validate switch, update, and rollback persistence
         env:
           CONTAINER_ENGINE: docker
           VM_TOOL_IMAGE: ${{ env.CI_TOOLS_IMAGE }}

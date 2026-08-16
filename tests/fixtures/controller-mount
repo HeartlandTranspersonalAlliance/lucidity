@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+[[ ${1:-} == --bind && $# == 3 ]]
+printf '%s\n' "$*" >>"${CONTROLLER_TEST_STATE}/mount"
+touch "${CONTROLLER_TEST_STATE}/mounted"

@@ -14,6 +14,7 @@ required_files=(
     ci/images.env
     ci/setup-build-cache.sh
     ci/teardown-build-cache.sh
+    ci/controller-changes.sh
     ci/worker-changes.sh
     .github/workflows/publish.yml
     .github/workflows/ami-switch-benchmark.yml
@@ -90,6 +91,11 @@ grep -Fq 'bootc container lint' Containerfile
 grep -Fq 'PermitRootLogin prohibit-password' roles/common/etc/ssh/sshd_config.d/40-coolify-aws.conf
 grep -Fq 'PasswordAuthentication no' roles/common/etc/ssh/sshd_config.d/40-coolify-aws.conf
 grep -Fq 'WantedBy=cloud-init.target' roles/worker/usr/lib/systemd/system/coolify-worker-authorized-keys.service
+grep -Fq 'WantedBy=cloud-init.target' roles/controller/usr/lib/systemd/system/coolify-controller-bootstrap.service
+grep -Fq 'cloud-final.service' roles/controller/usr/lib/systemd/system/coolify-controller-bootstrap.service
+grep -Fq 'WantedBy=cloud-init.target' roles/controller/usr/lib/systemd/system/aws-workload-credentials-provider-sm.service
+grep -Fq 'cloud-final.service' roles/controller/usr/lib/systemd/system/aws-workload-credentials-provider-sm.service
+grep -Fq 'ConditionPathExists=/etc/coolify-controller/runtime-secrets.env' roles/controller/usr/lib/systemd/system/aws-workload-credentials-provider-sm.service
 grep -Fq 'enable bootc-fetch-apply-updates.timer' roles/common/usr/lib/systemd/system-preset/80-coolify-aws.preset
 grep -Fq 'OnCalendar=*-*-* 11:00:00 UTC' roles/common/usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-coolify-aws.conf
 grep -Fq 'install -d -m 0755 /nix' Containerfile
@@ -143,6 +149,30 @@ grep -Fq '/usr/lib/coolify-aws/image-version' Containerfile
 grep -Fq '=~ ^[[:alnum:].:-]+$' scripts/vm-init.sh
 grep -Fq '=~ ^[[:alnum:].:-]+$' scripts/vm-validate-update.sh
 grep -Fq 'CONTAINER_ENGINE' scripts/build-disk.sh
+grep -Fq 'controller|worker' scripts/build-disk.sh
+# These are literal shell expressions in the implementation under test.
+# shellcheck disable=SC2016
+grep -Fq 'coolify-${role}-qcow2.qcow2' scripts/vm-init.sh
+# shellcheck disable=SC2016
+grep -Fq 'coolify-${role}-test.qcow2' scripts/vm-start.sh
+# shellcheck disable=SC2016
+grep -Fq 'coolify-bootc-${role}' scripts/vm-registry.sh
+grep -Fq 'switch, update, and rollback validate reboot persistence' scripts/vm-validate.sh
+# shellcheck disable=SC2016
+grep -Fq 'compose+=(up -d --wait --wait-timeout 600 --pull "${pull_policy}" --remove-orphans)' scripts/bootstrap-controller.sh
+grep -Fq '/data/coolify/.update-rollback-marker' scripts/vm-validate-update.sh
+grep -Fq 'timed out waiting for Docker and the Coolify worker SSH identity' scripts/vm-validate-update.sh
+grep -Fq 'deployment assertion failed while checking' scripts/vm-validate-update.sh
+# shellcheck disable=SC2016
+worker_branch_line=$(grep -n 'if \[\[ ${role} == worker \]\]; then' scripts/vm-validate-update.sh | head -n 2 | tail -n 1 | cut -d: -f1)
+# shellcheck disable=SC2016
+controller_hash_line=$(grep -n '^expected_env_hash=\$5$' scripts/vm-validate-update.sh | cut -d: -f1)
+[[ ${worker_branch_line} -lt ${controller_hash_line} ]] || {
+    echo "worker deployment assertions must branch before reading controller-only arguments" >&2
+    exit 1
+}
+grep -Fq 'vm-update-rollback-controller' Makefile
+grep -Fq 'Build and validate controller QCOW2' .github/workflows/validate.yml
 grep -Fq 'amazon-ssm-agent' Containerfile
 grep -Fq '/3.3.5068.0/linux_amd64/amazon-ssm-agent.rpm' Containerfile
 if grep -Fq '/latest/linux_amd64/amazon-ssm-agent.rpm' Containerfile; then
@@ -386,7 +416,12 @@ if rg -n 'key_name|associate_public_ip_address|user_data' tofu/modules/ec2-launc
 fi
 [[ $(printf '%s\n' README.md tofu/environments/aws/main.tf roles/controller/usr/example | ci/worker-changes.sh) == false ]]
 [[ $(printf '%s\n' README.md roles/worker/usr/example | ci/worker-changes.sh) == true ]]
+[[ $(printf '%s\n' scripts/bootstrap-controller.sh tests/test-controller.sh | ci/worker-changes.sh) == false ]]
 [[ $(printf '%s\n' .github/workflows/validate.yml | ci/worker-changes.sh) == true ]]
+[[ $(printf '%s\n' README.md tofu/environments/aws/main.tf roles/worker/usr/example | ci/controller-changes.sh) == false ]]
+[[ $(printf '%s\n' README.md roles/controller/usr/example | ci/controller-changes.sh) == true ]]
+[[ $(printf '%s\n' scripts/bootstrap-worker.sh tests/test-worker.sh | ci/controller-changes.sh) == false ]]
+[[ $(printf '%s\n' .github/workflows/validate.yml | ci/controller-changes.sh) == true ]]
 unexpected_sudo=$(grep -R -n -E '(^|[[:space:]])sudo[[:space:]]' .github/workflows | \
     grep -Ev 'sudo (tee /etc/udev/rules.d/99-kvm4all.rules|udevadm control --reload-rules|udevadm trigger --name-match=kvm)$' | \
     grep -Ev '^\.github/workflows/(ami|ami-switch-benchmark)\.yml:.*sudo (podman (system df|login|pull|image inspect|build|logout)|env (\\|CONTAINER_ENGINE=podman))' || true)
@@ -395,8 +430,8 @@ if [[ -n ${unexpected_sudo} ]]; then
     printf '%s\n' "${unexpected_sudo}" >&2
     exit 1
 fi
-[[ $(grep -R -h -E 'sudo (tee /etc/udev/rules.d/99-kvm4all.rules|udevadm control --reload-rules|udevadm trigger --name-match=kvm)$' .github/workflows | wc -l) == 3 ]] || {
-    echo "the KVM setup must contain exactly three narrowly scoped sudo commands" >&2
+[[ $(grep -R -h -E 'sudo (tee /etc/udev/rules.d/99-kvm4all.rules|udevadm control --reload-rules|udevadm trigger --name-match=kvm)$' .github/workflows | wc -l) == 6 ]] || {
+    echo "the two KVM lifecycle jobs must each contain exactly three narrowly scoped sudo commands" >&2
     exit 1
 }
 if grep -Eq '^IMAGE_BUILDER_IMAGE=.+:(latest|main)$' image/image-builder.env; then

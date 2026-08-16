@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+[[ ${1:-} == --quiet && $# == 2 ]]
+[[ -e ${CONTROLLER_TEST_STATE}/mounted ]]

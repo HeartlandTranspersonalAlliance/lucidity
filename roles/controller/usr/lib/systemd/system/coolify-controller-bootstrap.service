@@ -12,4 +12,4 @@ ExecStart=/usr/libexec/coolify-aws/bootstrap-controller-with-secrets
 TimeoutStartSec=15min
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=cloud-init.target

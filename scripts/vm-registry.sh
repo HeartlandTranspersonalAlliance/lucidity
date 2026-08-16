@@ -7,12 +7,18 @@ readonly repo_root
 source "${repo_root}/ci/images.env"
 
 action=${1:-}
+role=${2:-worker}
+case "${role}" in
+    controller) default_registry_port=5001 ;;
+    worker) default_registry_port=5000 ;;
+    *) echo "unsupported VM role '${role}'; expected controller or worker" >&2; exit 2 ;;
+esac
 container_engine=${CONTAINER_ENGINE:-podman}
-registry_name=${VM_REGISTRY_NAME:-coolify-worker-registry}
-registry_port=${VM_REGISTRY_PORT:-5000}
-base_image=${VM_BASE_IMAGE:-localhost/coolify-bootc-worker:lifecycle-v1}
-update_image=${VM_UPDATE_IMAGE:-localhost/coolify-bootc-worker:lifecycle-v2}
-repository=${VM_UPDATE_REPOSITORY:-coolify-bootc-worker}
+registry_name=${VM_REGISTRY_NAME:-coolify-${role}-registry}
+registry_port=${VM_REGISTRY_PORT:-${default_registry_port}}
+base_image=${VM_BASE_IMAGE:-localhost/coolify-bootc-${role}:lifecycle-v1}
+update_image=${VM_UPDATE_IMAGE:-localhost/coolify-bootc-${role}:lifecycle-v2}
+repository=${VM_UPDATE_REPOSITORY:-coolify-bootc-${role}}
 registry_ref=localhost:${registry_port}/${repository}
 
 command -v "${container_engine}" >/dev/null 2>&1 || { echo "${container_engine} is required" >&2; exit 1; }
@@ -66,13 +72,13 @@ case "${action}" in
         ;;
     stop)
         if "${container_engine}" container inspect "${registry_name}" >/dev/null 2>&1; then
-            "${container_engine}" stop --time 10 "${registry_name}"
+            "${container_engine}" stop --timeout 10 "${registry_name}"
         else
             echo "Test registry is not running: ${registry_name}"
         fi
         ;;
     *)
-        echo "usage: $0 start|stop" >&2
+        echo "usage: $0 start|stop [controller|worker]" >&2
         exit 2
         ;;
 esac

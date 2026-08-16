@@ -7,7 +7,14 @@ cdn=${COOLIFY_CDN:-https://cdn.coollabs.io/coolify}
 owner=${COOLIFY_DATA_OWNER:-9999:root}
 source_dir=${data_root}/source
 env_file=${source_dir}/.env
-key_file=${data_root}/ssh/keys/id.root@host.docker.internal
+key_file=${data_root}/ssh/id.root@host.docker.internal
+key_import_file=${data_root}/ssh/keys/id.root@host.docker.internal
+bootstrap_marker=${data_root}/.controller-bootstrap-complete
+
+pull_policy=missing
+if [[ ! -e ${bootstrap_marker} ]]; then
+    pull_policy=always
+fi
 
 required_directories=(
     source
@@ -106,7 +113,7 @@ if [[ ! -s ${key_file} ]]; then
     ssh-keygen -q -t ed25519 -a 100 -N '' -C coolify -f "${key_file}"
 fi
 if [[ ! -s ${key_file}.pub ]]; then
-    temporary_public_key=$(mktemp "${data_root}/ssh/keys/.id.root.pub.XXXXXX")
+    temporary_public_key=$(mktemp "${data_root}/ssh/.id.root.pub.XXXXXX")
     public_key_material=$(ssh-keygen -y -f "${key_file}")
     printf '%s\n' "${public_key_material}" >"${temporary_public_key}"
     chmod 0600 "${temporary_public_key}"
@@ -116,6 +123,14 @@ fi
 public_key=$(<"${key_file}.pub")
 if ! grep -Fqx -- "${public_key}" "${root_home}/.ssh/authorized_keys"; then
     printf '%s\n' "${public_key}" >>"${root_home}/.ssh/authorized_keys"
+fi
+
+# Coolify consumes files from ssh/keys as an import inbox. Keep the canonical
+# host identity outside that managed directory and stage the same identity
+# until the first bootstrap completes.
+if [[ ! -e ${bootstrap_marker} ]]; then
+    install -m 0600 "${key_file}" "${key_import_file}"
+    install -m 0600 "${key_file}.pub" "${key_import_file}.pub"
 fi
 
 chown -R "${owner}" "${data_root}"
@@ -135,11 +150,11 @@ compose=(
 if [[ -s ${source_dir}/docker-compose.custom.yml ]]; then
     compose+=(--file "${source_dir}/docker-compose.custom.yml")
 fi
-compose+=(up -d --pull always --remove-orphans)
+compose+=(up -d --wait --wait-timeout 600 --pull "${pull_policy}" --remove-orphans)
 "${compose[@]}"
 
-touch "${data_root}/.controller-bootstrap-complete"
-chown "${owner}" "${data_root}/.controller-bootstrap-complete"
-chmod 0600 "${data_root}/.controller-bootstrap-complete"
+touch "${bootstrap_marker}"
+chown "${owner}" "${bootstrap_marker}"
+chmod 0600 "${bootstrap_marker}"
 
 echo "Coolify controller bootstrap complete"

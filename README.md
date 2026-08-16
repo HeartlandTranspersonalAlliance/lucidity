@@ -1,6 +1,6 @@
 # Coolify bootc appliance for AWS
 
-This repository builds an image-mode Linux appliance for a small Coolify deployment on EC2. The worker is an AlmaLinux 10 bootc host with Docker Engine, Compose, SSH, cloud-init, SELinux policy, and persistent Docker storage. The controller image adds persistent Coolify storage and an idempotent first-boot bootstrap; its complete VM and EC2 lifecycle still needs validation.
+This repository builds an image-mode Linux appliance for a small Coolify deployment on EC2. The worker is an AlmaLinux 10 bootc host with Docker Engine, Compose, SSH, cloud-init, SELinux policy, and persistent Docker storage. The controller image adds persistent Coolify storage and an idempotent first-boot bootstrap. Both roles pass the complete hosted KVM switch, update, and rollback lifecycle; the controller's EC2 lifecycle still needs validation.
 
 > [!WARNING]
 > AlmaLinux's bootc images are experimental upstream. Running Coolify on a custom bootc appliance is also not an officially documented Coolify deployment model. Treat the current repository as development work until boot, update, rollback, persistence, and Coolify integration have been exercised on real EC2 instances.
@@ -68,8 +68,9 @@ writes the raw disk directly to EBS. A retained release pulls the immutable priv
 source commit, uses that real registry reference as the bootc source, runs the same EBS
 Direct and T3a/SSM gates, and preserves the validated AMI and encrypted snapshot. EC2 launch
 templates are defined but remain disabled until exact controller and worker AMI IDs are
-selected. The controller bootstrap now builds and passes image-level validation, but its
-VM update/rollback lifecycle, retained controller AMI, and OpenTofu provisioning of the
+selected. The controller bootstrap now passes the full hosted KVM update/rollback
+lifecycle with its persistent environment, SSH identity, Compose service set, bind mount,
+and SELinux label intact. A retained controller AMI and OpenTofu provisioning of the
 reference-only secret environment remain blockers for launching the production pair. No
 untested AWS deployment code is presented as complete.
 
@@ -116,7 +117,7 @@ proposal.md                   full implementation plan and milestones
 
 ## Remote-first validation
 
-GitHub Actions is the primary build and test environment. Every pull request runs the lightweight and infrastructure checks below. Worker-impacting pull requests, every push to `main`, and every manual run execute the complete image lifecycle:
+GitHub Actions is the primary build and test environment. Every pull request runs the lightweight and infrastructure checks below. Role-impacting pull requests run only the affected controller or worker lifecycle, while every push to `main` and every manual run execute both:
 
 1. OpenTofu formatting, validation, and mocked infrastructure tests in a pinned Nix environment;
 2. ShellCheck, static behavior tests, and actionlint;
@@ -124,12 +125,12 @@ GitHub Actions is the primary build and test environment. Every pull request run
 4. controller image assertions for the native `/nix` mountpoint and enforcing SELinux configuration;
 5. a privileged worker QCOW2 conversion inside the pinned CI tooling container;
 6. QCOW2 consistency checks;
-7. a UEFI worker guest boot, cloud-init and SSH checks, and Docker-volume persistence across reboot;
-8. a two-version bootc update and rollback through a disposable guest-reachable registry, with the same Docker data verified after each reboot.
+7. UEFI controller and worker guest boots plus cloud-init, service, and SSH checks;
+8. registry switches, two-version bootc updates, and rollbacks through disposable guest-reachable registries, with the same persistent state verified after each reboot.
 
-The OpenTofu job installs Determinate Nix through a commit-pinned action. Image jobs install no packages onto the hosted runner. The worker lifecycle job uses host `sudo` only for GitHub's documented udev rule granting access to the runner's existing `/dev/kvm` device. AMI jobs use narrowly scoped root Podman commands because osbuild consumes the bootc source through shared root container storage. A repository test rejects other workflow uses of `sudo`. KVM accelerates the complete VM lifecycle without removing any reboot, update, or rollback checks, while QEMU TCG remains the automatic fallback. Build artifacts stay within the ephemeral job and are not uploaded, avoiding persistent storage cost and accidental publication of disposable SSH identities.
+The OpenTofu job installs Determinate Nix through a commit-pinned action. Image jobs install no packages onto the hosted runner. Lifecycle jobs use host `sudo` only for GitHub's documented udev rule granting access to the runner's existing `/dev/kvm` device. AMI jobs use narrowly scoped root Podman commands because osbuild consumes the bootc source through shared root container storage. A repository test rejects other workflow uses of `sudo`. KVM accelerates the complete VM lifecycle without removing any registry-switch, update, or rollback reboot checks, while QEMU TCG remains the automatic fallback. Build artifacts stay within the ephemeral job and are not uploaded, avoiding persistent storage cost and accidental publication of disposable SSH identities.
 
-For pull requests, the worker lifecycle runs whenever a changed path may affect the worker image or its test harness. It is skipped only when all changes are limited to documentation, OpenTofu, Nix metadata used by OpenTofu, or controller-only role files. Pushes to `main` and manual runs always execute the full lifecycle, so an unknown or newly added path defaults to the safer full validation.
+For pull requests, a lightweight `ubuntu-slim` job classifies changed paths before allocating the full VM runners. Documentation, OpenTofu, and role-exclusive changes skip unrelated image lifecycles; unknown or shared paths default to both. Pushes to `main` and manual runs always execute both lifecycles. Validation consumes role-scoped GHCR caches read-only, while trusted publication runs refresh those caches with the minimum required token permissions.
 
 Local commands remain available for development and diagnosis, but a successful local run is not a substitute for the required GitHub checks.
 
@@ -199,11 +200,13 @@ Nix installation is a post-AMI milestone for both controller and worker, not a p
 
 ## Build a bootable disk artifact
 
-The current upstream path is the unified osbuild `image-builder`; standalone `bootc-image-builder` is deprecated for new integrations. The builder runs privileged through `run0`, consumes the worker from local Podman storage, and is pinned by digest in `image/image-builder.env`.
+The current upstream path is the unified osbuild `image-builder`; standalone `bootc-image-builder` is deprecated for new integrations. The builder runs privileged through `run0`, consumes the selected role image from local Podman storage, and is pinned by digest in `image/image-builder.env`.
 
 Build a local VM disk first:
 
 ```bash
+make image-controller
+make validate-disk-controller
 make image-worker
 make validate-disk-worker
 ```
@@ -211,14 +214,29 @@ make validate-disk-worker
 After VM boot and persistence testing succeeds, generate an AWS-format disk artifact:
 
 ```bash
+make ami-controller
 make ami-worker
 ```
 
 Artifacts are placed under `image-output/` and ignored by Git. An `.ami` artifact is not an EC2 AMI: it still requires upload to an EBS snapshot and explicit EC2 registration. The validation and release path uses the EBS Direct APIs. This command performs no AWS upload and receives no AWS credentials. See [image/README.md](image/README.md) for the boundary.
 
-## Boot and test the worker locally
+## Boot and test the roles locally
 
-The pinned image-builder container also supplies QEMU and OVMF, so the host only needs Podman, KVM access, `qemu-img`, `xorriso`, and OpenSSH. The VM uses an overlay over the generated worker QCOW2 and a NoCloud seed containing two disposable public keys.
+The pinned image-builder container also supplies QEMU and OVMF, so the host only needs Podman, KVM access, `qemu-img`, `xorriso`, and OpenSSH. Each VM uses an overlay over its generated QCOW2 and a NoCloud seed with a disposable administrator key. The worker seed also includes its separate disposable Coolify key.
+
+For the controller:
+
+```bash
+make vm-init-controller
+make vm-start-controller
+make vm-validate-controller
+make vm-registry-start-controller
+make vm-update-rollback-controller
+```
+
+The controller validation waits for the real Compose bootstrap, verifies every configured service is running, and proves that the generated environment, controller SSH identity, persistent marker, bind mount, and SELinux label survive the registry switch, update, and rollback reboots. The initial validation does not add a redundant ordinary reboot. It rejects relevant SELinux AVC denials. The controller VM listens on `127.0.0.1:2223` and uses `image-output/vm-controller/`.
+
+For the worker:
 
 ```bash
 make vm-init-worker
@@ -228,7 +246,7 @@ make vm-registry-start-worker
 make vm-update-rollback-worker
 ```
 
-Validation checks cloud-init, separate administrator and Coolify SSH authentication, Docker, Compose, bootc, enforcing SELinux, the unattended-update timer, and a Docker volume marker across a real guest reboot. The VM remains running on `127.0.0.1:2222` afterward for inspection:
+Validation checks cloud-init, separate administrator and Coolify SSH authentication, Docker, Compose, bootc, enforcing SELinux, the unattended-update timer, and a Docker volume marker across the registry switch, update, and rollback reboots. The VM remains running on `127.0.0.1:2222` afterward for inspection:
 
 ```bash
 ssh -p 2222 -i image-output/vm/admin root@127.0.0.1
@@ -238,6 +256,11 @@ make vm-clean-worker
 ```
 
 `vm-clean-worker` deletes only generated files under `image-output/vm/`. Exact results and current limitations are recorded in [docs/local-vm-validation.md](docs/local-vm-validation.md).
+
+Use `make vm-registry-stop-controller`, `make vm-stop-controller`, and
+`make vm-clean-controller` for the controller. These commands affect only the
+controller's disposable registry, VM container, and generated files under
+`image-output/vm-controller/`.
 
 ## Worker SSH provisioning
 
@@ -268,17 +291,23 @@ The controller implements that boundary with a systemd-managed bind mount from
 production override, environment template, and upgrade scripts only when absent. It
 fills empty initial secret fields, creates the controller SSH identity and attachable
 Docker network only when needed, reapplies the SELinux label, and runs Compose without
-overwriting a working installation. Lightweight tests prove a second run preserves the
-environment and SSH identity; a booted-controller update and rollback test is still
-required before this persistence path is considered production-proven.
+overwriting a working installation. It pulls application images on initial installation
+and uses locally cached images on subsequent OS boots, keeping Coolify upgrades separate
+from the bootc lifecycle. Lightweight tests prove a second run preserves the environment
+and SSH identity. The controller VM harness extends those assertions across the
+registry switch, bootc update, and rollback reboots, and the full hosted KVM run passes.
+The disposable EC2 gate is still required before this persistence path is considered
+production-proven.
 
 The local lifecycle test establishes the intended persistence boundary by:
 
-1. writing data into a Docker volume;
+1. writing data into a worker Docker volume or the controller's persistent Coolify tree;
 2. switching to a v1 image in a disposable local registry and staging a visibly different v2 bootc deployment;
 3. rebooting and verifying the data;
 4. rolling back and rebooting;
-5. verifying the same data and enforcing SELinux state again.
+5. verifying the same data and enforcing SELinux state again. For the controller it
+   also compares hashes of the generated environment and private key and requires the
+   same complete Compose service set after every deployment change.
 
 The registry permits HTTP only on the QEMU host gateway for this disposable test. Production images do not contain that exception and must use authenticated HTTPS ECR references.
 
