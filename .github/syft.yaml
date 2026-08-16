@@ -1,0 +1,21 @@
+check-for-app-update: false
+default-catalogers:
+  - java-archive-cataloger
+  - java-jvm-cataloger
+  - javascript-package-cataloger
+  - linux-kernel-cataloger
+  - python-installed-package-cataloger
+  - rpm-db-cataloger
+  - ruby-installed-gemspec-cataloger
+  - sbom-cataloger
+file:
+  metadata:
+    selection: none
+parallelism: 4
+package:
+  exclude-binary-overlap-by-ownership: false
+relationships:
+  package-file-ownership: false
+  package-file-ownership-overlap: false
+select-catalogers:
+  - -file

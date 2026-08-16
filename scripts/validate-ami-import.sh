@@ -11,6 +11,9 @@ ami_lifecycle=${AMI_LIFECYCLE:-disposable}
 ami_role=${AMI_ROLE:-worker}
 source_revision=${AMI_SOURCE_REVISION:-}
 expected_bootc_image_ref=${AMI_EXPECTED_BOOTC_IMAGE_REF:-}
+release_version=${AMI_RELEASE_VERSION:-}
+source_image_digest=${AMI_SOURCE_IMAGE_DIGEST:-}
+sbom_sha256=${AMI_SBOM_SHA256:-}
 switch_target_ref=${AMI_SWITCH_TARGET_REF:-}
 launch_validation=${AMI_LAUNCH_VALIDATION:-false}
 launch_instance_type=${AMI_TEST_INSTANCE_TYPE:-t3a.small}
@@ -33,13 +36,28 @@ if [[ -n ${switch_target_ref} ]]; then
         exit 2
     }
 fi
+release_metadata=false
+if [[ -n ${release_version} || -n ${source_image_digest} || -n ${sbom_sha256} ]]; then
+    [[ ${ami_lifecycle} == retained ]] || { echo "release metadata is restricted to retained AMIs" >&2; exit 2; }
+    [[ ${release_version} =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "AMI_RELEASE_VERSION must be a v-prefixed semantic version" >&2; exit 2; }
+    [[ ${source_image_digest} =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "AMI_SOURCE_IMAGE_DIGEST must be a lowercase SHA-256 OCI digest" >&2; exit 2; }
+    [[ ${sbom_sha256} =~ ^[0-9a-f]{64}$ ]] || { echo "AMI_SBOM_SHA256 must be a lowercase SHA-256 digest" >&2; exit 2; }
+    release_metadata=true
+fi
 if [[ ${ami_lifecycle} == retained ]]; then
     [[ ${launch_validation} == true ]] || { echo "retained AMIs require the disposable EC2 launch gate" >&2; exit 2; }
     [[ ${source_revision} =~ ^[0-9a-f]{40}$ ]] || { echo "AMI_SOURCE_REVISION must be a full lowercase Git commit SHA for retained AMIs" >&2; exit 2; }
-    [[ ${expected_bootc_image_ref} =~ ^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[a-z0-9]+([._/-][a-z0-9]+)*:sha-${source_revision}$ ]] || {
-        echo "AMI_EXPECTED_BOOTC_IMAGE_REF must be the retained commit's fully qualified private ECR reference" >&2
-        exit 2
-    }
+    if [[ ${release_metadata} == true ]]; then
+        [[ ${expected_bootc_image_ref} =~ ^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[a-z0-9]+([._/-][a-z0-9]+)*:${release_version}$ ]] || {
+            echo "AMI_EXPECTED_BOOTC_IMAGE_REF must use the retained release's immutable ECR version tag" >&2
+            exit 2
+        }
+    else
+        [[ ${expected_bootc_image_ref} =~ ^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[a-z0-9]+([._/-][a-z0-9]+)*:sha-${source_revision}$ ]] || {
+            echo "AMI_EXPECTED_BOOTC_IMAGE_REF must use the retained commit's immutable ECR tag" >&2
+            exit 2
+        }
+    fi
 fi
 [[ ${snapshot_kms_key_arn} =~ ^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/[0-9a-f-]+$ ]] || {
     echo "AMI_SNAPSHOT_KMS_KEY_ARN must be a customer-managed KMS key ARN for EBS Direct uploads" >&2
@@ -75,6 +93,20 @@ else
     image_description="Disposable lucidity AMD64 bootc AMI validation ${run_id}"
 fi
 source_revision_tag=${source_revision:-none}
+snapshot_release_tags=()
+resource_release_tags=()
+if [[ ${release_metadata} == true ]]; then
+    snapshot_release_tags+=(
+        --tag "Key=ReleaseVersion,Value=${release_version}"
+        --tag "Key=SourceImageDigest,Value=${source_image_digest}"
+        --tag "Key=SbomSha256,Value=${sbom_sha256}"
+    )
+    resource_release_tags+=(
+        "Key=ReleaseVersion,Value=${release_version}"
+        "Key=SourceImageDigest,Value=${source_image_digest}"
+        "Key=SbomSha256,Value=${sbom_sha256}"
+    )
+fi
 image_id=""
 instance_id=""
 snapshot_ids=()
@@ -188,6 +220,30 @@ if [[ ${ami_lifecycle} == retained ]]; then
         existing_snapshot=$(aws ec2 describe-snapshots --region "${region}" --snapshot-ids "${snapshot_ids[0]}" --output json)
         [[ $(jq -r '.Snapshots[0].Encrypted' <<< "${existing_snapshot}") == true ]] || { echo "existing retained AMI snapshot is not encrypted" >&2; exit 1; }
         [[ $(jq -r '.Snapshots[0].KmsKeyId' <<< "${existing_snapshot}") == "${snapshot_kms_key_arn}" ]] || { echo "existing retained AMI snapshot uses the wrong KMS key" >&2; exit 1; }
+        if [[ ${release_metadata} == true ]]; then
+            for tag_entry in \
+                "ReleaseVersion=${release_version}" \
+                "SourceImageDigest=${source_image_digest}" \
+                "SbomSha256=${sbom_sha256}"; do
+                tag_key=${tag_entry%%=*}
+                expected_value=${tag_entry#*=}
+                existing_value=$(jq -r --arg key "${tag_key}" '.Images[0].Tags[]? | select(.Key == $key) | .Value' <<< "${existing_image}")
+                [[ -z ${existing_value} || ${existing_value} == "${expected_value}" ]] || {
+                    echo "existing retained AMI ${image_id} has conflicting ${tag_key} metadata" >&2
+                    exit 1
+                }
+            done
+            aws ec2 create-tags \
+                --region "${region}" \
+                --resources "${image_id}" "${snapshot_ids[0]}" \
+                --tags \
+                    "Key=Project,Value=lucidity" \
+                    "Key=Purpose,Value=ami-release" \
+                    "Key=Role,Value=${ami_role}" \
+                    "Key=SourceRevision,Value=${source_revision}" \
+                    "Key=ReleaseStatus,Value=validated" \
+                    "${resource_release_tags[@]}"
+        fi
         completed_successfully=true
         if [[ -n ${GITHUB_OUTPUT:-} ]]; then
             {
@@ -216,6 +272,7 @@ snapshot_id=$("${coldsnap_command}" \
     --tag "Key=GitHubRunId,Value=${run_id}" \
     --tag "Key=SourceRevision,Value=${source_revision_tag}" \
     --tag "Key=ReleaseStatus,Value=${release_status}" \
+    "${snapshot_release_tags[@]}" \
     "${artifact}")
 [[ ${snapshot_id} =~ ^snap-[0-9a-f]+$ ]] || { echo "coldsnap did not return a snapshot ID" >&2; exit 1; }
 snapshot_ids=("${snapshot_id}")
@@ -243,7 +300,8 @@ aws ec2 create-tags \
         "Key=Role,Value=${ami_role}" \
         "Key=GitHubRunId,Value=${run_id}" \
         "Key=SourceRevision,Value=${source_revision_tag}" \
-        "Key=ReleaseStatus,Value=${release_status}"
+        "Key=ReleaseStatus,Value=${release_status}" \
+        "${resource_release_tags[@]}"
 
 block_device_mappings=$(jq -cn \
     --arg snapshot_id "${snapshot_ids[0]}" \
@@ -256,6 +314,9 @@ image_tags=$(jq -cn \
     --arg run_id "${run_id}" \
     --arg source_revision "${source_revision_tag}" \
     --arg release_status "${release_status}" \
+    --arg release_version "${release_version}" \
+    --arg source_image_digest "${source_image_digest}" \
+    --arg sbom_sha256 "${sbom_sha256}" \
     '[
         {Key:"Name",Value:$name},
         {Key:"Project",Value:$project},
@@ -264,7 +325,11 @@ image_tags=$(jq -cn \
         {Key:"GitHubRunId",Value:$run_id},
         {Key:"SourceRevision",Value:$source_revision},
         {Key:"ReleaseStatus",Value:$release_status}
-    ]')
+    ] + if $release_version == "" then [] else [
+        {Key:"ReleaseVersion",Value:$release_version},
+        {Key:"SourceImageDigest",Value:$source_image_digest},
+        {Key:"SbomSha256",Value:$sbom_sha256}
+    ] end')
 register_tag_specification=$(jq -cn --argjson tags "${image_tags}" '[{ResourceType:"image",Tags:$tags}]')
 register_response=$(aws ec2 register-image \
     --region "${region}" \
@@ -555,7 +620,8 @@ if [[ ${ami_lifecycle} == retained ]]; then
             "Key=Purpose,Value=ami-release" \
             "Key=Role,Value=${ami_role}" \
             "Key=SourceRevision,Value=${source_revision}" \
-            "Key=ReleaseStatus,Value=validated"
+            "Key=ReleaseStatus,Value=validated" \
+            "${resource_release_tags[@]}"
 fi
 
 completed_successfully=true
@@ -584,6 +650,11 @@ if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then
         if [[ ${ami_lifecycle} == retained ]]; then
             echo "- Role: \`${ami_role}\`"
             echo "- Source revision: \`${source_revision}\`"
+            if [[ ${release_metadata} == true ]]; then
+                echo "- Release: \`${release_version}\`"
+                echo "- Source image digest: \`${source_image_digest}\`"
+                echo "- SPDX SBOM SHA-256: \`${sbom_sha256}\`"
+            fi
             echo "- Snapshot: \`${snapshot_ids[0]}\` (retained and encrypted)"
             echo "- AMI: \`${image_id}\` (retained; select this ID explicitly in OpenTofu)"
         else

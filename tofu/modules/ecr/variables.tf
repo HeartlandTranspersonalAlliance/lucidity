@@ -25,17 +25,6 @@ variable "expire_untagged_after_days" {
   }
 }
 
-variable "retain_tagged_images" {
-  description = "Maximum number of tagged images retained in each repository."
-  type        = number
-  default     = 30
-
-  validation {
-    condition     = var.retain_tagged_images >= 2
-    error_message = "At least two tagged images must be retained for bootc rollback."
-  }
-}
-
 variable "mutable_channel_tags" {
   description = "Exact bootc channel tags permitted to move to a newly tested immutable image."
   type        = set(string)

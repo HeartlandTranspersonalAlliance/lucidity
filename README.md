@@ -53,6 +53,7 @@ Implemented:
 - an empty controller runtime secret, dedicated rotating KMS key, and least-privilege EC2 instance profile, with no secret value in OpenTofu state.
 - a dedicated AMI snapshot KMS key and EBS Direct API upload path for disposable validation and retained releases.
 - a manually gated retained worker-AMI release mode and hardened launch templates that require explicit self-owned AMI IDs.
+- immutable semantic releases that bind tested ECR digests, SPDX SBOMs, and the retained worker AMI in one checksummed manifest.
 
 The upstream base currently makes `bootc` and `rpm-ostree` depend on Podman, so Podman remains installed. It is a bootc host dependency/tool, not the production application runtime; Coolify workloads use Docker Engine.
 
@@ -131,6 +132,31 @@ GitHub OIDC, and publishes each image under an immutable `sha-<full-commit>` tag
 verifies the tag digest and remote `linux/amd64` manifest before succeeding. Pull
 requests receive no publishing credentials, and this candidate workflow never moves
 the mutable `stable` channel.
+
+## Immutable releases and SBOMs
+
+`VERSION` seeds the first release at `0.1.0`. Manually dispatch **Release bootc AMI**
+from `main` after its required checks pass. The default `auto` bump applies conventional
+commit intent since the previous release: a breaking-change marker selects major,
+`feat:` selects minor, and other changes select patch. The dispatch also offers explicit
+patch, minor, and major overrides when commit history does not express the release impact.
+
+The release workflow reuses a successful publication for the exact source commit or
+dispatches one and waits for it. It never rebuilds during promotion. Two parallel jobs
+copy each tested `sha-<commit>` manifest to its immutable `vX.Y.Z` ECR tag, scan the
+exact `repository@sha256:digest` with pinned Syft, produce SPDX JSON, and attest each
+SBOM against that digest. The worker digest and uncompressed SBOM SHA-256 are passed to
+the retained EBS Direct AMI gate, whose installed bootc deployment tracks that immutable
+version tag rather than a mutable channel. After boot validation, the workflow creates a manifest
+binding the version, source commit, controller and worker OCI digests, SBOM hashes,
+AMI ID, encrypted snapshot ID, and workflow evidence.
+
+The GitHub release is created as a draft with the manifest, compressed SBOMs, and their
+checksums attached before it is published. Repository release immutability then protects
+the Git tag and assets. ECR expires only untagged images, so immutable release tags remain
+durable. EC2 copies the release version, source image digest, and SBOM hash onto the AMI
+and snapshot for discovery, but those mutable resource tags are not the trust boundary;
+the published release manifest, OCI digest, AMI ID, and snapshot ID are authoritative.
 
 ## Build and validate locally
 

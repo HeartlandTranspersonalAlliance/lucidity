@@ -9,7 +9,7 @@ This stack creates the AWS resources needed to publish lucidity bootc OCI images
 - VPC Flow Logs delivered to a 90-day CloudWatch Logs group;
 - one empty controller-runtime Secrets Manager secret encrypted by a dedicated rotating KMS key;
 - SSM-enabled controller and worker instance profiles, with the controller optionally restricted to that secret and KMS key;
-- immutable controller and worker ECR version tags, one controlled mutable `stable` channel, scan-on-push, and bounded retention;
+- immutable controller and worker ECR version tags, one controlled mutable `stable` channel, scan-on-push, and untagged-image cleanup that preserves releases;
 - a rotating AMI snapshot KMS key and EBS Direct API permissions for disposable validation and retained releases;
 - hardened, versioned EC2 launch templates gated on explicit self-owned controller and worker AMI IDs;
 - an account-level GitHub Actions OIDC provider, unless an existing provider ARN is supplied;
@@ -48,6 +48,9 @@ ECR rejects overwrites for version and commit tags. The exact `stable` tag is ex
 from immutability so a tested digest can be promoted without making every repository
 tag mutable. Production hosts may follow `stable`; release records and rollback must
 retain the immutable version tag and digest that `stable` referenced.
+The lifecycle policy expires only untagged manifests. Tagged releases are intentionally
+not count-limited because deleting an old `vX.Y.Z` image would break the release manifest
+and rollback chain.
 
 ## Runtime secret boundary
 
@@ -113,8 +116,11 @@ snapshot. Merged-main run `31899706447` proved the optimized path on 2026-08-15:
 and cleanup step took 4 minutes 54 seconds. The earlier VM Import phase alone took
 about 14 minutes.
 
-For a production worker release, choose `ami_lifecycle=retained` and enable both AWS
-validation and the launch gate.
+For an ad hoc production worker candidate, choose `ami_lifecycle=retained` and enable
+both AWS validation and the launch gate. Normal semantic releases should use
+**Release bootc AMI**, which supplies the immutable version, worker OCI digest, and SPDX
+SBOM hash to the same retained AMI gate and publishes their AMI and snapshot IDs in the
+immutable GitHub release manifest.
 First ensure **Publish bootc images** has published the current `main` worker candidate
 as `sha-<full-commit>`. The AMI workflow pulls that immutable private ECR reference and
 uses it as the disk's bootc source, so the installed host tracks a real production
