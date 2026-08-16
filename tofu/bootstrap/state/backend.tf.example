@@ -1,0 +1,5 @@
+# After the initial local bootstrap apply, copy this file to backend.tf and migrate
+# the bootstrap state into the bucket it created. backend.tf is intentionally ignored.
+terraform {
+  backend "s3" {}
+}

@@ -231,6 +231,16 @@ if grep -Fq 'tagStatus   = "any"' tofu/modules/ecr/main.tf; then
     exit 1
 fi
 grep -Fq 'resource "aws_flow_log" "this"' tofu/modules/network/main.tf
+grep -Fq 'backend "s3" {}' tofu/environments/aws/versions.tf
+grep -Fq 'bucket_namespace = "account-regional"' tofu/bootstrap/state/main.tf
+grep -Fq 'blocked_encryption_types = ["SSE-C"]' tofu/bootstrap/state/main.tf
+grep -Fq 'sid     = "DenyInsecureTransport"' tofu/bootstrap/state/main.tf
+grep -Fq 'resource "aws_s3_bucket_logging" "state"' tofu/bootstrap/state/main.tf
+grep -Fq 'use_lockfile = true' tofu/environments/aws/backend.s3.tfbackend.example
+if rg -n 'dynamodb_table|aws_dynamodb' tofu/bootstrap/state tofu/environments/aws/backend.s3.tfbackend.example; then
+    echo "native S3 state locking must not add a DynamoDB dependency" >&2
+    exit 1
+fi
 grep -Fq 'AmazonSSMManagedInstanceCore' tofu/modules/instance-management/main.tf
 grep -Fq 'resource "aws_iam_role_policy" "ecr_pull"' tofu/modules/instance-management/main.tf
 grep -Fq 'resource "aws_iam_instance_profile" "node"' tofu/modules/instance-management/main.tf

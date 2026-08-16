@@ -53,6 +53,7 @@ Implemented:
 - bootc-native unattended OS updates scheduled from 11:00 UTC daily;
 - pull-request validation that builds and runs `bootc container lint`;
 - Terraform-compatible OpenTofu modules for immutable ECR repositories and branch-restricted GitHub Actions OIDC publishing;
+- an account-regional, versioned, encrypted S3 remote-state bootstrap with native locking and private S3 access logs;
 - a three-AZ VPC with public/private subnets, optional NAT Gateways, tiered security groups, and VPC Flow Logs;
 - an empty controller runtime secret, dedicated rotating KMS key, and least-privilege EC2 instance profile, with no secret value in OpenTofu state.
 - a dedicated AMI snapshot KMS key and EBS Direct API upload path for disposable validation and retained releases.
@@ -104,7 +105,8 @@ Containerfile                 shared and role-specific image stages
 roles/common/                 Docker, SSH, systemd, and filesystem policy
 roles/controller/             controller-only host configuration
 roles/worker/                 worker-only systemd configuration
-tofu/                         AWS network, runtime identity, secrets, ECR, and OIDC bootstrap
+tofu/bootstrap/state/         protected S3 remote-state bootstrap
+tofu/environments/aws/        AWS network, compute, identity, secrets, ECR, and OIDC stack
 scripts/build.sh              local image build
 scripts/bootstrap-controller.sh idempotent Coolify initialization
 scripts/bootstrap-worker.sh   idempotent public-key provisioning

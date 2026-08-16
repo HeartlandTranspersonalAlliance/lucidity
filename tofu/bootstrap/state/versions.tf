@@ -1,8 +1,6 @@
 terraform {
   required_version = ">= 1.10.0, < 2.0.0"
 
-  backend "s3" {}
-
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -18,9 +16,9 @@ provider "aws" {
     tags = merge(
       {
         ManagedBy = "OpenTofu"
-        Project   = "lucidity"
+        Project   = var.project_name
       },
-      var.tags
+      var.tags,
     )
   }
 }

@@ -3,8 +3,9 @@ SHELL := /usr/bin/env bash
 IMAGE ?= localhost/coolify-bootc-worker:dev
 CONTROLLER_IMAGE ?= localhost/coolify-bootc-controller:dev
 TOFU_DIR ?= tofu/environments/aws
+TOFU_STATE_DIR ?= tofu/bootstrap/state
 
-.PHONY: build build-controller build-worker lint test validate validate-controller image-controller image-worker ami-controller ami-worker validate-disk-controller validate-disk-worker vm-init-controller vm-init-worker vm-start-controller vm-start-worker vm-validate-controller vm-validate-worker vm-registry-start-controller vm-registry-start-worker vm-update-rollback-controller vm-update-rollback-worker vm-registry-stop-controller vm-registry-stop-worker vm-stop-controller vm-stop-worker vm-clean-controller vm-clean-worker tofu-fmt tofu-fmt-check tofu-init tofu-validate tofu-test tofu-check clean
+.PHONY: build build-controller build-worker lint test validate validate-controller image-controller image-worker ami-controller ami-worker validate-disk-controller validate-disk-worker vm-init-controller vm-init-worker vm-start-controller vm-start-worker vm-validate-controller vm-validate-worker vm-registry-start-controller vm-registry-start-worker vm-update-rollback-controller vm-update-rollback-worker vm-registry-stop-controller vm-registry-stop-worker vm-stop-controller vm-stop-worker vm-clean-controller vm-clean-worker tofu-fmt tofu-fmt-check tofu-init tofu-validate tofu-test tofu-state-init tofu-state-validate tofu-state-test tofu-check clean
 
 build: build-worker
 
@@ -115,7 +116,16 @@ tofu-validate: tofu-init
 tofu-test: tofu-init
 	tofu -chdir=$(TOFU_DIR) test
 
-tofu-check: tofu-fmt-check tofu-validate tofu-test
+tofu-state-init:
+	tofu -chdir=$(TOFU_STATE_DIR) init -backend=false
+
+tofu-state-validate: tofu-state-init
+	tofu -chdir=$(TOFU_STATE_DIR) validate
+
+tofu-state-test: tofu-state-init
+	tofu -chdir=$(TOFU_STATE_DIR) test
+
+tofu-check: tofu-fmt-check tofu-state-validate tofu-state-test tofu-validate tofu-test
 
 clean:
 	@echo "Images and image-output/ artifacts are retained intentionally; remove explicit targets with your container tooling when desired."

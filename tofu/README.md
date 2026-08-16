@@ -1,6 +1,8 @@
 # AWS OpenTofu bootstrap
 
-This stack creates the AWS resources needed to publish lucidity bootc OCI images:
+`tofu/bootstrap/state` creates the protected S3 backend required before production
+infrastructure is applied. `tofu/environments/aws` creates the AWS resources needed to
+publish and deploy lucidity bootc images:
 
 - a production VPC spanning three Availability Zones by default;
 - public and isolated private subnets, with AZ-local NAT Gateways available but disabled by default;
@@ -298,7 +300,62 @@ From the repository root:
 nix develop --command make tofu-check
 ```
 
-The command checks all HCL formatting, initializes providers without a backend, validates the configuration, and runs mocked OpenTofu tests. It does not contact AWS.
+The command checks all HCL formatting, initializes providers without a backend,
+validates both roots, and runs their mocked OpenTofu tests. It does not contact AWS.
+
+## Bootstrap protected remote state
+
+The state bootstrap creates two deletion-resistant S3 buckets in AWS's
+account-regional namespace: one for versioned OpenTofu state and native lock objects,
+and one for the state bucket's server access logs. Both use S3-managed encryption,
+block SSE-C, require TLS through bucket policy, enable ABAC, and retain version history.
+The audit bucket is the lower-cost logging choice: it uses S3 storage instead of
+CloudWatch ingestion and expires logs after 365 days by default. It is intentionally
+not configured to log its own access, which avoids recursive logging.
+
+Apply this small bootstrap with local state first:
+
+```bash
+cp tofu/bootstrap/state/terraform.tfvars.example tofu/bootstrap/state/terraform.tfvars
+tofu -chdir=tofu/bootstrap/state init
+tofu -chdir=tofu/bootstrap/state plan
+tofu -chdir=tofu/bootstrap/state apply
+tofu -chdir=tofu/bootstrap/state output
+```
+
+The bucket names include the account ID and region and use the account-regional
+namespace. Copy both backend examples, replace the placeholder account ID with the
+`state_bucket_name` output, and migrate the bootstrap state into the bucket it created:
+
+```bash
+cp tofu/bootstrap/state/backend.tf.example tofu/bootstrap/state/backend.tf
+cp tofu/bootstrap/state/backend.s3.tfbackend.example tofu/bootstrap/state/backend.s3.tfbackend
+tofu -chdir=tofu/bootstrap/state init \
+  -migrate-state \
+  -backend-config=backend.s3.tfbackend
+```
+
+Keep the bootstrap's local state until migration succeeds, verify the remote object and
+one recoverable version exist, then store or remove the local copy according to the
+operator's secure-state procedure. Do not commit it. The output
+`backend_access_policy_json` is a least-privilege policy document for authorized
+operator roles; attach it through the account's identity-management process rather
+than creating long-lived access keys.
+
+Next copy the main backend example, replace its placeholder account ID, and migrate the
+main stack before its first production apply:
+
+```bash
+cp tofu/environments/aws/backend.s3.tfbackend.example tofu/environments/aws/backend.s3.tfbackend
+tofu -chdir=tofu/environments/aws init \
+  -migrate-state \
+  -backend-config=backend.s3.tfbackend
+```
+
+Both backend files enable OpenTofu's native S3 conditional-write lock with
+`use_lockfile=true`; no DynamoDB table is required. State and lock tags drive separate
+lifecycle rules. Noncurrent state keeps at least 100 newer versions for at least one
+year, while stale lock versions expire sooner.
 
 ## Bootstrap the AWS resources
 
@@ -308,7 +365,7 @@ provider. The publishing role cannot create itself.
 
 ```bash
 cp tofu/environments/aws/terraform.tfvars.example tofu/environments/aws/terraform.tfvars
-tofu -chdir=tofu/environments/aws init
+tofu -chdir=tofu/environments/aws init -backend-config=backend.s3.tfbackend
 tofu -chdir=tofu/environments/aws plan
 tofu -chdir=tofu/environments/aws apply
 ```
@@ -329,6 +386,8 @@ then enable launch templates and instances in a reviewed plan. Keep
 
 If `token.actions.githubusercontent.com` is already configured in the account, set `github_oidc_provider_arn` to its ARN. IAM permits only one provider for that URL in an account.
 
-The initial local state is intentionally supported for bootstrap, but it is sensitive operational data and must not be committed. Before this stack is shared or automated, migrate it to a protected remote backend with encryption, state locking, access logging, and least-privilege access.
+The production stack requires the protected partial S3 backend. Backend configuration
+contains identifiers only; credentials come from the operator's short-lived AWS
+session. Never put credentials in HCL, tfvars, or backend configuration.
 
 After apply, use `github_publish_role_arn` and the ECR URL outputs to configure the image publishing workflow. No long-lived AWS access keys belong in GitHub Secrets.

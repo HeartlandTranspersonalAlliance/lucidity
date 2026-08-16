@@ -1,0 +1,12 @@
+# Identifiers and configuration only. Do not add credentials.
+aws_region   = "us-east-2"
+project_name = "lucidity"
+environment  = "production"
+
+# S3 server access logs use the lower-cost private S3 destination and expire after
+# one year by default. Increase this to meet a longer audit-retention requirement.
+access_log_retention_days = 365
+
+tags = {
+  Environment = "production"
+}
