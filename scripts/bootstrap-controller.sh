@@ -10,6 +10,7 @@ env_file=${source_dir}/.env
 key_file=${data_root}/ssh/id.root@host.docker.internal
 key_import_file=${data_root}/ssh/keys/id.root@host.docker.internal
 bootstrap_marker=${data_root}/.controller-bootstrap-complete
+curl_bin=${COOLIFY_CURL_BIN:-curl}
 
 pull_policy=missing
 if [[ ! -e ${bootstrap_marker} ]]; then
@@ -47,7 +48,7 @@ download_once() {
     [[ -s ${destination} ]] && return 0
     temporary=$(mktemp "${source_dir}/.${local_name}.XXXXXX")
     trap 'rm -f "${temporary}"' RETURN
-    curl --fail --location --silent --show-error \
+    "${curl_bin}" --fail --location --silent --show-error \
         --output "${temporary}" "${cdn}/${remote_name}"
     chmod "${mode}" "${temporary}"
     mv "${temporary}" "${destination}"

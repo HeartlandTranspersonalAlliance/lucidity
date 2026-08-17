@@ -12,10 +12,6 @@ required_files=(
     AGENTS.md
     ci/Containerfile
     ci/images.env
-    ci/setup-build-cache.sh
-    ci/teardown-build-cache.sh
-    ci/controller-changes.sh
-    ci/worker-changes.sh
     .github/workflows/publish.yml
     .github/workflows/validate-deployment.yml
     .github/workflows/ami-switch-benchmark.yml
@@ -50,6 +46,7 @@ required_files=(
     scripts/vm-init.sh
     scripts/vm-start.sh
     scripts/vm-validate.sh
+    scripts/vm-integration.sh
     scripts/vm-registry.sh
     scripts/vm-validate-update.sh
     scripts/vm-stop.sh
@@ -182,14 +179,14 @@ grep -Fq 'type=registry,ref=${BUILD_CACHE_FROM}' scripts/build.sh
 grep -Fq 'mode=max,image-manifest=true,oci-mediatypes=true' scripts/build.sh
 grep -Fq 'podman build --layers' scripts/build.sh
 grep -Fq -- '--cache-ttl 168h' scripts/build.sh
+# These are literal shell expressions in the implementation under test.
 # shellcheck disable=SC2016
-grep -Fq 'cache_repository=${GITHUB_REPOSITORY,,}-build-cache' ci/setup-build-cache.sh
+grep -Fq 'cache_repository=${GITHUB_REPOSITORY,,}-build-cache' nix/pkgs/lucidity.sh
 # shellcheck disable=SC2016
-grep -Fq 'docker login "${cache_registry}" --username "${GITHUB_ACTOR}" --password-stdin' ci/setup-build-cache.sh
-grep -Fq 'sudo podman login' ci/setup-build-cache.sh
-grep -Fq 'sudo skopeo list-tags' ci/setup-build-cache.sh
-grep -Fq 'BUILD_CACHE_TO=' ci/setup-build-cache.sh
-grep -Fq 'sudo podman logout' ci/teardown-build-cache.sh
+grep -Fq 'docker buildx imagetools inspect "$cache_ref"' nix/pkgs/lucidity.sh
+grep -Fq 'sudo skopeo list-tags' nix/pkgs/lucidity.sh
+grep -Fq 'GHCR_CACHE_HIT=' nix/pkgs/lucidity.sh
+grep -Fq 'sudo podman logout' nix/pkgs/lucidity.sh
 grep -Fq 'benchmark-base|controller|worker' scripts/validate-image.sh
 grep -Fq 'FROM common AS benchmark-base' Containerfile
 grep -Fq '/usr/lib/coolify-aws/image-version' Containerfile
@@ -215,6 +212,19 @@ worker_version_line=$(awk '
 }
 grep -Fq '=~ ^[[:alnum:].:-]+$' scripts/vm-init.sh
 grep -Fq '=~ ^[[:alnum:].:-]+$' scripts/vm-validate-update.sh
+grep -Fq 'VM_HOST_FORWARD_PORT and VM_GUEST_FORWARD_PORT must both be set' scripts/vm-start.sh
+grep -Fq 'Controller-to-worker SSH passed' scripts/vm-integration.sh
+grep -Fq 'Coolify deployed and served the application from the worker' scripts/vm-integration.sh
+grep -Fq '"abilities" => ["read", "write", "deploy"]' scripts/vm-integration.sh
+grep -Fq 'busybox:1.37.0-musl@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23' scripts/vm-integration.sh
+# These are literal shell expressions in the implementation under test.
+# shellcheck disable=SC2016
+grep -Fq 'integration_password_base64=$(printf' scripts/vm-integration.sh
+# shellcheck disable=SC2016
+if grep -Fq '"${controller_ssh[@]}" docker exec' scripts/vm-integration.sh; then
+    echo "remote docker commands with spaced arguments must run inside a quoted remote script" >&2
+    exit 1
+fi
 grep -Fq 'CONTAINER_ENGINE' scripts/build-disk.sh
 grep -Fq 'controller|worker' scripts/build-disk.sh
 # These are literal shell expressions in the implementation under test.
@@ -338,7 +348,7 @@ fi
 grep -Fq 'allowed-account-ids: 467590374785' .github/workflows/ami.yml
 # This is a literal workflow shell expression.
 # shellcheck disable=SC2016
-grep -Fq 'ci/setup-build-cache.sh "${AMI_ROLE}"' .github/workflows/ami.yml
+grep -Fq 'nix run .#lucidity -- ci cache configure "${AMI_ROLE}"' .github/workflows/ami.yml
 # This is a literal GitHub Actions expression.
 # shellcheck disable=SC2016
 [[ $(grep -Fc "GHCR_CACHE_WRITE: \${{ github.event_name != 'pull_request' }}" .github/workflows/ami.yml) == 1 ]]
@@ -355,7 +365,7 @@ grep -Fq 'packages: write' .github/workflows/publish.yml
 grep -Fq 'max-parallel: 4' .github/workflows/publish.yml
 # This is a literal GitHub Actions expression.
 # shellcheck disable=SC2016
-grep -Fq 'ci/setup-build-cache.sh "${{ matrix.role }}"' .github/workflows/publish.yml
+grep -Fq 'nix run .#lucidity -- ci cache configure "${{ matrix.role }}"' .github/workflows/publish.yml
 # This is a literal GitHub Actions expression.
 # shellcheck disable=SC2016
 grep -Fq 'workflow_call:' .github/workflows/publish.yml
@@ -422,7 +432,7 @@ grep -Fq 'AMI_SWITCH_TARGET_REF' scripts/validate-ami-import.sh
 grep -Fq 'coolify-controller-bootstrap.service' scripts/validate-ami-import.sh
 grep -Fq 'CENTOS_BOOTC_IMAGE: quay.io/centos-bootc/centos-bootc:stream10@sha256:' .github/workflows/ami-switch-benchmark.yml
 grep -Fq './scripts/build.sh benchmark-base' .github/workflows/ami-switch-benchmark.yml
-grep -Fq 'ci/setup-build-cache.sh benchmark-base' .github/workflows/ami-switch-benchmark.yml
+grep -Fq 'nix run .#lucidity -- ci cache configure benchmark-base' .github/workflows/ami-switch-benchmark.yml
 # These are literal workflow shell expressions.
 # shellcheck disable=SC2016
 grep -Fq 'image_without_tag=${WORKER_IMAGE_REF%:*}' .github/workflows/ami-switch-benchmark.yml
@@ -560,26 +570,6 @@ if rg -n 'key_name|associate_public_ip_address' tofu/modules/ec2-launch-template
     echo "launch templates must not embed key pairs or networking placement" >&2
     exit 1
 fi
-[[ $(printf '%s\n' README.md tofu/environments/aws/main.tf roles/controller/usr/example | ci/worker-changes.sh) == false ]]
-[[ $(printf '%s\n' ci/controller-changes.sh ci/worker-changes.sh | ci/worker-changes.sh) == true ]]
-[[ $(printf '%s\n' tests/test-image.sh tests/test-ami-import.sh tests/fixtures/aws tests/fixtures/coldsnap | ci/worker-changes.sh) == false ]]
-[[ $(printf '%s\n' README.md roles/worker/usr/example | ci/worker-changes.sh) == true ]]
-[[ $(printf '%s\n' scripts/bootstrap-controller.sh tests/test-controller.sh | ci/worker-changes.sh) == false ]]
-[[ $(printf '%s\n' mk/quality.mk scripts/check-text-style.sh tests/test-text-style.sh | ci/worker-changes.sh) == false ]]
-[[ $(printf '%s\n' .github/workflows/validate-deployment.yml scripts/validate-deployment.sh tests/test-deployment-validation.sh tests/fixtures/aws-deployment-validation | ci/worker-changes.sh) == false ]]
-[[ $(printf '%s\n' .github/workflows/ami-switch-benchmark.yml scripts/validate-ami-import.sh tests/test-ami-import.sh | ci/worker-changes.sh) == false ]]
-[[ $(printf '%s\n' Makefile | ci/worker-changes.sh) == true ]]
-[[ $(printf '%s\n' .github/workflows/validate.yml | ci/worker-changes.sh) == true ]]
-[[ $(printf '%s\n' README.md tofu/environments/aws/main.tf roles/worker/usr/example | ci/controller-changes.sh) == false ]]
-[[ $(printf '%s\n' ci/controller-changes.sh ci/worker-changes.sh | ci/controller-changes.sh) == true ]]
-[[ $(printf '%s\n' tests/test-image.sh tests/test-ami-import.sh tests/fixtures/aws tests/fixtures/coldsnap | ci/controller-changes.sh) == false ]]
-[[ $(printf '%s\n' README.md roles/controller/usr/example | ci/controller-changes.sh) == true ]]
-[[ $(printf '%s\n' scripts/bootstrap-worker.sh tests/test-worker.sh | ci/controller-changes.sh) == false ]]
-[[ $(printf '%s\n' mk/quality.mk scripts/check-text-style.sh tests/test-text-style.sh | ci/controller-changes.sh) == false ]]
-[[ $(printf '%s\n' .github/workflows/validate-deployment.yml scripts/validate-deployment.sh tests/test-deployment-validation.sh tests/fixtures/aws-deployment-validation | ci/controller-changes.sh) == false ]]
-[[ $(printf '%s\n' .github/workflows/ami-switch-benchmark.yml scripts/validate-ami-import.sh tests/test-ami-import.sh | ci/controller-changes.sh) == false ]]
-[[ $(printf '%s\n' Makefile | ci/controller-changes.sh) == true ]]
-[[ $(printf '%s\n' .github/workflows/validate.yml | ci/controller-changes.sh) == true ]]
 grep -Fq 'merge_group:' .github/workflows/validate.yml
 # These are literal GitHub Actions expressions in the workflow under test.
 # shellcheck disable=SC2016
@@ -599,6 +589,15 @@ grep -Fq "FULL_LIFECYCLE: \${{ github.event_name != 'pull_request' }}" .github/w
 # This is a literal shell expression in the workflow under test.
 # shellcheck disable=SC2016
 [[ $(grep -Fc 'if [[ ${FULL_LIFECYCLE} == true ]]; then' .github/workflows/validate.yml) == 2 ]]
+grep -Fq 'workflow_dispatch:' .github/workflows/integration.yml
+grep -Fq 'pull_request:' .github/workflows/integration.yml
+# This is a literal GitHub Actions expression in the workflow under test.
+# shellcheck disable=SC2016
+grep -Fq 'group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}' .github/workflows/integration.yml
+grep -Fq 'cancel-in-progress: true' .github/workflows/integration.yml
+grep -Fq 'make vm-integration' .github/workflows/integration.yml
+grep -Fq 'VM_HOST_FORWARD_PORT=8000 VM_GUEST_FORWARD_PORT=8000' .github/workflows/integration.yml
+grep -Fq 'VM_HOST_FORWARD_PORT=8081 VM_GUEST_FORWARD_PORT=8080' .github/workflows/integration.yml
 [[ $(grep -Fc 'make vm-update-rollback-' .github/workflows/validate.yml) == 2 ]]
 unexpected_sudo=$(grep -R -n -E '(^|[[:space:]])sudo[[:space:]]' .github/workflows | \
     grep -Ev 'sudo (tee /etc/udev/rules.d/99-kvm4all.rules|udevadm control --reload-rules|udevadm trigger --name-match=kvm)$' | \
@@ -608,8 +607,8 @@ if [[ -n ${unexpected_sudo} ]]; then
     printf '%s\n' "${unexpected_sudo}" >&2
     exit 1
 fi
-[[ $(grep -R -h -E 'sudo (tee /etc/udev/rules.d/99-kvm4all.rules|udevadm control --reload-rules|udevadm trigger --name-match=kvm)$' .github/workflows | wc -l) == 6 ]] || {
-    echo "the two KVM lifecycle jobs must each contain exactly three narrowly scoped sudo commands" >&2
+[[ $(grep -R -h -E 'sudo (tee /etc/udev/rules.d/99-kvm4all.rules|udevadm control --reload-rules|udevadm trigger --name-match=kvm)$' .github/workflows | wc -l) == 9 ]] || {
+    echo "the three KVM jobs must each contain exactly three narrowly scoped sudo commands" >&2
     exit 1
 }
 if grep -Eq '^IMAGE_BUILDER_IMAGE=.+:(latest|main)$' image/image-builder.env; then

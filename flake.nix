@@ -1,42 +1,40 @@
 {
-  description = "Development tools for lucidity";
+  description = "Lucidity: Nix-owned AlmaLinux bootc infrastructure for Coolify";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs = {
+    den.url = "github:denful/den";
 
-  outputs = { nixpkgs, ... }:
-    let
-      systems = [
-        "aarch64-linux"
-        "x86_64-linux"
+    flake-parts.url = "github:hercules-ci/flake-parts";
+    flake-parts.inputs.nixpkgs-lib.follows = "nixpkgs";
+
+    home-manager.url = "github:nix-community/home-manager";
+    home-manager.inputs.nixpkgs.follows = "nixpkgs";
+
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+
+    openbao-plugins = {
+      url = "github:openbao/openbao-plugins";
+      flake = false;
+    };
+
+    terranix.url = "github:terranix/terranix";
+    terranix.inputs.nixpkgs.follows = "nixpkgs";
+
+    treefmt-nix.url = "github:numtide/treefmt-nix";
+    treefmt-nix.inputs.nixpkgs.follows = "nixpkgs";
+  };
+
+  outputs = inputs:
+    inputs.flake-parts.lib.mkFlake {inherit inputs;} {
+      imports = [
+        inputs.treefmt-nix.flakeModule
+        ./nix/modules/den.nix
+        ./nix/modules/hosts.nix
+        ./nix/modules/aspects/common.nix
+        ./nix/modules/aspects/controller.nix
+        ./nix/modules/aspects/worker.nix
+        ./nix/modules/terranix.nix
+        ./nix/modules/outputs.nix
       ];
-      forAllSystems = nixpkgs.lib.genAttrs systems;
-    in
-    {
-      packages = forAllSystems (
-        system:
-        let
-          pkgs = import nixpkgs { inherit system; };
-        in
-        {
-          coldsnap = pkgs.coldsnap;
-          syft = pkgs.syft;
-        }
-      );
-
-      devShells = forAllSystems (
-        system:
-        let
-          pkgs = import nixpkgs { inherit system; };
-        in
-        {
-          default = pkgs.mkShellNoCC {
-            packages = [
-              pkgs.codespell
-              pkgs.opentofu
-              pkgs.shellcheck
-            ];
-          };
-        }
-      );
     };
 }

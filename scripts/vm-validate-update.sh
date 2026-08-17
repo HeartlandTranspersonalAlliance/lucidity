@@ -85,8 +85,14 @@ wait_for_worker() {
     [[ ${role} == worker ]] || return 0
     for ((attempt = 1; attempt <= wait_attempts; attempt++)); do
         if "${admin_ssh[@]}" systemctl is-active --quiet docker.service 2>/dev/null && \
+            "${admin_ssh[@]}" systemctl is-active --quiet coolify-worker-storage.service 2>/dev/null && \
             "${coolify_ssh[@]}" true >/dev/null 2>&1; then
             return 0
+        fi
+        if "${admin_ssh[@]}" systemctl is-failed --quiet coolify-worker-storage.service; then
+            echo "Coolify worker storage failed after an OS deployment change" >&2
+            "${admin_ssh[@]}" journalctl -u coolify-worker-storage.service --no-pager -n 200 >&2 || true
+            return 1
         fi
         if "${admin_ssh[@]}" systemctl is-failed --quiet coolify-worker-authorized-keys.service; then
             echo "Coolify worker SSH authorization failed after an OS deployment change" >&2
@@ -148,6 +154,7 @@ report_assertion_failure() {
         determinate-nix-install.service \
         nix-daemon.service \
         nix.mount \
+        coolify-worker-storage.service \
         coolify-controller-storage.service \
         coolify-controller-bootstrap.service \
         aws-workload-credentials-provider-sm.service >&2 || true
@@ -188,9 +195,23 @@ if journalctl -b --no-pager | grep -Eiq 'avc:[[:space:]]+denied.*(/nix|nix-daemo
 fi
 
 if [[ ${role} == worker ]]; then
+    assertion="verify worker storage is active"
+    systemctl is-active --quiet coolify-worker-storage.service
+    assertion="verify persistent worker storage is mounted"
+    mountpoint --quiet /data/coolify
+    [[ $(stat -c '%d:%i' /data/coolify) == "$(stat -c '%d:%i' /var/lib/coolify)" ]]
+    assertion="verify the persistent worker storage SELinux label"
+    [[ $(stat -c %C /data/coolify) == *:container_file_t:* ]]
+    assertion="read the persistent worker Coolify marker"
+    [[ $(cat /data/coolify/.update-rollback-marker) == "${expected_marker}" ]]
     assertion="read the persistent worker volume"
     volume_path=$(docker volume inspect --format '{{ .Mountpoint }}' coolify-update-rollback-test)
     [[ $(cat "${volume_path}/marker") == "${expected_marker}" ]]
+    assertion="verify the worker boot has no relevant SELinux denials"
+    if journalctl -b --no-pager | grep -Eiq 'avc:[[:space:]]+denied.*(/data/coolify|/var/lib/coolify|container_t)'; then
+        echo "SELinux denied Coolify worker access" >&2
+        exit 1
+    fi
     exit 0
 fi
 
@@ -267,6 +288,9 @@ timer_masked=true
 if [[ ${role} == worker ]]; then
     "${admin_ssh[@]}" bash -Eeuo pipefail -s -- "${marker}" <<'REMOTE'
 marker=$1
+printf '%s\n' "${marker}" > /data/coolify/.update-rollback-marker
+chmod 0600 /data/coolify/.update-rollback-marker
+restorecon /data/coolify/.update-rollback-marker
 docker volume create coolify-update-rollback-test >/dev/null
 volume_path=$(docker volume inspect --format '{{ .Mountpoint }}' coolify-update-rollback-test)
 printf '%s\n' "${marker}" > "${volume_path}/marker"

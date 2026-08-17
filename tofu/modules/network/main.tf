@@ -191,22 +191,13 @@ resource "aws_vpc_security_group_ingress_rule" "web" {
   to_port           = each.value[1]
 }
 
-resource "aws_vpc_security_group_ingress_rule" "controller_self_ssh" {
-  description                  = "Controller management of its local Docker host"
-  from_port                    = 22
-  ip_protocol                  = "tcp"
-  referenced_security_group_id = aws_security_group.controller.id
-  security_group_id            = aws_security_group.controller.id
-  to_port                      = 22
-}
-
-resource "aws_vpc_security_group_ingress_rule" "worker_ssh_from_controller" {
-  description                  = "Coolify controller SSH management"
-  from_port                    = 22
-  ip_protocol                  = "tcp"
-  referenced_security_group_id = aws_security_group.controller.id
-  security_group_id            = aws_security_group.application.id
-  to_port                      = 22
+resource "aws_vpc_security_group_ingress_rule" "controller_nebula" {
+  cidr_ipv4         = "0.0.0.0/0"
+  description       = "Nebula lighthouse discovery and relay"
+  from_port         = var.nebula_udp_port
+  ip_protocol       = "udp"
+  security_group_id = aws_security_group.controller.id
+  to_port           = var.nebula_udp_port
 }
 
 resource "aws_vpc_security_group_ingress_rule" "database_postgresql" {
@@ -253,22 +244,22 @@ resource "aws_vpc_security_group_egress_rule" "application_tcp" {
   to_port           = each.value
 }
 
-resource "aws_vpc_security_group_egress_rule" "controller_ssh_to_worker" {
-  description                  = "Coolify controller SSH management of worker"
-  from_port                    = 22
-  ip_protocol                  = "tcp"
-  referenced_security_group_id = aws_security_group.application.id
-  security_group_id            = aws_security_group.controller.id
-  to_port                      = 22
+resource "aws_vpc_security_group_egress_rule" "controller_nebula" {
+  cidr_ipv4         = "0.0.0.0/0"
+  description       = "Nebula overlay traffic"
+  from_port         = var.nebula_udp_port
+  ip_protocol       = "udp"
+  security_group_id = aws_security_group.controller.id
+  to_port           = var.nebula_udp_port
 }
 
-resource "aws_vpc_security_group_egress_rule" "controller_self_ssh" {
-  description                  = "Coolify controller management of its local Docker host"
-  from_port                    = 22
-  ip_protocol                  = "tcp"
-  referenced_security_group_id = aws_security_group.controller.id
-  security_group_id            = aws_security_group.controller.id
-  to_port                      = 22
+resource "aws_vpc_security_group_egress_rule" "application_nebula" {
+  cidr_ipv4         = "0.0.0.0/0"
+  description       = "Nebula overlay traffic"
+  from_port         = var.nebula_udp_port
+  ip_protocol       = "udp"
+  security_group_id = aws_security_group.application.id
+  to_port           = var.nebula_udp_port
 }
 
 data "aws_iam_policy_document" "flow_logs_assume_role" {
@@ -327,10 +318,26 @@ resource "aws_flow_log" "this" {
   log_destination          = aws_cloudwatch_log_group.flow_logs.arn
   log_destination_type     = "cloud-watch-logs"
   max_aggregation_interval = 60
+  # Migration bridge: AWS cannot update a flow log's traffic type. Keep the
+  # state-owned ALL log unchanged until the REJECT log below is active, then
+  # remove this resource in the final cleanup change.
+  traffic_type = "ALL"
+  vpc_id       = aws_vpc.this.id
+
+  tags = merge(local.common_tags, { Name = "${var.vpc_name}-flow-log" })
+
+  depends_on = [aws_iam_role_policy.flow_logs]
+}
+
+resource "aws_flow_log" "rejected" {
+  iam_role_arn             = aws_iam_role.flow_logs.arn
+  log_destination          = aws_cloudwatch_log_group.flow_logs.arn
+  log_destination_type     = "cloud-watch-logs"
+  max_aggregation_interval = 60
   traffic_type             = var.flow_log_traffic_type
   vpc_id                   = aws_vpc.this.id
 
-  tags = merge(local.common_tags, { Name = "${var.vpc_name}-flow-log" })
+  tags = merge(local.common_tags, { Name = "${var.vpc_name}-rejected-flow-log" })
 
   depends_on = [aws_iam_role_policy.flow_logs]
 }

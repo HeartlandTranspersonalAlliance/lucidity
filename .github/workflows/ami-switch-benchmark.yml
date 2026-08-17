@@ -37,6 +37,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      - name: Install locked Nix
+        uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
+
       - name: Require configured benchmark identifiers
         env:
           AMI_ROLE_ARN: ${{ vars.AWS_AMI_IMPORT_ROLE_ARN }}
@@ -84,16 +87,18 @@ jobs:
           jq -e '(.failures | length) == 0 and (.images | length) == 1' <<< "${image}" >/dev/null
           echo "Benchmark target digest: $(jq -r '.images[0].imageId.imageDigest' <<< "${image}")"
 
-      - name: Prepare role-scoped GHCR build cache
+      - id: cache
+        name: Authenticate to GHCR and restore benchmark cache
         env:
           GHCR_CACHE_ENGINE: podman
           GHCR_CACHE_WRITE: true
           GITHUB_TOKEN: ${{ github.token }}
-        run: ci/setup-build-cache.sh benchmark-base
+        run: nix run .#lucidity -- ci cache configure benchmark-base
 
       - name: Build management-enabled CentOS bootc bootstrap image
         run: |
           sudo env \
+            PATH="${PATH}" \
             BASE_IMAGE="${CENTOS_BOOTC_IMAGE}" \
             BUILD_CACHE_FROM="${BUILD_CACHE_FROM}" \
             BUILD_CACHE_TO="${BUILD_CACHE_TO}" \
@@ -101,8 +106,7 @@ jobs:
             IMAGE_NAME="${BOOTSTRAP_IMAGE}" \
             IMAGE_VERSION="benchmark-${GITHUB_SHA}" \
             REGISTRY_AUTH_FILE="${REGISTRY_AUTH_FILE}" \
-            ./scripts/build.sh benchmark-base
-          sudo env CONTAINER_ENGINE=podman ./scripts/validate-image.sh "${BOOTSTRAP_IMAGE}"
+            nix run .#lucidity -- build worker
 
       - name: Build pinned image tooling
         run: |
@@ -126,9 +130,6 @@ jobs:
             VM_TOOL_IMAGE="${CI_TOOLS_IMAGE}" \
             ./scripts/validate-disk.sh image-output/worker/lucidity-centos-bootstrap-ami.raw
 
-      - name: Install Determinate Nix for the pinned EBS uploader
-        uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
-
       - name: Resolve the pinned coldsnap binary
         run: |
           coldsnap_path=$(nix build --no-link --print-out-paths .#coldsnap)
@@ -151,4 +152,4 @@ jobs:
 
       - name: Remove GHCR login and BuildKit builder
         if: always()
-        run: ci/teardown-build-cache.sh
+        run: nix run .#lucidity -- ci cache cleanup

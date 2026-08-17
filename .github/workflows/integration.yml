@@ -1,0 +1,223 @@
+name: Validate local Coolify integration
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/integration.yml
+      - ci/**
+      - flake.lock
+      - flake.nix
+      - image/image-builder.env
+      - nix/**
+      - secretspec.toml
+      - scripts/build-disk.sh
+      - scripts/vm-integration.sh
+      - scripts/vm-init.sh
+      - scripts/vm-start.sh
+      - scripts/vm-validate.sh
+      - Makefile
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: localhost/coolify-bootc-worker:integration
+  CONTROLLER_IMAGE: localhost/coolify-bootc-controller:integration
+  CI_TOOLS_IMAGE: localhost/coolify-aws-ci-tools:integration
+  BUILDX_BUILDER_NAME: lucidity-integration
+
+jobs:
+  controller-worker:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Initialize integration report
+        run: echo "INTEGRATION_STARTED_AT=$(date +%s)" >>"${GITHUB_ENV}"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install locked Nix
+        uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
+
+      - name: Enable KVM acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Build pinned VM tooling image
+        id: tooling
+        run: |
+          started=${SECONDS}
+          record_duration() {
+            echo "seconds=$((SECONDS - started))" >>"${GITHUB_OUTPUT}"
+          }
+          trap record_duration EXIT
+          source image/image-builder.env
+          docker build \
+            --build-arg "IMAGE_BUILDER_IMAGE=${IMAGE_BUILDER_IMAGE}" \
+            --tag "${CI_TOOLS_IMAGE}" \
+            --file ci/Containerfile \
+            .
+
+      - id: controller-cache
+        name: Authenticate to GHCR and restore controller cache
+        env:
+          GHCR_CACHE_WRITE: false
+          GITHUB_TOKEN: ${{ github.token }}
+        run: nix run .#lucidity -- ci cache configure controller
+
+      - name: Build and validate controller disk
+        id: controller
+        env:
+          CONTAINER_ENGINE: docker
+          IMAGE_NAME: ${{ env.CONTROLLER_IMAGE }}
+          VM_TOOL_IMAGE: ${{ env.CI_TOOLS_IMAGE }}
+        run: |
+          started=${SECONDS}
+          record_duration() {
+            echo "seconds=$((SECONDS - started))" >>"${GITHUB_OUTPUT}"
+          }
+          trap record_duration EXIT
+          nix run .#lucidity -- build controller
+          ./scripts/build-disk.sh controller qcow2
+          make validate-disk-controller
+
+      - id: worker-cache
+        name: Authenticate to GHCR and restore worker cache
+        env:
+          GHCR_CACHE_WRITE: false
+          GITHUB_TOKEN: ${{ github.token }}
+        run: nix run .#lucidity -- ci cache configure worker
+
+      - name: Build and validate worker disk
+        id: worker
+        env:
+          CONTAINER_ENGINE: docker
+          IMAGE_NAME: ${{ env.IMAGE }}
+          VM_TOOL_IMAGE: ${{ env.CI_TOOLS_IMAGE }}
+        run: |
+          started=${SECONDS}
+          record_duration() {
+            echo "seconds=$((SECONDS - started))" >>"${GITHUB_OUTPUT}"
+          }
+          trap record_duration EXIT
+          nix run .#lucidity -- build worker
+          ./scripts/build-disk.sh worker qcow2
+          make validate-disk-worker
+
+      - name: Boot and validate both guests
+        id: guests
+        env:
+          CONTAINER_ENGINE: docker
+          VM_TOOL_IMAGE: ${{ env.CI_TOOLS_IMAGE }}
+          VM_WAIT_ATTEMPTS: 300
+          VM_CONTROLLER_WAIT_ATTEMPTS: 600
+        run: |
+          started=${SECONDS}
+          record_duration() {
+            echo "seconds=$((SECONDS - started))" >>"${GITHUB_OUTPUT}"
+          }
+          trap record_duration EXIT
+          make vm-init-controller vm-init-worker
+          VM_HOST_FORWARD_PORT=8000 VM_GUEST_FORWARD_PORT=8000 make vm-start-controller
+          VM_HOST_FORWARD_PORT=8081 VM_GUEST_FORWARD_PORT=8080 VM_MEMORY_MB=3072 make vm-start-worker
+          make vm-validate-controller
+          make vm-validate-worker
+
+      - name: Register worker and deploy application through Coolify
+        id: coolify
+        run: |
+          started=${SECONDS}
+          record_duration() {
+            echo "seconds=$((SECONDS - started))" >>"${GITHUB_OUTPUT}"
+          }
+          trap record_duration EXIT
+          make vm-integration
+
+      - name: Collect failure diagnostics and stop guests
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          install -d -m 0700 diagnostics
+          if [[ ${JOB_STATUS} != success ]]; then
+            docker logs coolify-controller-vm >diagnostics/controller-vm.log 2>&1 || true
+            docker logs coolify-worker-vm >diagnostics/worker-vm.log 2>&1 || true
+            collect_guest_diagnostics() {
+              local role=$1
+              local port=$2
+              local identity=$3
+              [[ -f ${identity} ]] || return 0
+              ssh \
+                -o BatchMode=yes \
+                -o ConnectTimeout=5 \
+                -o IdentitiesOnly=yes \
+                -o StrictHostKeyChecking=no \
+                -o UserKnownHostsFile=/dev/null \
+                -i "${identity}" \
+                -p "${port}" \
+                admin@127.0.0.1 \
+                sudo -n journalctl -b --no-pager -n 400 \
+                  -u cloud-final.service \
+                  -u determinate-nix-install.service \
+                  -u lucidity-nix-profile.service \
+                  -u "coolify-${role}-storage.service" \
+                  -u "coolify-${role}-bootstrap.service" \
+                  -u "coolify-${role}-authorized-keys.service" \
+                  >"diagnostics/${role}-guest-journal.log" 2>&1 || true
+            }
+            collect_guest_diagnostics controller 2223 image-output/vm-controller/admin
+            collect_guest_diagnostics worker 2222 image-output/vm/admin
+            sed -n '1,200p' diagnostics/controller-vm.log || true
+            sed -n '1,200p' diagnostics/worker-vm.log || true
+            sed -n '1,240p' diagnostics/controller-guest-journal.log || true
+            sed -n '1,240p' diagnostics/worker-guest-journal.log || true
+          fi
+          make vm-stop-controller vm-stop-worker || true
+          nix run .#lucidity -- ci cache cleanup
+
+      - name: Summarize integration build
+        if: always()
+        env:
+          CONTROLLER_OUTCOME: ${{ steps.controller.outcome }}
+          CONTROLLER_SECONDS: ${{ steps.controller.outputs.seconds }}
+          COOLIFY_OUTCOME: ${{ steps.coolify.outcome }}
+          COOLIFY_SECONDS: ${{ steps.coolify.outputs.seconds }}
+          GUESTS_OUTCOME: ${{ steps.guests.outcome }}
+          GUESTS_SECONDS: ${{ steps.guests.outputs.seconds }}
+          TOOLING_OUTCOME: ${{ steps.tooling.outcome }}
+          TOOLING_SECONDS: ${{ steps.tooling.outputs.seconds }}
+          WORKER_OUTCOME: ${{ steps.worker.outcome }}
+          WORKER_SECONDS: ${{ steps.worker.outputs.seconds }}
+        run: |
+          finished_at=$(date +%s)
+          started_at=${INTEGRATION_STARTED_AT:-${finished_at}}
+          [[ ${started_at} =~ ^[0-9]+$ ]] || started_at=${finished_at}
+          {
+            echo '### Controller-worker integration'
+            echo
+            echo '| Phase | Outcome | Duration |'
+            echo '| --- | --- | ---: |'
+            echo "| VM tooling | \`${TOOLING_OUTCOME:-skipped}\` | ${TOOLING_SECONDS:-0}s |"
+            echo "| Controller image and disk | \`${CONTROLLER_OUTCOME:-skipped}\` | ${CONTROLLER_SECONDS:-0}s |"
+            echo "| Worker image and disk | \`${WORKER_OUTCOME:-skipped}\` | ${WORKER_SECONDS:-0}s |"
+            echo "| Guest boots | \`${GUESTS_OUTCOME:-skipped}\` | ${GUESTS_SECONDS:-0}s |"
+            echo "| Coolify API deployment | \`${COOLIFY_OUTCOME:-skipped}\` | ${COOLIFY_SECONDS:-0}s |"
+            echo "| Total | | $((finished_at - started_at))s |"
+          } >>"${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload integration failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lucidity-controller-worker-diagnostics
+          path: diagnostics/
+          if-no-files-found: error
+          retention-days: 7

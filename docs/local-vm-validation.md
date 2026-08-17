@@ -13,8 +13,10 @@ The generated AlmaLinux 10.2 worker QCOW2 booted successfully with UEFI. The aut
 - SELinux remained enforcing;
 - `bootc-fetch-apply-updates.timer` was enabled and scheduled from 11:00 UTC with up to 30 minutes of jitter;
 - no failed systemd units remained after first boot;
-- both SSH identities and a marker written into a named Docker volume under
-  `/var/lib/docker` survived the registry switch, update, and rollback reboots.
+- both SSH identities, the `/data/coolify` bind mount, a worker-state marker
+  under `/var/lib/coolify`, and a marker written into a named Docker volume
+  under `/var/lib/docker` survived the registry switch, update, and rollback
+  reboots.
 
 The GitHub-hosted lifecycle validates a registry-backed bootc switch to v1, an update to a visibly different v2 image, and rollback to v1. The same Docker volume marker survives all three reboots and SELinux remains enforcing. A separate ordinary reboot is omitted because the registry switch exercises the same persistence boundary.
 
@@ -72,6 +74,35 @@ make vm-clean-worker
 Use the corresponding `*-controller` targets for the controller. Controller and worker
 defaults use separate VM directories, names, SSH ports, registry names, and registry
 ports, so both harnesses can coexist.
+
+## Controller-to-worker integration
+
+The **Validate local Coolify integration** workflow builds both disks on one
+GitHub-hosted KVM runner and boots the guests together. It runs on changes to its
+harness and can be dispatched manually for an end-to-end production-readiness check.
+It exposes only loopback test ports on the runner, enrolls the controller's public
+key on the worker, and proves strict host-key-checked SSH from the controller guest
+to the worker guest.
+
+The harness uses Coolify's production root-user seeder only inside the disposable
+controller. It creates a one-hour API token limited to `read`, `write`, and `deploy`,
+registers and validates the worker through the documented Coolify API, and deploys a
+digest-pinned BusyBox HTTP service through Coolify. A successful run must retrieve the
+expected response through the worker's forwarded application port and find the
+Coolify-managed container on the worker. The generated password, API token, VMs, and
+application are discarded with the runner and are not stored in GitHub secrets or
+artifacts.
+
+With both role disks already built, the equivalent local sequence is:
+
+```bash
+make vm-init-controller vm-init-worker
+VM_HOST_FORWARD_PORT=8000 VM_GUEST_FORWARD_PORT=8000 make vm-start-controller
+VM_HOST_FORWARD_PORT=8081 VM_GUEST_FORWARD_PORT=8080 VM_MEMORY_MB=3072 make vm-start-worker
+make vm-validate-controller vm-validate-worker
+make vm-integration
+make vm-stop-controller vm-stop-worker
+```
 
 ## Remaining AWS validation
 

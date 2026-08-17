@@ -1,314 +1,200 @@
-name: Validate
+name: Validate locked flake
 
 on:
   pull_request:
   merge_group:
-    types:
-      - checks_requested
+    types: [checks_requested]
+  push:
+    branches: [main]
+  release:
+    types: [published]
   schedule:
     - cron: "17 5 * * 1"
   workflow_dispatch:
 
 concurrency:
-  group: validate-${{ github.ref }}
-  cancel-in-progress: true
+  group: lucidity-validate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
-env:
-  FULL_LIFECYCLE: ${{ github.event_name != 'pull_request' }}
-  IMAGE: localhost/coolify-bootc-worker:lifecycle-v1
-  UPDATE_IMAGE: localhost/coolify-bootc-worker:lifecycle-v2
-  CONTROLLER_IMAGE: localhost/coolify-bootc-controller:lifecycle-v1
-  CONTROLLER_UPDATE_IMAGE: localhost/coolify-bootc-controller:lifecycle-v2
-  CI_TOOLS_IMAGE: localhost/coolify-aws-ci-tools:ci
-
 jobs:
-  lifecycle-changes:
-    runs-on: ubuntu-slim
+  changes:
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
-      controller: ${{ steps.filter.outputs.controller }}
-      worker: ${{ steps.filter.outputs.worker }}
+      controller: ${{ steps.classify.outputs.controller }}
+      worker: ${{ steps.classify.outputs.worker }}
+      roles: ${{ steps.classify.outputs.roles }}
+      mesh: ${{ steps.classify.outputs.mesh }}
+      full: ${{ steps.classify.outputs.full }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Decide which lifecycle validations are required
-        id: filter
+      - id: classify
+        name: Classify affected roles
         env:
           EVENT_NAME: ${{ github.event_name }}
-          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
-          MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
-          PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PULL_REQUEST_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_BASE: ${{ github.event.merge_group.base_sha }}
+          MERGE_HEAD: ${{ github.event.merge_group.head_sha }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        shell: bash
         run: |
+          set -Eeuo pipefail
+          controller=false
+          worker=false
+          mesh=false
+          full=false
           case "${EVENT_NAME}" in
-            pull_request)
-              base_sha=${PULL_REQUEST_BASE_SHA}
-              head_sha=${PULL_REQUEST_HEAD_SHA}
-              ;;
+            pull_request) base=${PR_BASE}; head=${PR_HEAD} ;;
             merge_group)
-              base_sha=${MERGE_GROUP_BASE_SHA}
-              head_sha=${MERGE_GROUP_HEAD_SHA}
-              ;;
-            schedule|workflow_dispatch)
-              {
-                echo "controller=true"
-                echo "worker=true"
-              } >> "${GITHUB_OUTPUT}"
-              exit 0
+              base=${MERGE_BASE}; head=${MERGE_HEAD}; full=true
+              controller=true; worker=true; mesh=true
               ;;
             *)
-              echo "Unknown event ${EVENT_NAME}; requiring both lifecycle validations" >&2
-              {
-                echo "controller=true"
-                echo "worker=true"
-              } >> "${GITHUB_OUTPUT}"
-              exit 0
+              controller=true; worker=true; mesh=true; full=true
               ;;
           esac
-
-          changed_paths="${RUNNER_TEMP}/lifecycle-changed-paths"
-          if ! git diff --name-only --diff-filter=ACDMRT \
-              "${base_sha}" "${head_sha}" > "${changed_paths}"; then
-            echo "Could not determine changed paths; requiring both lifecycle validations" >&2
-            {
-              echo "controller=true"
-              echo "worker=true"
-            } >> "${GITHUB_OUTPUT}"
-            exit 0
+          if [[ ${EVENT_NAME} == pull_request || ${EVENT_NAME} == merge_group ]]; then
+            while IFS= read -r path; do
+              case "${path}" in
+                README.md|docs/*|LICENSE|proposal.md|*.md)
+                  ;;
+                nix/modules/aspects/controller.nix|nix/infra/*openbao*|nix/pkgs/openbao-*|scripts/bootstrap-controller.sh)
+                  controller=true; mesh=true
+                  ;;
+                nix/modules/aspects/worker.nix|scripts/bootstrap-worker.sh)
+                  worker=true
+                  ;;
+                nix/lib/nebula-config.nix|nix/tests/mesh.nix)
+                  controller=true; worker=true; mesh=true
+                  ;;
+                nix/home/*|nix/modules/*|nix/lib/*|nix/pkgs/*|nix/infra/*|flake.nix|flake.lock|secretspec.toml|tofu/*|tests/*|.github/workflows/validate.yml)
+                  controller=true; worker=true; mesh=true
+                  ;;
+                *)
+                  controller=true; worker=true; mesh=true
+                  ;;
+              esac
+            done < <(git diff --name-only --diff-filter=ACDMRT "${base}" "${head}")
           fi
-
-          controller=$(ci/controller-changes.sh < "${changed_paths}")
-          worker=$(ci/worker-changes.sh < "${changed_paths}")
           {
             echo "controller=${controller}"
             echo "worker=${worker}"
+            echo "mesh=${mesh}"
+            echo "full=${full}"
+            if [[ ${controller} == true && ${worker} == true ]]; then
+              echo 'roles=["controller","worker"]'
+            elif [[ ${controller} == true ]]; then
+              echo 'roles=["controller"]'
+            elif [[ ${worker} == true ]]; then
+              echo 'roles=["worker"]'
+            else
+              echo 'roles=[]'
+            fi
           } >> "${GITHUB_OUTPUT}"
 
-  opentofu:
+  static:
+    needs: changes
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Install Determinate Nix
+        with:
+          persist-credentials: false
+      - name: Install locked Nix
         uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
-
-      - name: Format, validate, and test OpenTofu
-        run: nix develop --command make tofu-check
-
-  shell-and-static:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Install Determinate Nix
-        uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
-
-      - name: Lint shell and test repository logic
-        run: nix develop --command make lint test
-
-      - name: Lint GitHub Actions workflows
+      - name: Build Nix-native static and formatting checks
         run: |
-          source ci/images.env
-          docker run --rm \
-            --volume "${GITHUB_WORKSPACE}:/repo" \
-            --workdir /repo \
-          "${ACTIONLINT_IMAGE}" -color
+          nix flake check --no-build --show-trace
+          nix build --no-link \
+            .#checks.x86_64-linux.static \
+            .#checks.x86_64-linux.treefmt \
+            --print-build-logs
 
-  controller-lifecycle:
-    needs: lifecycle-changes
-    if: needs.lifecycle-changes.outputs.controller == 'true'
+  role:
+    needs: [changes, static]
+    if: needs.changes.outputs.roles != '[]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
     permissions:
       contents: read
-      packages: read
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        role: ${{ fromJSON(needs.changes.outputs.roles) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Prepare role-scoped GHCR build cache
+        with:
+          persist-credentials: false
+      - name: Install locked Nix
+        uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
+      - id: cache
+        name: Authenticate to GHCR and restore role-scoped cache
         env:
-          GHCR_CACHE_WRITE: false
+          GHCR_CACHE_WRITE: ${{ github.event_name != 'pull_request' }}
           GITHUB_TOKEN: ${{ github.token }}
-        run: ci/setup-build-cache.sh controller
+        run: nix run .#lucidity -- ci cache configure "${{ matrix.role }}"
+      - name: Build and validate generated bootc role
+        if: needs.changes.outputs.full != 'true'
+        env:
+          CONTAINER_ENGINE: docker
+          IMAGE_NAME: localhost/lucidity-${{ matrix.role }}:${{ github.sha }}
+        run: nix run .#lucidity -- vm test "${{ matrix.role }}"
+      - name: Full bootc switch, rollback, and persistence lifecycle
+        if: needs.changes.outputs.full == 'true'
+        env:
+          CONTAINER_ENGINE: docker
+          IMAGE_NAME: localhost/lucidity-${{ matrix.role }}:${{ github.sha }}
+          LUCIDITY_FULL_GUEST_TEST: "1"
+        run: nix run .#lucidity -- vm test "${{ matrix.role }}"
+      - name: Remove OCI cache credentials
+        if: always()
+        run: nix run .#lucidity -- ci cache cleanup
 
-      - name: Enable KVM acceleration
+  mesh:
+    needs: [changes, static]
+    if: needs.changes.outputs.mesh == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install locked Nix
+        uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
+      - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+      - name: Test direct and relayed mesh policy
+        run: nix build --no-link .#checks.x86_64-linux.mesh-vm --print-build-logs
 
-      - name: Build pinned CI tooling image
-        run: |
-          source image/image-builder.env
-          docker build \
-            --build-arg "IMAGE_BUILDER_IMAGE=${IMAGE_BUILDER_IMAGE}" \
-            --tag "${CI_TOOLS_IMAGE}" \
-            --file ci/Containerfile \
-            .
-
-      - name: Build controller image
-        env:
-          CONTAINER_ENGINE: docker
-          IMAGE_NAME: ${{ env.CONTROLLER_IMAGE }}
-          IMAGE_VERSION: lifecycle-v1
-        run: ./scripts/build.sh controller
-
-      - name: Validate controller bootc image, persistence policy, and secret tooling
-        env:
-          CONTAINER_ENGINE: docker
-        run: ./scripts/validate-image.sh "${CONTROLLER_IMAGE}"
-
-      - name: Build and validate controller QCOW2
-        env:
-          CONTAINER_ENGINE: docker
-          IMAGE_NAME: ${{ env.CONTROLLER_IMAGE }}
-          VM_TOOL_IMAGE: ${{ env.CI_TOOLS_IMAGE }}
-        run: |
-          ./scripts/build-disk.sh controller qcow2
-          make validate-disk-controller
-
-      - name: Build controller update image and publish lifecycle images locally
-        if: env.FULL_LIFECYCLE == 'true'
-        env:
-          CONTAINER_ENGINE: docker
-          IMAGE_NAME: ${{ env.CONTROLLER_UPDATE_IMAGE }}
-          IMAGE_VERSION: lifecycle-v2
-        run: |
-          ./scripts/build.sh controller
-          make vm-registry-start-controller
-
-      - name: Boot and validate controller guest
-        if: env.FULL_LIFECYCLE == 'true'
-        env:
-          CONTAINER_ENGINE: docker
-          VM_TOOL_IMAGE: ${{ env.CI_TOOLS_IMAGE }}
-          VM_WAIT_ATTEMPTS: 300
-          VM_CONTROLLER_WAIT_ATTEMPTS: 600
-        run: |
-          cleanup() {
-            status=$?
-            if ((status != 0)); then
-              docker logs coolify-controller-vm || true
-            fi
-            make vm-stop-controller || true
-            make vm-registry-stop-controller || true
-            exit "${status}"
-          }
-          trap cleanup EXIT
-          make vm-init-controller
-          make vm-start-controller
-          make vm-validate-controller
-          if [[ ${FULL_LIFECYCLE} == true ]]; then
-            make vm-update-rollback-controller
-          fi
-
-      - name: Remove GHCR login and BuildKit builder
-        if: always()
-        run: ci/teardown-build-cache.sh
-
-  worker-lifecycle:
-    needs: lifecycle-changes
-    if: needs.lifecycle-changes.outputs.worker == 'true'
-    permissions:
-      contents: read
-      packages: read
+  required:
+    name: required
+    if: always()
+    needs: [changes, static, role, mesh]
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Prepare role-scoped GHCR build cache
+      - name: Require successful applicable validation
         env:
-          GHCR_CACHE_WRITE: false
-          GITHUB_TOKEN: ${{ github.token }}
-        run: ci/setup-build-cache.sh worker
-
-      - name: Enable KVM acceleration
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          MESH_RESULT: ${{ needs.mesh.result }}
+          ROLE_RESULT: ${{ needs.role.result }}
+          STATIC_RESULT: ${{ needs.static.result }}
         run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-
-      - name: Report runner capacity
-        run: |
-          df -h /
-          docker system df
-          if test -r /dev/kvm && test -w /dev/kvm; then
-            echo "KVM acceleration is available"
-          else
-            echo "KVM unavailable; lifecycle test will use QEMU TCG"
-          fi
-
-      - name: Build pinned CI tooling image
-        run: |
-          source image/image-builder.env
-          docker build \
-            --build-arg "IMAGE_BUILDER_IMAGE=${IMAGE_BUILDER_IMAGE}" \
-            --tag "${CI_TOOLS_IMAGE}" \
-            --file ci/Containerfile \
-            .
-
-      - name: Build worker bootc image
-        env:
-          CONTAINER_ENGINE: docker
-          IMAGE_VERSION: lifecycle-v1
-        run: make build-worker
-
-      - name: Validate worker bootc image
-        env:
-          CONTAINER_ENGINE: docker
-        run: ./scripts/validate-image.sh "${IMAGE}"
-
-      - name: Build and validate worker QCOW2
-        env:
-          CONTAINER_ENGINE: docker
-          IMAGE_NAME: ${{ env.IMAGE }}
-          VM_TOOL_IMAGE: ${{ env.CI_TOOLS_IMAGE }}
-        run: |
-          ./scripts/build-disk.sh worker qcow2
-          make validate-disk-worker
-
-      - name: Build update image and publish lifecycle images locally
-        if: env.FULL_LIFECYCLE == 'true'
-        env:
-          CONTAINER_ENGINE: docker
-          IMAGE_NAME: ${{ env.UPDATE_IMAGE }}
-          IMAGE_VERSION: lifecycle-v2
-        run: |
-          ./scripts/build.sh worker
-          make vm-registry-start-worker
-
-      - name: Boot and validate worker guest
-        if: env.FULL_LIFECYCLE == 'true'
-        env:
-          CONTAINER_ENGINE: docker
-          VM_TOOL_IMAGE: ${{ env.CI_TOOLS_IMAGE }}
-          VM_WAIT_ATTEMPTS: 300
-        run: |
-          cleanup() {
-            status=$?
-            if ((status != 0)); then
-              docker logs coolify-worker-vm || true
-            fi
-            make vm-stop-worker || true
-            make vm-registry-stop-worker || true
-            exit "${status}"
-          }
-          trap cleanup EXIT
-          make vm-init-worker
-          make vm-start-worker
-          make vm-validate-worker
-          if [[ ${FULL_LIFECYCLE} == true ]]; then
-            make vm-update-rollback-worker
-          fi
-
-      - name: Remove GHCR login and BuildKit builder
-        if: always()
-        run: ci/teardown-build-cache.sh
+          set -Eeuo pipefail
+          for result in "${CHANGES_RESULT}" "${STATIC_RESULT}"; do
+            [[ ${result} == success ]]
+          done
+          for result in "${ROLE_RESULT}" "${MESH_RESULT}"; do
+            [[ ${result} == success || ${result} == skipped ]]
+          done
