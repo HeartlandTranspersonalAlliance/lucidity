@@ -270,6 +270,11 @@ in {
           nix .github/workflows Makefile README.md
         touch "$out"
       '';
+    runtimeToolsCheck = pkgs.runCommand "lucidity-runtime-tools-check" {} ''
+      grep -Fq ${lib.escapeShellArg "${pkgs.qemu-utils}/bin"} ${lib.getExe lucidity}
+      grep -Fq ${lib.escapeShellArg "${pkgs.xorriso}/bin"} ${lib.getExe lucidity}
+      touch "$out"
+    '';
     cacheDocker = pkgs.writeShellScriptBin "docker" ''
       set -Eeuo pipefail
       if [[ $1 == login ]]; then
@@ -346,6 +351,7 @@ in {
       infrastructureCheck
       secretspecCheck
       repositoryCheck
+      runtimeToolsCheck
       cacheUnitCheck
       controllerUnitCheck
       workerUnitCheck
@@ -413,6 +419,7 @@ in {
       mesh-vm = import ../tests/mesh.nix {inherit pkgs;};
       policy = policyCheck;
       repository = repositoryCheck;
+      runtime-tools = runtimeToolsCheck;
       secretspec = secretspecCheck;
       static = staticCheck;
       text-style-unit = textStyleUnitCheck;

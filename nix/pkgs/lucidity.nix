@@ -16,10 +16,12 @@ pkgs.writeShellApplication {
     openssh
     opentofu
     podman
+    qemu-utils
     ripgrep
     secretspec
     shellcheck
     syft
+    xorriso
   ];
   text = builtins.readFile ./lucidity.sh;
 }
