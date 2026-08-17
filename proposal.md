@@ -20,6 +20,38 @@ The target environment is AWS EC2.
 
 Do not create a Kubernetes, ECS, Fargate, or Elastic Beanstalk architecture. This is intentionally an EC2 + Docker design.
 
+## Implementation status (2026-08-17)
+
+The repository is no longer empty. The implementation now uses the locked flake as
+its authoritative build, infrastructure, test, security, and release graph:
+
+- Den typed entities define the controller and worker; aspects own their payloads and
+  unit fixtures, policies own output routing, and classes own evaluation behavior.
+- Nix derives both bootc contexts and both Terranix/OpenTofu roots. Duplicate root
+  Containerfile, role tree, Makefile, and hand-authored environment root were removed.
+- `nix flake check` validates formatting, shell and workflow lint, generated bootc
+  policy, SecretSpec contracts, mocked OpenTofu plans, release logic, and the Nebula
+  NixOS VM topology. GitHub workflows are thin event, permission, credential, and
+  flake-app adapters.
+- Operational shell sources are packaged as patched Nix-store executables before a
+  flake app can invoke them. All GitHub, Dependabot, and Syft YAML is parsed in the
+  check graph, and external Actions must use immutable full commit pins.
+- SecretSpec declares local, CI, and AWS Secrets Manager providers. Runtime values do
+  not enter Nix evaluation, Git, AMIs, OpenTofu plans, or state.
+- The generated AWS foundation includes EBS encryption defaults, public snapshot
+  blocking, CloudTrail, AWS Config, GuardDuty, Inspector, Security Hub V2, immutable
+  ECR repositories, OIDC roles, SSM management, and dedicated KMS keys.
+- `nix run .#architecture` derives a Mermaid namespace graph directly from evaluated
+  `den.aspects`; no separately maintained architecture graph is checked in.
+
+The remaining advanced milestones are operational: merge the verified graph, apply
+the reviewed foundation plan, publish immutable controller and worker images, create
+and validate the missing controller AMI, deploy nodes only after explicit AMI inputs,
+and complete backup, recovery, update, rollback, and incident-response drills. The
+last live AWS inventory found no production EC2 nodes, launch templates, SSM-managed
+nodes, or controller AMI, so the system is not yet production-ready despite the
+repository controls being substantially complete.
+
 ## Current AWS implementation decisions
 
 The first AWS deployment targets AMD64 with `t3a.small` for the controller and
@@ -30,30 +62,39 @@ paths are proven end to end.
 The initial deployment uses public subnets and one Elastic IP per EC2 node. It does
 not use an ALB or NAT Gateway. The VPC still spans multiple Availability Zones and
 retains isolated private subnets, tiered security groups, DNS support, and VPC Flow
-Logs so private placement can be enabled later. Controller-to-worker management uses
-private VPC addresses even though both nodes have direct public ingress. NAT Gateways
-remain an explicit opt-in for future private-subnet workloads.
+Logs so private placement can be enabled later. Both singleton nodes initially share
+one Availability Zone to avoid cross-zone transfer charges. NAT Gateways remain an
+explicit opt-in for future private-subnet workloads.
 
 There is no public administrator SSH rule. Both nodes use AWS Systems Manager Session
-Manager for external shell and bootstrap access over outbound HTTPS. TCP/22 exists
-only from the controller security group to itself and the worker security group over
-private VPC addresses because Coolify requires SSH management. Security-group egress
-is allowlisted rather than unrestricted: the controller initially needs HTTPS plus
-private SSH, while the worker needs HTTPS and, when Matrix federation requires it,
-TCP/8448.
+Manager as an independent recovery channel. Ordinary administration and Coolify's
+controller-to-worker SSH run over a Nebula overlay. The controller is the lighthouse
+and relay, with only UDP/4242 exposed for mesh discovery. Production security groups
+contain no TCP/22 rules. Administrator root login, worker-to-controller SSH, and
+unspecified overlay traffic are denied. Security-group egress remains allowlisted.
 
 AWS-hosted controller secrets use one bundled AWS Secrets Manager secret encrypted
-with the AWS managed `aws/secretsmanager` KMS key. OpenTofu creates only the empty
+with a dedicated, rotating customer-managed KMS key. OpenTofu creates only the empty
 secret container and a least-privilege policy attached to the controller's shared EC2
-instance profile. Secret values are populated
-out of band and resolved on the EC2 instance at runtime; they are never placed in an
-AMI, OpenTofu configuration, plan, or state. The EC2 bootstrap remains gated on an
-approved `asm-exec` package or source.
+instance profile. A flake app generates the complete first version in tmpfs, uploads
+it without printing values, and refuses accidental replacement of `AWSCURRENT`.
+Values are resolved on the EC2 instance at runtime; they are never placed in an AMI,
+OpenTofu configuration, plan, state, or Nix store. The EC2 bootstrap uses the pinned
+`asm-exec` package.
 
-OpenTofu is not a secret store and must not receive the runtime value. Self-hosted
-OpenBao remains a provider-neutral option, but operating it solely for this one small
-deployment would add another stateful service, recovery procedure, and availability
-dependency. The single Secrets Manager bundle is the selected initial tradeoff.
+OpenTofu is not a secret store and must not receive the runtime value. OpenBao now
+provides provider-neutral custody for the encrypted Nebula CA and other material that
+must not be AWS-specific. It listens only on controller loopback, uses Raft storage,
+and auto-unseals through a dedicated AWS KMS key. SecretSpec defines the provider and
+profile contract without placing resolved values in Nix evaluation or the Nix store.
+
+The locked Nix flake is the configuration and validation authority. Den owns host and
+role composition, Home Manager owns the administrator profile, Terranix generates
+Terraform-compatible OpenTofu JSON, and `nix flake check` is the complete hermetic
+quality graph. Developer and CI commands are exposed as flake apps. GitHub workflows
+should contain only event, permission, runner preparation, credential-bound cloud
+steps, and calls into those apps. They must not recreate the check graph by manually
+chaining formatters, linters, Make targets, or individual test scripts.
 
 ---
 
@@ -142,58 +183,43 @@ The implementation should not depend on AlmaLinux-specific behavior where a gene
 
 # 3. Initial repository structure
 
-Create a clean structure similar to:
+The implemented feature-first structure is:
 
 ```text
 .
-├── Containerfile
+├── flake.nix
+├── flake.lock
 ├── README.md
 ├── LICENSE
-├── Makefile
-├── .gitignore
-├── .editorconfig
-│
-├── roles/
-│   ├── common/
-│   ├── controller/
-│   └── worker/
-│
-├── files/
-│   ├── etc/
-│   └── usr/
-│
-├── systemd/
-│   ├── coolify-bootstrap.service
-│   └── optional supporting units
-│
+├── nix/
+│   ├── den/
+│   │   ├── entities/
+│   │   ├── aspects/
+│   │   │   ├── common/
+│   │   │   ├── controller/{files,tests}/
+│   │   │   └── worker/{files,tests}/
+│   │   ├── classes/{bootc,terranix.nix}
+│   │   └── policies/
+│   ├── flake/{architecture,checks,formatting,outputs,project}.nix
+│   ├── infra/{aws,state}.nix
+│   ├── home/
+│   └── pkgs/
 ├── scripts/
-│   ├── build.sh
-│   ├── validate-image.sh
-│   ├── bootstrap-controller.sh
-│   └── bootstrap-worker.sh
-│
+│   └── hardware/VM and AWS boundary adapters
 ├── tests/
-│   ├── test-image.sh
-│   ├── test-controller.sh
-│   └── test-worker.sh
-│
-├── image/
-│   └── image-builder configuration
-│
+│   └── cross-cutting integration fixtures
 ├── tofu/
 │   ├── modules/
+│   │   ├── account-security-baseline/
 │   │   ├── network/
-│   │   ├── controller/
-│   │   ├── worker/
-│   │   ├── registry/
-│   │   └── github-oidc/
-│   ├── environments/
-│   │   └── aws/
-│   ├── variables.tf
-│   ├── outputs.tf
-│   └── versions.tf
-│
+│   │   ├── ecr/
+│   │   ├── ec2-launch-templates/
+│   │   ├── ec2-nodes/
+│   │   └── state-backend/
+│   └── examples/
+├── secretspec.toml
 └── .github/
+    └── workflows/
     ├── workflows/
     │   ├── validate.yml
     │   ├── build.yml
@@ -270,7 +296,8 @@ dnf install ...
 
 for normal system configuration.
 
-If the host needs a package, add it to the Containerfile and rebuild the image.
+If the host needs a package, add it to the owning Den aspect or bootc class and
+rebuild the generated image context.
 
 Clearly document:
 
@@ -524,7 +551,8 @@ common bootc base
 
 Avoid duplicating package installation logic.
 
-If a multi-stage Containerfile or multiple Containerfiles are cleaner, use them.
+Nix generates one role-specific Containerfile per evaluated host while sharing the
+class implementation and common aspect.
 
 ---
 
@@ -830,49 +858,25 @@ Provide a safe initial setup procedure.
 
 # 21. CI workflow
 
-Create a validation workflow that runs for pull requests.
+`nix flake check` is the authoritative hermetic validation command locally and in CI.
+The flake graph declares formatting, dead-code checks, ShellCheck, actionlint,
+repository policy, generated host manifests, SecretSpec schemas, Terranix output
+contracts, focused unit tests, and the NixOS Nebula policy test. Any copied executable
+used by a derivation must have its shebang normalized with `patchShebangs` before
+execution so the sandbox uses pinned Nix-store interpreters.
 
-It should:
+The required GitHub workflow runs the one flake command. It must not duplicate the
+graph with a development shell followed by manual formatter, linter, Make, or test
+script invocations. Pinned GitHub Actions may prepare checkout, Nix, KVM, cache, OIDC,
+and artifacts, but validation ownership remains in the flake.
 
-1. lint shell scripts,
-2. validate Containerfiles,
-3. run OpenTofu formatting checks,
-4. run OpenTofu validation,
-5. build the bootc images where feasible,
-6. run `bootc container lint`,
-7. execute lightweight tests,
-8. fail clearly.
-
-Use pinned or major-version-controlled GitHub Actions rather than arbitrary untrusted actions.
-
-Repository lint should enforce spelling and tracked-text style in addition to
-ShellCheck and actionlint. Root EditorConfig rules and a tracked-file check enforce LF
-line endings, final newlines, and trimmed trailing whitespace consistently in editors,
-local development, and hosted validation. Keep those tools in the pinned development
-environment so local and hosted validation use the same versions.
-
-Keep static quality targets in a dedicated included make fragment. The lifecycle path
-classifier should recognize that fragment and its focused checker fixtures as static-only,
-while treating the root Makefile and classifier implementation as shared lifecycle control
-surfaces.
-
-Affected roles must still build and validate their disk artifact on pull requests.
-Keep the real accelerated guest boot, sequential image switch, update, rollback, and
-persistence reboots as a path-scoped integration gate on merge-queue candidates. Run
-both complete lifecycles weekly and on explicit manual dispatches to catch upstream
-image drift. Pull requests prove image and disk construction, while the exact queued
-candidate provides the single authoritative guest lifecycle result.
-Run raw AMI compatibility on pull requests only when the AMI workflow or shared disk
-build and validation scripts change. General role image changes are already covered by
-QCOW2 validation and must not trigger a duplicate worker build.
-
-Release orchestration calls candidate publication as a reusable workflow with an
-explicit source commit. The direct dependency keeps publication status, permissions,
-and failure reporting inside one release graph.
-
-Cleanup traps handle normal cloud-test completion. A scheduled read-only audit covers
-runner termination by reporting old, tagged disposable instances, AMIs, and snapshots
-with their originating GitHub run for operator-reviewed cleanup.
+Hardware-assisted bootc, two-node Coolify, AMI import, production deployment, and
+release exercises depend on container daemons, KVM, GitHub OIDC, or live AWS APIs and
+therefore are not hermetic flake checks. Expose each as a named flake app whose runtime
+tools are declared by Nix. Their GitHub YAML is only an event, permissions, runner,
+credential, and artifact adapter. It must call the app rather than manually chaining
+repository scripts. Cleanup traps remain inside the app-level orchestration, with a
+scheduled read-only cloud audit covering interrupted runners.
 
 ---
 
@@ -1357,14 +1361,17 @@ never resolved secret values. Commit `.terraform.lock.hcl` so provider
 selections and checksums are reviewed and reproducible.
 
 For the AWS controller, OpenTofu provisions one empty Secrets Manager container,
-uses the AWS managed `aws/secretsmanager` KMS key, and provisions an EC2 instance
+uses a dedicated rotating customer-managed KMS key, and provisions an EC2 instance
 profile restricted to that secret. It must not create an
 `aws_secretsmanager_secret_version` or accept secret values as variables. Populate the
 JSON value through an out-of-band operator workflow.
 At runtime, resolve individual keys using
 `{{resolve:secretsmanager:secret-id:SecretString:json-key}}` with `asm-exec`.
-Do not call Secrets Manager value-reading APIs from automation that can expose their
-responses in plans, logs, CI output, or agent context.
+SecretSpec's checked-in `awssm` alias may perform its internal read/write operations
+for scoped `check`, `set`, and `run` commands; it must never print values. Other
+automation must not call secret-value read APIs in ways that can expose responses in
+plans, logs, CI output, or agent context. Host services continue to use dynamic
+references and `asm-exec`.
 
 ---
 
@@ -1413,302 +1420,157 @@ and explain that these services can be added later if a concrete requirement jus
 
 # 38. Development milestones
 
-Work incrementally.
-
-## Milestone 1 — Repository scaffold
-
-Create:
-
-* Containerfile(s)
-* Makefile
-* scripts
-* README
-* GitHub validation workflow
-* basic tests
-
-Commit this coherent milestone.
-
----
-
-## Milestone 2 — Common bootc host
-
-Produce a bootable image containing:
-
-* Docker
-* SSH
-* required host utilities
-* working systemd configuration
-
-Validate:
-
-```text
-bootc container lint passes
-Docker starts
-SSHD starts
-image boots
-```
-
-Commit.
-
----
-
-## Milestone 3 — Worker appliance
-
-Build the worker role first.
-
-This is intentionally first because it is simpler.
-
-Validate:
-
-* host boots,
-* Docker works,
-* SSH works,
-* root key authentication works,
-* Coolify prerequisites are satisfied,
-* Docker data survives reboot,
-* Docker data survives bootc upgrade/rollback.
-
-Commit.
-
----
-
-## Milestone 4 — Controller appliance
-
-Implement persistent `/data/coolify`.
-
-Implement idempotent first-boot initialization.
-
-Validate:
-
-* both images contain a native `/nix` mountpoint without a hand-written Nix mount unit,
-* `/data/coolify` has the persistent SELinux file-context rule required by the official bind mounts,
-* Coolify initializes once,
-* secrets survive reboot,
-* Coolify containers restart after reboot,
-* OS rebuild does not regenerate secrets,
-* OS rollback does not destroy Coolify state.
-
-Commit.
-
----
-
-## Milestone 4A — Determinate Nix on both bootc roles
-
-After local image lifecycle validation and disposable AMD64 AMI validation succeed,
-install Determinate Nix on both roles with a reviewed, version-pinned installer. Use
-the native OSTree planner, an explicit persistent path, and its native SELinux policy
-support. Do not disable or make SELinux permissive.
-
-Validate:
-
-* `nix-daemon` is active on controller and worker,
-* `getenforce` returns `Enforcing`,
-* `/nix` is backed by the selected persistent path,
-* a flake build succeeds on each role,
-* Nix store data survives reboot, bootc update, and rollback,
-* installer rollback/uninstall behavior is documented before production use.
-
-Commit.
-
----
-
-## Milestone 5 — Local integration test
-
-Create a practical test procedure using VMs if feasible.
-
-Test:
-
-```text
-controller VM
-      ↓ SSH
-worker VM
-```
-
-Verify that Coolify can register the worker and deploy a trivial application.
-
-Use something minimal such as nginx or a tiny static HTTP container.
-
-Commit test tooling/documentation.
-
----
-
-## Milestone 6 — AWS OpenTofu foundation
-
-Add:
-
-* VPC
-* subnet
-* routing
-* internet gateway
-* security groups
-* IAM roles
-* ECR
-* optional S3
-* GitHub OIDC
-
-Do not deploy EC2 until the AMI pipeline is ready unless using a temporary conventional AMI for testing.
-
-For the initial apply, enable only ECR, GitHub OIDC, and disposable AMI import
-resources. Keep networking and runtime secrets feature-gated until AWS accepts the
-AMI artifact and the EC2 launch milestone begins.
-
-Commit.
-
----
-
-## Milestone 7 — ECR publishing
-
-Implement GitHub Actions OIDC authentication.
-
-Publish controller/worker bootc OCI images.
-
-Verify tags and architecture.
-
-Commit.
-
----
-
-## Milestone 8 — AMI pipeline
-
-Use the appropriate bootc image-building process to generate EC2-compatible images.
-
-Register AMIs.
-
-On pull requests, build and validate the raw AMD64 AMI artifact without AWS
-credentials. After the foundation is applied on `main`, manually dispatch the same
-workflow with AWS validation enabled. By default it streams the raw disk directly to
-an encrypted EBS snapshot with bounded parallel workers, explicitly registers and
-verifies the AMI metadata, then deletes the AMI and snapshot. No S3 staging or legacy
-VM Import worker is retained.
-
-For production delivery, an explicit retained mode uses only EBS Direct and requires
-the launch gate. The release runs controller and worker AMI gates in parallel, verifies
-the controller bootstrap before accepting that role, retains both validated encrypted
-snapshots and immutable AMIs, and records their exact IDs in the schema-v2 release
-manifest without changing any running instance. Launch-template inputs remain a
-separate reviewed deployment decision.
-
-Validate actual EC2 boot.
-
-Commit.
-
----
-
-## Milestone 9 — EC2 deployment
-
-The controller launch template must use cloud-init only to write the seven
-Secrets Manager dynamic references to a root-only runtime environment file before
-`cloud-final.service` completes. OpenTofu, its state, EC2 user data, and CI must never
-contain the resolved values. Require runtime secrets, instance management, and
-networking whenever launch templates are enabled. The worker template needs no user
-data.
-
-OpenTofu should launch:
-
-```text
-coolify-controller
-coolify-worker-01
-```
-
-with:
-
-```text
-gp3 encrypted EBS
-security groups
-IAM instance profiles
-public + private networking
-appropriate architecture
-```
-
-Validate Session Manager shell access with no public TCP/22, SSM port forwarding to
-the controller bootstrap UI, and private controller-to-worker SSH.
-
-Commit.
-
-Implemented in OpenTofu behind `enable_ec2_instances`: the production controller and
-first worker pin numeric hardened launch-template versions, launch without ephemeral
-public addresses or SSH keys, receive stable Elastic IPs, and enable direct EC2 API
-termination protection. Both default to the first selected public subnet to avoid
-unnecessary cross-AZ management traffic; placement remains explicitly configurable.
-
-Implemented behind `enable_node_backups`: both exact instance ARNs receive daily,
-crash-consistent AWS Backup recovery points with cost-conscious 7-day retention.
-Their encrypted root volumes survive instance termination, the vault uses governance-
-mode retention controls, and separate backup and restore roles keep normal backup
-permissions apart from restore permissions. The restore role can pass only the two
-node runtime roles to EC2. The recovery runbook requires isolated, timed controller
-and worker drills before assigning an AWS recovery-time objective.
-
----
-
-## Milestone 10 — End-to-end AWS validation
-
-Test:
-
-```text
-Internet
-   ↓
-Coolify controller
-
-
-Coolify
-   ↓ private SSH
-worker
-
-
-Internet
-   ↓
-worker Traefik
-   ↓
-test app
-```
-
-Verify HTTPS using a test domain if available.
-
-Do not require a real production domain for automated CI.
-
-Implemented as the manual **Validate production deployment** GitHub-hosted workflow.
-Its main-branch OIDC role discovers the uniquely tagged nodes and uses SSM to validate
-their hardened EC2 and guest state. The first run idempotently enrolls the controller's
-public key on the worker. Every run authenticates the worker host key through SSM and
-proves private controller-to-worker SSH with strict host-key checking. Optional
-controller and worker HTTPS inputs extend the same run through Cloudflare to the public
-service endpoints. The workflow records a concise acceptance summary without returning
-the controller private key or resolved runtime values.
-
-Commit.
-
----
-
-## Milestone 11 — Update/rollback validation
-
-Publish a visibly identifiable second OS image.
-
-On a test EC2 machine:
-
-```text
-stage upgrade
-reboot
-confirm new deployment
-confirm Docker/Coolify data
-rollback
-reboot
-confirm previous deployment
-confirm persistent data remains
-```
-
-Document exact results.
-
-Implemented as the manual **Validate bootc switch and rollback delivery** workflow.
-It uses one disposable, keyless T3a instance and the existing tag-restricted AMI
-validation role. Before switching from the digest-pinned CentOS bootstrap image to an
-immutable AlmaLinux worker candidate, it records the source deployment and writes a
-Docker-volume marker. It validates the candidate after reboot, queues `bootc rollback`,
-then validates the original deployment, the same marker, Docker, SSM, and enforcing
-SELinux after the second reboot. All EC2, AMI, and snapshot resources are removed by
-the existing cleanup trap.
-
-Commit.
+Status was reconciled on 2026-08-17 against the current jj working-copy parent,
+GitHub, and read-only AWS inventory in `us-east-2`. Repository completion and live
+deployment are deliberately separate. The Nix-native work is still on draft PR #42,
+not on `main`, and the live AWS foundation therefore reflects the older main branch.
+
+## Milestone 1 - Nix-owned repository scaffold
+
+**Status: complete on the current branch.** The locked flake, Den modules, role
+profiles, generated bootc contexts, Terranix roots, SecretSpec contract, tests,
+documentation, and pinned GitHub Actions are present. `flake.lock`, not a language-
+specific package manager lock file, is the dependency lock authority.
+
+## Milestone 2 - Common bootc host
+
+**Status: complete and CI-validated.** Both generated contexts contain Docker,
+OpenSSH, SSM Agent, SELinux policy, bootc lifecycle support, cloud-init, Nix profile
+activation, and persistent host paths. The current branch's bootc and AMI compatibility
+workflows pass.
+
+## Milestone 3 - Worker appliance
+
+**Status: complete locally and in CI; partially released in AWS.** The worker boots,
+accepts only the intended mesh management identity, runs Docker, and preserves Docker,
+Nix, Coolify, and Nebula state through switch and rollback tests. AWS contains a
+private, encrypted, UEFI, IMDSv2 worker AMI for `v0.1.0`; no worker is deployed.
+
+## Milestone 4 - Controller appliance
+
+**Status: complete locally and in CI; not released as a retained AWS AMI.** The
+controller has idempotent Coolify bootstrap, persistent `/data/coolify`, OpenBao,
+SecretSpec and `asm-exec` integration, and SELinux-enforcing lifecycle validation. The
+two-node integration workflow registers a worker and deploys a digest-pinned test app.
+AWS currently has no retained controller AMI and no controller instance.
+
+## Milestone 4A - Determinate Nix on both roles
+
+**Status: complete in the image and hosted VM tests; production validation pending.**
+The pinned installer, native OSTree planner, persistent `/var/lib/nix`, system profile,
+Home Manager activation, and rollback behavior are flake-owned. Production proof must
+be repeated after both AWS nodes exist.
+
+## Milestone 5 - Nix-native local integration
+
+**Status: complete locally; remote validation covers the published parent.** The
+current working copy passes the full hermetic flake graph. PR #42's published parent
+also passed AMD64 AMI compatibility and controller-worker Coolify integration. The
+supported developer entrypoints are named flake apps; the removed Makefile and legacy
+role tree are not compatibility surfaces.
+
+## Milestone 6 - AWS OpenTofu foundation
+
+**Status: partially deployed.** Terranix generates Terraform-compatible OpenTofu JSON,
+and the live account has remote-state and access-log buckets, three public and three
+isolated subnets, routing, an Internet Gateway, rejected-traffic flow logs, ECR, IAM
+roles, GitHub OIDC, and AMI validation resources. The state buckets are versioned,
+encrypted, non-public, and access-logged.
+
+The live security groups still contain the earlier private TCP/22 design. Applying the
+reviewed Nix-native plan must remove those rules and add only the declared Nebula
+UDP/4242 path. Treat this as intentional pending migration, not evidence that the
+current branch has already reached production. Production variables explicitly keep
+the existing 90-day VPC flow-log retention instead of accepting the module's lower
+cost-oriented default.
+
+## Milestone 7 - ECR publishing and supply chain
+
+**Status: complete for the current `main`; current branch publication pending merge.**
+Controller and worker repositories are scan-on-push, immutable except for the explicit
+`stable` channel, and retain immutable SHA and `v0.1.0` tags while expiring untagged
+images after seven days. The `.#release` flake app owns semantic version selection,
+ECR promotion, SBOM generation, inventory, AMI manifest assembly, and publication;
+GitHub YAML retains permissions and attestations only. There
+is no published GitHub release, so a complete release must prove that controller and
+worker OCI images, retained AMIs, manifest, attestations, and GitHub release all refer
+to one source revision.
+
+## Milestone 8 - AMI pipeline
+
+**Status: partial.** Pull-request AMD64 compatibility passes and two private encrypted
+worker AMIs remain available. The account has no retained controller AMI, so the
+schema-v2 two-role release invariant is not satisfied. Complete this milestone by
+running the Nix-app-orchestrated retained release from `main`, verifying both actual
+EC2 boots, and recording one immutable manifest without changing running nodes.
+
+## Milestone 9 - EC2, mesh, secrets, and recovery deployment
+
+**Status: declared but not deployed.** The generated OpenTofu graph gates hardened
+launch templates, exact AMI inputs, two protected EC2 instances, Elastic IPs,
+Cloudflare records, the empty controller runtime secret, OpenBao KMS auto-unseal,
+backups, and node alarms. A separate account-security gate now declares default EBS
+encryption with a customer-managed key, public-snapshot blocking, a multi-region
+integrity-validated CloudTrail, continuous AWS Config, GuardDuty, Inspector for EC2
+and ECR, Security Hub V2, and a seven-year protected audit bucket. Live inventory
+found none of those resources and no SSM
+managed nodes. Apply only a reviewed saved plan through the `infra` flake app; never
+pass secret values through Nix or OpenTofu.
+
+## Milestone 10 - End-to-end AWS acceptance
+
+**Status: blocked by Milestone 9.** After deployment, the validation flake app must use
+OIDC and SSM to prove controller and worker identity, no security-group TCP/22,
+administrator and Coolify SSH policy over Nebula, OpenBao loopback-only access and
+auto-unseal, controller bootstrap, Cloudflare HTTPS, and a worker-hosted application.
+Record the exact AMI and OCI digests in the acceptance evidence.
+
+## Milestone 11 - Update, rollback, backup, and restore
+
+**Status: implemented for disposable/local lifecycle tests; production drill pending.**
+The harness proves switch, reboot, rollback, Docker-volume persistence, SSM, and
+enforcing SELinux on disposable infrastructure. Production completion additionally
+requires enabled AWS Backup, a successful controller restore, a successful worker
+restore, OpenBao Raft snapshot restoration, Nebula re-enrollment, measured timings,
+and approved RTO/RPO targets.
+
+## Milestone 12 - Flake authority and thin CI adapters
+
+**Status: complete in the current working copy; publication pending.** `nix flake check` owns every hermetic check, copied test
+executables receive Nix-store shebangs through `patchShebangs`, and named flake apps
+expose build, check, generation, VM, infrastructure, CI, and release entrypoints. The
+required GitHub workflow is a thin adapter around the one flake check. The scheduled
+disposable-resource audit and production deployment validator now enter through
+named flake apps and obtain all command-line dependencies from Nix.
+
+Integration, AMI build/import, and release operations enter through named flake apps.
+Workflow YAML retains events, least-privilege permissions, runner/KVM setup, OIDC
+exchange, phase timing, diagnostics, and artifact upload, but does not call Make
+targets or repository scripts directly. Remote completion requires publishing the
+current working copy and passing the same graph on the merge candidate.
+
+## Milestone 13 - Account security and operational baseline
+
+**Status: not configured.** Live inspection found no CloudTrail trail, AWS Config
+recorder, GuardDuty detector, Inspector scanning, Security Hub or Security Hub CSPM,
+Lucidity node alarms, Lucidity backup vault, or Lucidity annual budget. Account-level
+EBS encryption by default is disabled and EBS snapshot public-access blocking is not
+enabled. The audit also ran as an IAM user rather than an assumed temporary role.
+
+Resolve these through reviewed OpenTofu modules and an explicit account-level policy
+decision. At minimum, production acceptance requires auditable API history,
+configuration change recording, threat and vulnerability detection, encrypted alert
+routing, confirmed recipients, budget notifications, and temporary operator
+credentials. Keep security-service configuration factual in reports and do not hide
+findings through suppression rules.
+
+## Milestone 14 - Production go-live decision
+
+**Status: not ready.** Go-live requires PR #42 or its successor merged with a passing
+merge-queue check, the obsolete overlapping PR closed, generated/live drift reconciled,
+Milestones 8 through 13 completed, and a documented acceptance of the initial
+single-AZ/singleton availability tradeoff. Do not label this design highly available;
+multi-AZ failover requires an additional architecture milestone.
 
 ---
 
@@ -1786,7 +1648,8 @@ Pin provider constraints sensibly.
 
 Do not commit generated state.
 
-Containerfiles should be reproducible and readable.
+Generated Containerfiles should be reproducible and readable, and their complete
+inputs must be represented by Nix derivations.
 
 Systemd units should:
 
@@ -1797,26 +1660,32 @@ Systemd units should:
 
 ---
 
-# 42. Makefile interface
+# 42. Flake application interface
 
-Provide a convenient top-level interface where practical:
+The flake exposes the supported top-level interface:
 
 ```bash
-make build
-make build-controller
-make build-worker
-make test
-make lint
-make validate
-make image-controller
-make image-worker
-make tofu-fmt
-make tofu-validate
+nix run .#check
+nix run .#generate
+nix run .#build-controller
+nix run .#build-worker
+nix run .#test-controller
+nix run .#test-worker
+nix run .#test-mesh
+nix run .#audit-ami-resources
+nix run .#validate-deployment
+nix run .#infra -- plan
+nix run .#infra -- apply SAVED_PLAN
+nix run .#state -- plan
+nix run .#architecture
+nix run .#release
 ```
 
-Do not hide critical behavior behind inscrutable Makefile logic.
-
-The underlying commands should remain discoverable.
+`nix flake check` remains the direct authoritative CI command. Named apps may call a
+Nix-packaged orchestration program internally, but every runtime dependency must be
+declared by its derivation. Compatibility with the removed Makefile, role tree,
+hand-authored environment root, and direct-script interfaces is intentionally not
+provided.
 
 ---
 

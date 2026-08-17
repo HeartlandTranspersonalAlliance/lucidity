@@ -1,3 +1,0 @@
-# SELinux is a required security boundary for both bootc roles.
-SELINUX=enforcing
-SELINUXTYPE=targeted

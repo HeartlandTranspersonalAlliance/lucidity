@@ -15,7 +15,6 @@ on:
       - scripts/vm-init.sh
       - scripts/vm-start.sh
       - scripts/vm-validate.sh
-      - Makefile
   workflow_dispatch:
 
 permissions:
@@ -41,6 +40,8 @@ jobs:
         run: echo "INTEGRATION_STARTED_AT=$(date +%s)" >>"${GITHUB_ENV}"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Install locked Nix
         uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
@@ -59,12 +60,7 @@ jobs:
             echo "seconds=$((SECONDS - started))" >>"${GITHUB_OUTPUT}"
           }
           trap record_duration EXIT
-          source image/image-builder.env
-          docker build \
-            --build-arg "IMAGE_BUILDER_IMAGE=${IMAGE_BUILDER_IMAGE}" \
-            --tag "${CI_TOOLS_IMAGE}" \
-            --file ci/Containerfile \
-            .
+          nix run .#ci -- build-tools-image
 
       - id: controller-cache
         name: Authenticate to GHCR and restore controller cache
@@ -85,9 +81,9 @@ jobs:
             echo "seconds=$((SECONDS - started))" >>"${GITHUB_OUTPUT}"
           }
           trap record_duration EXIT
-          nix run .#lucidity -- build controller
-          ./scripts/build-disk.sh controller qcow2
-          make validate-disk-controller
+          nix run .#build-controller
+          nix run .#disk -- build controller qcow2
+          nix run .#disk -- validate image-output/controller/coolify-controller-qcow2.qcow2
 
       - id: worker-cache
         name: Authenticate to GHCR and restore worker cache
@@ -108,12 +104,12 @@ jobs:
             echo "seconds=$((SECONDS - started))" >>"${GITHUB_OUTPUT}"
           }
           trap record_duration EXIT
-          nix run .#lucidity -- build worker
-          ./scripts/build-disk.sh worker qcow2
-          make validate-disk-worker
+          nix run .#build-worker
+          nix run .#disk -- build worker qcow2
+          nix run .#disk -- validate image-output/worker/coolify-worker-qcow2.qcow2
 
-      - name: Boot and validate both guests
-        id: guests
+      - name: Validate controller-worker integration
+        id: integration
         env:
           CONTAINER_ENGINE: docker
           VM_TOOL_IMAGE: ${{ env.CI_TOOLS_IMAGE }}
@@ -125,21 +121,7 @@ jobs:
             echo "seconds=$((SECONDS - started))" >>"${GITHUB_OUTPUT}"
           }
           trap record_duration EXIT
-          make vm-init-controller vm-init-worker
-          VM_HOST_FORWARD_PORT=8000 VM_GUEST_FORWARD_PORT=8000 make vm-start-controller
-          VM_HOST_FORWARD_PORT=8081 VM_GUEST_FORWARD_PORT=8080 VM_MEMORY_MB=3072 make vm-start-worker
-          make vm-validate-controller
-          make vm-validate-worker
-
-      - name: Register worker and deploy application through Coolify
-        id: coolify
-        run: |
-          started=${SECONDS}
-          record_duration() {
-            echo "seconds=$((SECONDS - started))" >>"${GITHUB_OUTPUT}"
-          }
-          trap record_duration EXIT
-          make vm-integration
+          nix run .#test-integration
 
       - name: Collect failure diagnostics and stop guests
         if: always()
@@ -180,7 +162,8 @@ jobs:
             sed -n '1,240p' diagnostics/controller-guest-journal.log || true
             sed -n '1,240p' diagnostics/worker-guest-journal.log || true
           fi
-          make vm-stop-controller vm-stop-worker || true
+          nix run .#lucidity -- vm stop controller || true
+          nix run .#lucidity -- vm stop worker || true
           nix run .#lucidity -- ci cache cleanup
 
       - name: Summarize integration build
@@ -188,10 +171,8 @@ jobs:
         env:
           CONTROLLER_OUTCOME: ${{ steps.controller.outcome }}
           CONTROLLER_SECONDS: ${{ steps.controller.outputs.seconds }}
-          COOLIFY_OUTCOME: ${{ steps.coolify.outcome }}
-          COOLIFY_SECONDS: ${{ steps.coolify.outputs.seconds }}
-          GUESTS_OUTCOME: ${{ steps.guests.outcome }}
-          GUESTS_SECONDS: ${{ steps.guests.outputs.seconds }}
+          INTEGRATION_OUTCOME: ${{ steps.integration.outcome }}
+          INTEGRATION_SECONDS: ${{ steps.integration.outputs.seconds }}
           TOOLING_OUTCOME: ${{ steps.tooling.outcome }}
           TOOLING_SECONDS: ${{ steps.tooling.outputs.seconds }}
           WORKER_OUTCOME: ${{ steps.worker.outcome }}
@@ -208,8 +189,7 @@ jobs:
             echo "| VM tooling | \`${TOOLING_OUTCOME:-skipped}\` | ${TOOLING_SECONDS:-0}s |"
             echo "| Controller image and disk | \`${CONTROLLER_OUTCOME:-skipped}\` | ${CONTROLLER_SECONDS:-0}s |"
             echo "| Worker image and disk | \`${WORKER_OUTCOME:-skipped}\` | ${WORKER_SECONDS:-0}s |"
-            echo "| Guest boots | \`${GUESTS_OUTCOME:-skipped}\` | ${GUESTS_SECONDS:-0}s |"
-            echo "| Coolify API deployment | \`${COOLIFY_OUTCOME:-skipped}\` | ${COOLIFY_SECONDS:-0}s |"
+            echo "| Guest boot and Coolify API deployment | \`${INTEGRATION_OUTCOME:-skipped}\` | ${INTEGRATION_SECONDS:-0}s |"
             echo "| Total | | $((finished_at - started_at))s |"
           } >>"${GITHUB_STEP_SUMMARY}"
 

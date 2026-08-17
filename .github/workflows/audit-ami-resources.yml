@@ -20,6 +20,11 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install locked Nix
+        uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
 
       - name: Configure read-only audit credentials
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
@@ -34,4 +39,4 @@ jobs:
         env:
           AMI_VALIDATION_MAX_AGE_HOURS: 12
           AWS_REGION: us-east-2
-        run: ./scripts/audit-ami-validation-resources.sh
+        run: nix run .#audit-ami-resources

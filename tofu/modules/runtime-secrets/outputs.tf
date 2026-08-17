@@ -4,8 +4,8 @@ output "controller_policy_arn" {
 }
 
 output "kms_key_id" {
-  description = "AWS managed KMS key alias encrypting the controller runtime secret."
-  value       = "alias/aws/secretsmanager"
+  description = "Customer-managed KMS key ARN encrypting the controller runtime secret."
+  value       = aws_kms_key.controller_runtime.arn
 }
 
 output "secret_arn" {
@@ -16,6 +16,11 @@ output "secret_arn" {
 output "secret_name" {
   description = "Name of the controller runtime secret container."
   value       = aws_secretsmanager_secret.controller_runtime.name
+}
+
+output "kms_key_arn" {
+  description = "KMS key ARN encrypting the controller runtime secret."
+  value       = aws_kms_key.controller_runtime.arn
 }
 
 output "dynamic_reference_pattern" {

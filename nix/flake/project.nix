@@ -1,0 +1,186 @@
+{
+  config,
+  inputs,
+  lib,
+  ...
+}: let
+  flakeConfig = config;
+  roles = [
+    "controller"
+    "worker"
+  ];
+in {
+  flake.homeConfigurations = lib.genAttrs roles (
+    role:
+      inputs.home-manager.lib.homeManagerConfiguration {
+        pkgs = inputs.nixpkgs.legacyPackages.x86_64-linux;
+        extraSpecialArgs = {inherit role;};
+        modules = [../home/admin.nix];
+      }
+  );
+
+  perSystem = {
+    config,
+    pkgs,
+    system,
+    ...
+  }: let
+    lucidity = import ../pkgs/lucidity.nix {inherit pkgs;};
+    lucidityRelease = pkgs.symlinkJoin {
+      name = "lucidity-release-tools";
+      paths = [lucidity];
+      nativeBuildInputs = [pkgs.makeWrapper];
+      meta.mainProgram = "lucidity";
+      postBuild = ''
+        wrapProgram "$out/bin/lucidity" \
+          --prefix PATH : ${lib.makeBinPath (with pkgs; [docker-client gh gzip syft])}
+      '';
+    };
+    asmExec = pkgs.callPackage ../pkgs/asm-exec.nix {};
+    awsWorkloadCredentialsProvider =
+      pkgs.callPackage ../pkgs/aws-workload-credentials-provider.nix {};
+    openbaoKmsPlugin = pkgs.callPackage ../pkgs/openbao-kms-aws.nix {
+      openbaoPluginsSrc = inputs.openbao-plugins;
+    };
+    awsConfig =
+      pkgs.runCommand "lucidity-aws-config.tf.json" {
+        nativeBuildInputs = [pkgs.jq];
+      } ''
+        jq '
+          .variable.account_cost_budget_notification_email.default = null |
+          .variable.node_alarm_notification_email.default = null |
+          .variable.controller_ami_id.default = null |
+          .variable.worker_ami_id.default = null |
+          .variable.cloudflare_zone_id.default = null |
+          .variable.github_oidc_provider_arn.default = null |
+          .variable.root_volume_kms_key_arn.default = null
+        ' ${config.terranix.terranixConfigurations.aws.result.terraformConfiguration} > "$out"
+      '';
+    awsProductionVars = pkgs.writeText "lucidity-production.auto.tfvars.json" (
+      builtins.toJSON {
+        enable_account_security_baseline = true;
+        enable_ami_launch_validation = true;
+        enable_instance_management = true;
+        enable_network = true;
+        enable_openbao = true;
+        enable_runtime_secrets = true;
+        flow_log_retention_days = 90;
+      }
+    );
+    mkRoleOutputs = role: let
+      evaluated = flakeConfig.flake.denConfigurations.${role};
+      profileConfig = evaluated.config;
+      cloudInitFixture = pkgs.callPackage ../pkgs/cloud-init-fixture.nix {
+        inherit role;
+        secretspecManifest = ../../secretspec.toml;
+      };
+      systemProfile = pkgs.buildEnv {
+        name = "lucidity-${role}-system-profile";
+        paths =
+          profileConfig.lucidity.packages
+          ++ [lucidity]
+          ++ lib.optionals (role == "controller") [
+            asmExec
+            awsWorkloadCredentialsProvider
+          ];
+        pathsToLink = [
+          "/bin"
+          "/share"
+        ];
+      };
+      homeActivation = flakeConfig.flake.homeConfigurations.${role}.activationPackage;
+      context = import ../den/classes/bootc/image.nix {
+        inherit
+          lib
+          pkgs
+          profileConfig
+          systemProfile
+          homeActivation
+          openbaoKmsPlugin
+          asmExec
+          awsWorkloadCredentialsProvider
+          ;
+      };
+      manifest = pkgs.writeText "lucidity-${role}-manifest.json" (
+        builtins.toJSON {
+          schemaVersion = 1;
+          inherit role system;
+          hostName = profileConfig.lucidity.hostName;
+          overlayIPv4 = profileConfig.lucidity.overlayIPv4;
+          nebulaGroups = profileConfig.lucidity.nebulaGroups;
+          persistentPaths = profileConfig.lucidity.persistentPaths;
+          admin = {
+            name = profileConfig.lucidity.admin.name;
+            sshPublicKeySecret = profileConfig.lucidity.admin.sshPublicKeySecret;
+            sshFingerprint = profileConfig.lucidity.admin.sshFingerprint;
+            passwordLocked = true;
+            passwordlessSudo = true;
+          };
+        }
+      );
+    in {
+      "system-profile-${role}" = systemProfile;
+      "home-activation-${role}" = homeActivation;
+      "bootc-context-${role}" = context;
+      "cloud-init-${role}" = cloudInitFixture;
+      "host-manifest-${role}" = manifest;
+    };
+    rolePackages = lib.foldl' lib.recursiveUpdate {} (map mkRoleOutputs roles);
+    mkLucidityAppWith = package: name: arguments: let
+      application = pkgs.writeShellApplication {
+        name = "lucidity-${name}";
+        runtimeInputs = [package];
+        text = ''
+          exec ${lib.getExe package} ${lib.escapeShellArgs arguments} "$@"
+        '';
+      };
+    in {
+      program = lib.getExe application;
+    };
+    mkLucidityApp = mkLucidityAppWith lucidity;
+    source = ../..;
+    testSource = pkgs.runCommand "lucidity-test-source" {} ''
+      cp -R ${source} "$out"
+      chmod -R u+w "$out"
+      grep -R -l '^#!/usr/bin/env bash$' \
+        "$out/scripts" "$out/tests" "$out/nix/den/aspects" |
+        while IFS= read -r script; do
+          chmod u+x "$script"
+        done
+      patchShebangs "$out/scripts" "$out/tests" "$out/nix/den/aspects"
+    '';
+    mkShellTest = {
+      name,
+      script,
+      nativeBuildInputs ? [],
+    }:
+      pkgs.runCommandLocal "lucidity-${name}-check" {
+        nativeBuildInputs =
+          [pkgs.bash pkgs.coreutils pkgs.gnugrep]
+          ++ nativeBuildInputs;
+      } ''
+        export HOME="$TMPDIR/home"
+        mkdir -p "$HOME"
+        bash ${testSource}/${script}
+        touch "$out"
+      '';
+  in {
+    _module.args.lucidityProject = {
+      inherit
+        asmExec
+        awsConfig
+        awsProductionVars
+        awsWorkloadCredentialsProvider
+        lucidity
+        lucidityRelease
+        mkLucidityApp
+        mkLucidityAppWith
+        mkShellTest
+        openbaoKmsPlugin
+        rolePackages
+        source
+        testSource
+        ;
+    };
+  };
+}

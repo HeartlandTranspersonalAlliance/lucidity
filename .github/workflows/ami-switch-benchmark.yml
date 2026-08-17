@@ -48,21 +48,7 @@ jobs:
           TEST_SECURITY_GROUP: ${{ vars.AWS_AMI_TEST_WORKER_SECURITY_GROUP_ID }}
           TEST_SUBNET: ${{ vars.AWS_AMI_TEST_SUBNET_ID }}
           WORKER_REPOSITORY_URL: ${{ vars.AWS_ECR_WORKER_REPOSITORY_URL }}
-        run: |
-          test -n "${AMI_ROLE_ARN}" || { echo "AWS_AMI_IMPORT_ROLE_ARN repository variable is required" >&2; exit 1; }
-          test -n "${SNAPSHOT_KMS_KEY_ARN}" || { echo "AWS_AMI_SNAPSHOT_KMS_KEY_ARN repository variable is required" >&2; exit 1; }
-          test -n "${TEST_INSTANCE_PROFILE}" || { echo "AWS_AMI_TEST_WORKER_INSTANCE_PROFILE_NAME repository variable is required" >&2; exit 1; }
-          test -n "${TEST_SECURITY_GROUP}" || { echo "AWS_AMI_TEST_WORKER_SECURITY_GROUP_ID repository variable is required" >&2; exit 1; }
-          test -n "${TEST_SUBNET}" || { echo "AWS_AMI_TEST_SUBNET_ID repository variable is required" >&2; exit 1; }
-          [[ "${WORKER_REPOSITORY_URL}" =~ ^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[a-z0-9]+([._/-][a-z0-9]+)*$ ]] || {
-            echo "AWS_ECR_WORKER_REPOSITORY_URL must be a private commercial-region ECR repository" >&2
-            exit 1
-          }
-          [[ "${TARGET_REVISION}" =~ ^[0-9a-f]{40}$ ]] || {
-            echo "worker_revision must be a full lowercase Git commit SHA" >&2
-            exit 1
-          }
-          echo "WORKER_IMAGE_REF=${WORKER_REPOSITORY_URL}:sha-${TARGET_REVISION}" >> "${GITHUB_ENV}"
+        run: nix run .#ci -- benchmark resolve
 
       - name: Configure short-lived AWS credentials
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
@@ -74,18 +60,7 @@ jobs:
           role-session-name: lucidity-ami-switch-${{ github.run_id }}
 
       - name: Verify immutable AlmaLinux worker target
-        run: |
-          image_without_tag=${WORKER_IMAGE_REF%:*}
-          repository_name=${image_without_tag#*/}
-          image_tag=${WORKER_IMAGE_REF##*:}
-          image=$(aws ecr batch-get-image \
-            --region "${AWS_REGION}" \
-            --repository-name "${repository_name}" \
-            --image-ids "imageTag=${image_tag}" \
-            --accepted-media-types application/vnd.docker.distribution.manifest.v2+json \
-            --output json)
-          jq -e '(.failures | length) == 0 and (.images | length) == 1' <<< "${image}" >/dev/null
-          echo "Benchmark target digest: $(jq -r '.images[0].imageId.imageDigest' <<< "${image}")"
+        run: nix run .#ci -- benchmark verify-target
 
       - id: cache
         name: Authenticate to GHCR and restore benchmark cache
@@ -109,13 +84,7 @@ jobs:
             nix run .#lucidity -- build worker
 
       - name: Build pinned image tooling
-        run: |
-          source image/image-builder.env
-          sudo podman build \
-            --build-arg "IMAGE_BUILDER_IMAGE=${IMAGE_BUILDER_IMAGE}" \
-            --tag "${CI_TOOLS_IMAGE}" \
-            --file ci/Containerfile \
-            .
+        run: sudo env PATH="${PATH}" LUCIDITY_REPOSITORY_ROOT="${GITHUB_WORKSPACE}" CONTAINER_ENGINE=podman CI_TOOLS_IMAGE="${CI_TOOLS_IMAGE}" nix run .#ci -- build-tools-image
 
       - name: Build and validate CentOS bootc raw AMI artifact
         run: |
@@ -124,17 +93,11 @@ jobs:
             IMAGE_NAME="${BOOTSTRAP_IMAGE}" \
             IMAGE_OUTPUT_NAME=lucidity-centos-bootstrap-ami \
             VM_TOOL_IMAGE="${CI_TOOLS_IMAGE}" \
-            ./scripts/build-disk.sh worker ami
+            nix run .#disk -- build worker ami
           sudo env \
             CONTAINER_ENGINE=podman \
             VM_TOOL_IMAGE="${CI_TOOLS_IMAGE}" \
-            ./scripts/validate-disk.sh image-output/worker/lucidity-centos-bootstrap-ami.raw
-
-      - name: Resolve the pinned coldsnap binary
-        run: |
-          coldsnap_path=$(nix build --no-link --print-out-paths .#coldsnap)
-          test -x "${coldsnap_path}/bin/coldsnap"
-          echo "COLDSNAP_COMMAND=${coldsnap_path}/bin/coldsnap" >> "${GITHUB_ENV}"
+            nix run .#disk -- validate image-output/worker/lucidity-centos-bootstrap-ami.raw
 
       - name: Upload, boot, switch, roll back, and validate persistent state
         env:
@@ -148,7 +111,7 @@ jobs:
           AMI_TEST_INSTANCE_TYPE: t3a.small
           AMI_TEST_SECURITY_GROUP_ID: ${{ vars.AWS_AMI_TEST_WORKER_SECURITY_GROUP_ID }}
           AMI_TEST_SUBNET_ID: ${{ vars.AWS_AMI_TEST_SUBNET_ID }}
-        run: ./scripts/validate-ami-import.sh image-output/worker/lucidity-centos-bootstrap-ami.raw
+        run: nix run .#ami -- validate image-output/worker/lucidity-centos-bootstrap-ami.raw
 
       - name: Remove GHCR login and BuildKit builder
         if: always()

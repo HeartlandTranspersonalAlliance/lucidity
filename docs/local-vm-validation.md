@@ -42,38 +42,21 @@ grow service owns that operation for composefs-backed deployments.
 Controller:
 
 ```bash
-make image-controller
-make validate-disk-controller
-make vm-init-controller
-make vm-start-controller
-make vm-validate-controller
-make vm-registry-start-controller
-make vm-update-rollback-controller
+LUCIDITY_FULL_GUEST_TEST=1 nix run .#test-controller
 ```
 
 Worker:
 
 ```bash
-make image-worker
-make validate-disk-worker
-make vm-init-worker
-make vm-start-worker
-make vm-validate-worker
-make vm-registry-start-worker
-make vm-update-rollback-worker
+LUCIDITY_FULL_GUEST_TEST=1 nix run .#test-worker
 ```
 
-Stop or discard the disposable VM with:
-
-```bash
-make vm-registry-stop-worker
-make vm-stop-worker
-make vm-clean-worker
-```
-
-Use the corresponding `*-controller` targets for the controller. Controller and worker
-defaults use separate VM directories, names, SSH ports, registry names, and registry
-ports, so both harnesses can coexist.
+Full-guest mode performs the registry switch, update, rollback, and persistence
+assertions after the initial boot validation. The app owns registry and guest cleanup.
+Controller and worker defaults use separate VM directories, names, SSH
+ports, registry names, and registry ports, so both harnesses can coexist. Direct Make
+targets remain implementation-level debugging tools and are not the supported test
+contract.
 
 ## Controller-to-worker integration
 
@@ -93,16 +76,10 @@ Coolify-managed container on the worker. The generated password, API token, VMs,
 application are discarded with the runner and are not stored in GitHub secrets or
 artifacts.
 
-With both role disks already built, the equivalent local sequence is:
-
-```bash
-make vm-init-controller vm-init-worker
-VM_HOST_FORWARD_PORT=8000 VM_GUEST_FORWARD_PORT=8000 make vm-start-controller
-VM_HOST_FORWARD_PORT=8081 VM_GUEST_FORWARD_PORT=8080 VM_MEMORY_MB=3072 make vm-start-worker
-make vm-validate-controller vm-validate-worker
-make vm-integration
-make vm-stop-controller vm-stop-worker
-```
+The hosted two-node workflow is still the authoritative integration entrypoint until
+its orchestration is exposed as a dedicated flake app. Do not reproduce it by manually
+chaining Make targets; use the workflow dispatch so its pinned runner, KVM, cache, and
+diagnostic contract remain intact.
 
 ## Remaining AWS validation
 

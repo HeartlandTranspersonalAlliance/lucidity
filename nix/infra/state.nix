@@ -46,7 +46,18 @@ in {
       default = {};
     };
   };
-  provider.aws.region = tf "var.aws_region";
+  provider.aws = {
+    region = tf "var.aws_region";
+    default_tags.tags = tf ''
+      merge(
+        {
+          ManagedBy = "OpenTofu"
+          Project = var.project_name
+        },
+        var.tags
+      )
+    '';
+  };
   module.bootstrap = {
     source = "${stateRoot}";
     aws_region = tf "var.aws_region";

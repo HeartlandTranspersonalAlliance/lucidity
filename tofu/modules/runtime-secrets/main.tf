@@ -9,10 +9,23 @@ locals {
   )
 }
 
+resource "aws_kms_key" "controller_runtime" {
+  description             = "Encrypt ${var.project_name} ${var.environment} controller runtime secrets"
+  enable_key_rotation     = true
+  deletion_window_in_days = 30
+
+  tags = merge(local.common_tags, { Name = "${local.resource_prefix}-controller-runtime-secrets" })
+}
+
+resource "aws_kms_alias" "controller_runtime" {
+  name          = "alias/${local.resource_prefix}-controller-runtime-secrets"
+  target_key_id = aws_kms_key.controller_runtime.key_id
+}
+
 resource "aws_secretsmanager_secret" "controller_runtime" {
   name                    = "${var.project_name}/${var.environment}/controller-runtime"
   description             = "Runtime-only controller secrets for ${var.project_name} ${var.environment}"
-  kms_key_id              = "alias/aws/secretsmanager"
+  kms_key_id              = aws_kms_key.controller_runtime.arn
   recovery_window_in_days = var.recovery_window_in_days
 
   tags = merge(local.common_tags, { Name = "${local.resource_prefix}-controller-runtime" })
@@ -34,7 +47,22 @@ data "aws_iam_policy_document" "controller_secrets" {
       values   = ["true"]
     }
   }
+
+  statement {
+    sid       = "DecryptControllerRuntimeSecret"
+    effect    = "Allow"
+    actions   = ["kms:Decrypt"]
+    resources = [aws_kms_key.controller_runtime.arn]
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["secretsmanager.${data.aws_region.current.region}.amazonaws.com"]
+    }
+  }
 }
+
+data "aws_region" "current" {}
 
 resource "aws_iam_policy" "controller_secrets" {
   name        = "${local.resource_prefix}-controller-secrets"

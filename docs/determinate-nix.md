@@ -48,7 +48,7 @@ configuration overrides in `/etc/nix/nix.custom.conf`, leaving the generated
 
 ## Upgrade
 
-Upgrade the pinned installer in `Containerfile` by reviewing an official release,
+Upgrade the pinned installer in `nix/den/classes/bootc/image.nix` by reviewing an official release,
 updating its version, commit, binary digest, and license digest together, then passing
 both complete guest lifecycle jobs. Updating the image does not replace an existing
 persistent Nix installation. Schedule Determinate Nix package upgrades separately

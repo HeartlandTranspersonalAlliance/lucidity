@@ -1,15 +1,16 @@
 # AWS OpenTofu bootstrap
 
-`tofu/bootstrap/state` creates the protected S3 backend required before production
-infrastructure is applied. `tofu/environments/aws` creates the AWS resources needed to
-publish and deploy lucidity bootc images:
+The flake-generated `state.config` creates the protected S3 backend required before
+production infrastructure is applied. The flake-generated `awsConfig` composes the
+Terraform-compatible modules in `tofu/modules` to publish and deploy Lucidity bootc
+images:
 
 - a production VPC spanning three Availability Zones by default;
 - public and isolated private subnets, with AZ-local NAT Gateways available but disabled by default;
 - an Internet Gateway, AZ-local route tables, and VPC DNS support;
 - web, controller, application, and database security groups with no public management ingress;
 - rejected-traffic VPC Flow Logs delivered to a 30-day CloudWatch Logs group;
-- one empty controller-runtime Secrets Manager secret encrypted by the AWS managed `aws/secretsmanager` key;
+- one empty controller-runtime Secrets Manager secret encrypted by a rotating customer-managed KMS key;
 - SSM-enabled controller and worker instance profiles, with the controller optionally restricted to that secret;
 - immutable controller and worker ECR version tags, one controlled mutable `stable` channel, scan-on-push, and untagged-image cleanup that preserves releases;
 - a rotating AMI snapshot KMS key and EBS Direct API permissions for disposable validation and retained releases;
@@ -19,6 +20,7 @@ publish and deploy lucidity bootc images:
 - explicitly gated daily, crash-consistent AWS Backup recovery points with governance-mode Vault Lock and dedicated backup and restore roles;
 - explicitly gated status-check, CPU, and T3a credit alarms delivered through encrypted SNS email;
 - an explicitly gated, monitoring-only account-wide annual AWS cost budget with email alerts;
+- an explicitly gated account-security baseline with default EBS encryption, public-snapshot blocking, multi-region CloudTrail, AWS Config, GuardDuty, Inspector, Security Hub V2, and a seven-year audit bucket;
 - an account-level GitHub Actions OIDC provider, unless an existing provider ARN is supplied;
 - a repository-scoped IAM role that only trusts `main` for the immutable owner and repository IDs of `HeartlandTranspersonalAlliance/lucidity`;
 - least-privilege permissions to authenticate to ECR and push to these two repositories.
@@ -78,8 +80,8 @@ through an out-of-band operator workflow after apply. Never put that value in HC
 tfvars, user data, an AMI, CI logs, or OpenTofu state.
 
 The controller launch template attaches `controller_instance_profile_name`.
-Its SSM-enabled role can describe and read only this secret. The AWS managed key can
-be used only through Secrets Manager on behalf of authorized account principals. The
+Its SSM-enabled role can describe and read only this secret and decrypt only its
+dedicated rotating KMS key through Secrets Manager. The
 worker uses `worker_instance_profile_name` and receives no secret permission. Each role can obtain
 an ECR authorization token and pull layers only from its matching private bootc
 repository; this supports the ephemeral bootc ECR credential helper without granting
@@ -99,10 +101,9 @@ root-only file with the seven reference strings before `cloud-final.service` com
 it contains no resolved value. The worker template has no user data. Never put resolved
 values in user data.
 
-At the pricing reviewed during implementation, one secret costs about USD 0.40 per
-month before negligible API request charges. The AWS managed Secrets Manager KMS key
-has no monthly key-storage charge. Check the current [Secrets Manager
-pricing](https://aws.amazon.com/secrets-manager/pricing/) before apply.
+The secret, customer-managed KMS key, and enabled security services incur regional
+charges. Review current Secrets Manager, KMS, CloudTrail, Config, GuardDuty,
+Inspector, Security Hub, and S3 pricing before apply.
 
 ## AMI compatibility validation
 
@@ -229,8 +230,16 @@ not roll running instances automatically.
 
 The controller bootstrap is implemented and image-validated, the release workflow
 creates and boot-validates its retained AMI, and the launch template provisions only
-runtime references. Populate all seven JSON values out of band before launching a
-production controller.
+runtime references. After the foundation apply creates the empty secret, initialize
+all seven JSON values without exposing them to the repository, shell history, or disk:
+
+```console
+nix run .#lucidity -- secrets initialize-controller-runtime
+```
+
+The command generates the bundle in tmpfs, uploads it by file, shreds the temporary
+file, and refuses to replace an existing `AWSCURRENT` version unless an intentional
+coordinated rotation is explicitly requested.
 
 ## Production EC2 deployment
 
@@ -279,6 +288,12 @@ Backup plan creates daily crash-consistent EC2 recovery points with 7-day retent
 Do not approve replacement until a current `COMPLETED` recovery point is verified. A
 launch-template update alone does not affect a running instance until its pinned
 numeric version is deliberately changed in this deployment.
+
+The flake-built `production.auto.tfvars.json` makes networking, AMI validation,
+instance identities, runtime-secret metadata, OpenBao KMS, and the account security
+baseline authoritative defaults for every `nix run .#infra -- plan`. It deliberately
+does not enable nodes, DNS, backups, monitoring, or the budget until their AMI IDs,
+notification addresses, and service-specific inputs are supplied and reviewed.
 
 AWS Backup stores only incremental changed blocks after the first EBS snapshot. The
 plan uses one backup-only service role and a separate restore role; only the latter
@@ -379,8 +394,8 @@ to Session Manager logging. CloudTrail still records the session API calls.
 
 From the repository root:
 
-```bash
-nix develop --command make tofu-check
+```console
+nix flake check --show-trace --print-build-logs
 ```
 
 The command checks all HCL formatting, initializes providers without a backend,
@@ -396,26 +411,24 @@ The audit bucket is the lower-cost logging choice: it uses S3 storage instead of
 CloudWatch ingestion and expires logs after 365 days by default. It is intentionally
 not configured to log its own access, which avoids recursive logging.
 
-Apply this small bootstrap with local state first:
+Apply this small bootstrap with local state first. The flake app selects both the
+generated root and pinned OpenTofu binary:
 
-```bash
-cp tofu/bootstrap/state/terraform.tfvars.example tofu/bootstrap/state/terraform.tfvars
-tofu -chdir=tofu/bootstrap/state init
-tofu -chdir=tofu/bootstrap/state plan
-tofu -chdir=tofu/bootstrap/state apply
-tofu -chdir=tofu/bootstrap/state output
+```console
+nix run .#state -- plan -out=bootstrap.tfplan
+nix run .#state -- show bootstrap.tfplan
+nix run .#state -- apply .lucidity/tofu/state/bootstrap.tfplan
+nix run .#state -- output
 ```
 
 The bucket names include the account ID and region and use the account-regional
-namespace. Copy both backend examples, replace the placeholder account ID with the
-`state_bucket_name` output, and migrate the bootstrap state into the bucket it created:
+namespace. Copy the backend example to the ignored `.lucidity` location, replace the
+placeholder account ID with the `state_bucket_name` output, and migrate the bootstrap
+state into the bucket it created:
 
-```bash
-cp tofu/bootstrap/state/backend.tf.example tofu/bootstrap/state/backend.tf
-cp tofu/bootstrap/state/backend.s3.tfbackend.example tofu/bootstrap/state/backend.s3.tfbackend
-tofu -chdir=tofu/bootstrap/state init \
-  -migrate-state \
-  -backend-config=backend.s3.tfbackend
+```console
+cp tofu/examples/backend.state.s3.tfbackend.example .lucidity/backend.state.s3.tfbackend
+nix run .#state -- migrate .lucidity/backend.state.s3.tfbackend
 ```
 
 Keep the bootstrap's local state until migration succeeds, verify the remote object and
@@ -425,14 +438,13 @@ operator's secure-state procedure. Do not commit it. The output
 operator roles; attach it through the account's identity-management process rather
 than creating long-lived access keys.
 
-Next copy the main backend example, replace its placeholder account ID, and migrate the
-main stack before its first production apply:
+Next copy the reviewed state backend identifiers for the main stack before its first
+production apply:
 
-```bash
-cp tofu/environments/aws/backend.s3.tfbackend.example tofu/environments/aws/backend.s3.tfbackend
-tofu -chdir=tofu/environments/aws init \
-  -migrate-state \
-  -backend-config=backend.s3.tfbackend
+```console
+cp .lucidity/backend.state.s3.tfbackend .lucidity/backend.aws.s3.tfbackend
+# Change the key from bootstrap.tfstate to terraform.tfstate.
+nix run .#infra -- plan
 ```
 
 Both backend files enable OpenTofu's native S3 conditional-write lock with
@@ -446,26 +458,25 @@ The first apply must use an operator identity that can create VPC, EC2 networkin
 CloudWatch Logs, Secrets Manager, KMS, ECR, and IAM resources and, if needed, the account-level GitHub OIDC
 provider. The publishing role cannot create itself.
 
-```bash
-cp tofu/environments/aws/terraform.tfvars.example tofu/environments/aws/terraform.tfvars
-tofu -chdir=tofu/environments/aws init -backend-config=backend.s3.tfbackend
-tofu -chdir=tofu/environments/aws plan
-tofu -chdir=tofu/environments/aws apply
+```console
+nix run .#infra -- plan -out=foundation.tfplan
+nix run .#infra -- show foundation.tfplan
+nix run .#infra -- apply .lucidity/tofu/aws/foundation.tfplan
 ```
 
-With the example variables, the initial apply creates only the low-idle-cost image
-pipeline foundation:
+The flake-owned production defaults create the image pipeline plus the security,
+network, instance-management, OpenBao KMS, and empty runtime-secret foundations:
 
 - ECR repositories and GitHub publishing identity;
 - the EBS Direct snapshot encryption key;
 - the GitHub AMI validation role.
 
-It deliberately leaves `enable_network`, `enable_instance_management`, and
-`enable_runtime_secrets` false. After the disposable AWS import succeeds and EC2
-deployment is ready, first set those three flags to true and apply the supporting
-resources. Populate the runtime secret out of band, select the exact retained AMI IDs,
-then enable launch templates and instances in a reviewed plan. Keep
-`enable_nat_gateways` false for the selected direct-public design.
+It deliberately leaves launch templates, production nodes, DNS, backups, monitoring,
+and the budget disabled. After the disposable AWS import succeeds, initialize the
+runtime secret with `nix run .#lucidity -- secrets initialize-controller-runtime`,
+select the exact retained AMI IDs in a reviewed operator variable file, then enable
+launch templates and instances. Keep `enable_nat_gateways` false for the selected
+direct-public design.
 
 If `token.actions.githubusercontent.com` is already configured in the account, set `github_oidc_provider_arn` to its ARN. IAM permits only one provider for that URL in an account.
 

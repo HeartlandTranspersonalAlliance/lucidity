@@ -15,6 +15,8 @@ nix run .#lucidity -- build worker
 nix run .#lucidity -- vm test mesh
 nix run .#lucidity -- infra plan
 nix run .#lucidity -- infra apply SAVED_PLAN
+nix run .#state -- plan
+nix run .#architecture
 nix run .#lucidity -- release
 ```
 
@@ -26,6 +28,10 @@ bootc, Docker, SSM Agent, SELinux, networking, and required system libraries.
 
 The Den registry defines two hosts with shared bootc, AWS, security, monitoring,
 Nix, Home Manager, SecretSpec, and Nebula classes:
+
+`nix run .#architecture` emits the evaluated Mermaid aspect namespace directly
+from `den.aspects`. The graph is derived rather than checked in, so it cannot drift
+from the host composition that the flake evaluates.
 
 | Role | EC2 | Mesh address | Nebula groups |
 |---|---:|---:|---|
@@ -67,11 +73,20 @@ LUCIDITY_OPERATOR_PROVIDER=keyring://lucidity \
 and installs it only on the target host. A public key is not a credential, but
 keeping it out of Git avoids publishing a durable workstation identifier.
 
-The local keyring also stores `NEBULA_CA_PASSPHRASE`. GitHub Secrets are for
-CI-only values, AWS Secrets Manager plus `asm-exec` is for AWS-hosted runtime
-values, and OpenBao is for provider-neutral material and the encrypted Nebula
-CA blob. Secret values must never be passed through Nix evaluation or stored in
+The local keyring also stores `NEBULA_CA_PASSPHRASE`. The checked-in
+`aws-production` SecretSpec provider declares an `awssm://us-east-2` prefix,
+customer-managed KMS alias, and resource tags without declaring credentials or
+values. Use `nix run .#lucidity -- secrets check ci aws-production` and
+`secrets set PROFILE KEY aws-production` for scoped AWS-backed operations.
+GitHub Actions OIDC or the operator's AWS SDK credential chain authenticates
+SecretSpec. Host systemd units retain the narrower dynamic-reference plus
+`asm-exec` path. Secret values must never pass through Nix evaluation or enter
 the Nix store.
+
+After the foundation apply creates the bundled controller runtime secret, initialize
+it with `nix run .#lucidity -- secrets initialize-controller-runtime`. That flake-owned
+entrypoint generates all seven values in tmpfs, uploads the file without printing its
+contents, and refuses to replace an existing `AWSCURRENT` version by default.
 
 `COOLIFY_API_TOKEN` is declared by the dedicated `coolify` SecretSpec profile.
 Use the local keyring for workstation-only access, GitHub Secrets for CI-only
@@ -114,6 +129,7 @@ bootstrap:
 ```console
 nix build .#awsConfig
 nix build .#state.config
+nix run .#state -- plan
 nix run .#lucidity -- infra plan
 ```
 
@@ -142,7 +158,9 @@ Useful outputs include:
 - `home-activation-controller` and `home-activation-worker`;
 - `host-manifest-controller` and `host-manifest-worker`;
 - `awsConfig` and `state.config`;
-- `asmExec`, `openbaoKmsPlugin`, and `lucidity`;
+- `architecture`, `asmExec`, `openbaoKmsPlugin`, and `lucidity`;
+- named `check`, `generate`, `build-*`, `test-*`, `infra`, `state`, `architecture`, `ci`, and `release`
+  apps for developer and CI entrypoints;
 - `checks.x86_64-linux.static` for the aggregate hermetic test suite;
 - focused unit, policy, infrastructure, formatting, and NixOS VM checks under
   `checks.x86_64-linux`.
@@ -152,19 +170,29 @@ Run `nix flake show` for the complete evaluated interface.
 ## Verification
 
 ```console
-nix build --no-link .#checks.x86_64-linux.treefmt --print-build-logs
-nix build --no-link .#checks.x86_64-linux.static --print-build-logs
-nix flake check
-nix run .#lucidity -- vm test controller
-nix run .#lucidity -- vm test worker
-nix build --no-link .#checks.x86_64-linux.mesh-vm --print-build-logs
+nix flake check --show-trace --print-build-logs
+nix run .#check
+nix run .#test-controller
+nix run .#test-worker
+nix run .#test-mesh
+nix run .#audit-ami-resources
+nix run .#validate-deployment
 ```
 
 The flake uses treefmt-nix to run deadnix cleanup before Alejandra and to check
 shell scripts and Actions workflows. Unit tests, repository policy assertions,
 generated configuration checks, and the NixOS mesh test are first-class flake
-checks. GitHub Actions builds those outputs directly instead of maintaining a
-parallel script-based test runner.
+checks. `nix flake check` is the authoritative hermetic graph; focused check
+attributes are debugging aids, not a second CI contract. Copied shell fixtures are
+normalized with `patchShebangs` before execution so derivations never depend on
+`/usr/bin/env` or another undeclared host interpreter. The required GitHub workflow
+is only a thin runner adapter around that command. Operational scripts are packaged
+as patched Nix-store executables before flake apps invoke them; the checkout supplies
+only declared source/configuration inputs and mutable artifact destinations. The graph
+also parses every repository-owned GitHub, Dependabot, and Syft YAML file and rejects
+external Actions that are not pinned to full commit SHAs.
+The scheduled disposable-resource audit and production deployment validator also
+enter through named flake apps, with AWS OIDC exchange left in workflow YAML.
 
 Exact flake revisions live only in `flake.lock`; `flake.nix` names the intended
 upstream branch where one is required. This lets the weekly, SHA-pinned
@@ -179,7 +207,10 @@ direct and relayed paths, permitted SSH flows, passwordless sudo, and denial of
 root/worker/ungrouped flows.
 
 The flake-generated contexts, Terranix JSON, SecretSpec manifests, and `lucidity`
-commands are authoritative. Superseded layouts and commands are not compatibility
+commands are authoritative. Release versioning, ECR promotion, SBOM inventory,
+AMI manifest assembly, and GitHub publication are subcommands of `.#release`;
+GitHub YAML supplies only events, permissions, short-lived credentials, artifact
+transfer, and attestations. Superseded layouts and commands are not compatibility
 interfaces.
 
 `lucidity infra apply` requires both a saved plan and
@@ -191,13 +222,16 @@ has verified the mesh and Cloudflare ingress cutover.
 
 ```text
 flake.nix                 locked dependency graph and public outputs
-nix/modules/              Den hosts, classes, profiles, outputs, and Terranix
-nix/lib/                  bootc context and Nebula configuration generators
-nix/infra/                generated AWS and state OpenTofu roots
+nix/den/entities/         typed host facts
+nix/den/aspects/          feature-owned payloads and unit tests
+nix/den/classes/          bootc and Terranix evaluation classes
+nix/den/policies/         entity-to-output routing
+nix/flake/                shared project graph, checks, formatting, apps, and architecture
+nix/infra/                generated AWS/state roots and contract tests
 nix/home/                 administrator Home Manager definition
 nix/pkgs/                 lucidity, asm-exec, and pinned OpenBao plugin
-nix/tests/                NixOS mesh VM fixture
+tofu/modules/             reusable Terraform-compatible OpenTofu modules
 secretspec.toml           provider-neutral secret contract
-tests/                    shell-level behavior fixtures invoked by flake checks
+tests/                    cross-cutting fixtures invoked by flake checks
 docs/operations.md        operating and recovery runbook
 ```

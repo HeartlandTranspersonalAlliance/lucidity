@@ -8,10 +8,10 @@ variable "environment" {
   type        = string
 }
 
-variable "controller_policy_arns" {
-  description = "Additional least-privilege policies attached only to the controller role."
-  type        = set(string)
-  default     = []
+variable "controller_policies" {
+  description = "Additional least-privilege policies attached only to the controller role, keyed by a stable purpose name."
+  type        = map(string)
+  default     = {}
 }
 
 variable "ecr_repository_arns" {
