@@ -30,6 +30,10 @@ image-output/
 *.raw
 *.vmdk
 
+# Local Nix build outputs
+/result
+/result-*
+
 # Editors and operating systems
 .idea/
 .vscode/

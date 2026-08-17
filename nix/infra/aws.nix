@@ -81,6 +81,7 @@ in {
     enable_cloudflare_dns = boolVariable "Manage Cloudflare DNS records." false;
     enable_node_backups = boolVariable "Create daily AWS Backup recovery points." false;
     enable_node_monitoring = boolVariable "Create basic-monitoring alarms." false;
+    enable_account_security_baseline = boolVariable "Enable regional account security, audit, and posture controls." false;
     enable_account_cost_budget = boolVariable "Create the monitoring-only annual account budget." false;
     enable_openbao = boolVariable "Create OpenBao KMS auto-unseal resources." false;
     account_annual_cost_limit_usd = numberVariable "Annual monitoring-only account budget." 1100;
@@ -205,6 +206,13 @@ in {
   };
 
   module = {
+    account_security_baseline = {
+      count = tf "var.enable_account_security_baseline ? 1 : 0";
+      source = "${moduleRoot}/account-security-baseline";
+      environment = tf "var.environment";
+      project_name = tf "var.vpc_name";
+      tags = tf "var.tags";
+    };
     account_cost_budget = {
       count = tf "var.enable_account_cost_budget ? 1 : 0";
       source = "${moduleRoot}/account-cost-budget";
@@ -249,7 +257,7 @@ in {
     instance_management = {
       count = tf "var.enable_instance_management ? 1 : 0";
       source = "${moduleRoot}/instance-management";
-      controller_policy_arns = tf "toset(compact([var.enable_runtime_secrets ? module.runtime_secrets[0].controller_policy_arn : null, var.enable_openbao ? aws_iam_policy.openbao_unseal[0].arn : null]))";
+      controller_policies = tf "merge(var.enable_runtime_secrets ? { runtime_secrets = module.runtime_secrets[0].controller_policy_arn } : {}, var.enable_openbao ? { openbao_unseal = aws_iam_policy.openbao_unseal[0].arn } : {})";
       ecr_repository_arns = tf "module.registry.repository_arns";
       environment = tf "var.environment";
       project_name = tf "var.vpc_name";
@@ -366,11 +374,101 @@ in {
   };
 
   output = {
+    account_security_baseline = {
+      value = tf "var.enable_account_security_baseline ? module.account_security_baseline[0].summary : null";
+    };
+    account_cost_budget_arn = {
+      value = tf "var.enable_account_cost_budget ? module.account_cost_budget[0].arn : null";
+    };
+    account_cost_budget_name = {
+      value = tf "var.enable_account_cost_budget ? module.account_cost_budget[0].name : null";
+    };
+    account_cost_budget_settings = {
+      value = tf "var.enable_account_cost_budget ? module.account_cost_budget[0].settings : null";
+    };
+    ami_launch_validation_enabled = {
+      value = tf "var.enable_ami_launch_validation";
+    };
+    ami_snapshot_kms_key_arn = {
+      value = tf "module.ami_import_validation.snapshot_kms_key_arn";
+    };
+    ami_test_instance_profile_name = {
+      value = tf "var.enable_ami_launch_validation && var.enable_instance_management ? module.instance_management[0].instance_profile_names.worker : null";
+    };
+    ami_test_instance_profile_names = {
+      value = tf "var.enable_ami_launch_validation && var.enable_instance_management ? module.instance_management[0].instance_profile_names : {}";
+    };
+    ami_test_instance_type = {
+      value = tf "var.enable_ami_launch_validation ? var.controller_instance_type : null";
+    };
+    ami_test_security_group_id = {
+      value = tf "var.enable_ami_launch_validation && var.enable_network ? module.network[0].security_group_ids.application : null";
+    };
+    ami_test_security_group_ids = {
+      value = tf "var.enable_ami_launch_validation && var.enable_network ? { controller = module.network[0].security_group_ids.controller, worker = module.network[0].security_group_ids.application } : {}";
+    };
+    ami_test_subnet_id = {
+      value = tf "var.enable_ami_launch_validation && var.enable_network ? module.network[0].public_subnet_ids[sort(keys(module.network[0].public_subnet_ids))[0]] : null";
+    };
+    annual_budget_limit_usd = {
+      value = tf "var.account_annual_cost_limit_usd";
+    };
+    availability_zones = {
+      value = tf "var.enable_network ? module.network[0].availability_zones : []";
+    };
+    cloudflare_dns_records = {
+      value = tf "var.enable_cloudflare_dns ? module.cloudflare_dns[0].records : {}";
+    };
+    controller_instance_profile_name = {
+      value = tf "var.enable_instance_management ? module.instance_management[0].instance_profile_names.controller : null";
+    };
+    controller_instance_type = {
+      value = tf "var.controller_instance_type";
+    };
+    controller_runtime_role_arn = {
+      value = tf "var.enable_instance_management ? module.instance_management[0].role_arns.controller : null";
+    };
+    controller_runtime_secret_arn = {
+      value = tf "var.enable_runtime_secrets ? module.runtime_secrets[0].secret_arn : null";
+    };
     controller_runtime_secret_name = {
       value = tf "var.enable_runtime_secrets ? module.runtime_secrets[0].secret_name : null";
     };
+    controller_runtime_secret_reference_pattern = {
+      value = tf "var.enable_runtime_secrets ? module.runtime_secrets[0].dynamic_reference_pattern : null";
+    };
+    deployment_architecture = {
+      value = tf "var.deployment_architecture";
+    };
+    ecr_repository_arns = {
+      value = tf "module.registry.repository_arns";
+    };
+    ecr_repository_names = {
+      value = tf "module.registry.repository_names";
+    };
+    ecr_repository_urls = {
+      value = tf "module.registry.repository_urls";
+    };
+    ec2_availability_zones = {
+      value = tf "var.enable_ec2_instances ? module.ec2_nodes[0].availability_zones : {}";
+    };
+    ec2_detailed_monitoring_enabled = {
+      value = tf "var.enable_ec2_launch_templates ? module.ec2_launch_templates[0].detailed_monitoring_enabled : {}";
+    };
+    ec2_elastic_ip_allocation_ids = {
+      value = tf "var.enable_ec2_instances ? module.ec2_nodes[0].elastic_ip_allocation_ids : {}";
+    };
     ec2_instance_ids = {
       value = tf "var.enable_ec2_instances ? module.ec2_nodes[0].instance_ids : {}";
+    };
+    ec2_instance_settings = {
+      value = tf "var.enable_ec2_instances ? module.ec2_nodes[0].instance_settings : {}";
+    };
+    ec2_launch_template_ids = {
+      value = tf "var.enable_ec2_launch_templates ? module.ec2_launch_templates[0].launch_template_ids : {}";
+    };
+    ec2_launch_template_latest_versions = {
+      value = tf "var.enable_ec2_launch_templates ? module.ec2_launch_templates[0].launch_template_latest_versions : {}";
     };
     ec2_private_ips = {
       value = tf "var.enable_ec2_instances ? module.ec2_nodes[0].private_ips : {}";
@@ -378,18 +476,120 @@ in {
     ec2_public_ips = {
       value = tf "var.enable_ec2_instances ? module.ec2_nodes[0].public_ips : {}";
     };
+    ec2_root_volume_settings = {
+      value = tf "var.enable_ec2_launch_templates ? module.ec2_launch_templates[0].root_volume_settings : {}";
+    };
+    github_ami_audit_role_arn = {
+      value = tf "module.ami_import_validation.github_audit_role_arn";
+    };
+    github_ami_validation_role_arn = {
+      value = tf "module.ami_import_validation.github_role_arn";
+    };
+    github_ami_validation_subject = {
+      value = tf "module.ami_import_validation.github_subject";
+    };
+    github_deployment_validation_role_arn = {
+      value = tf "module.deployment_validation.github_role_arn";
+    };
+    github_deployment_validation_subject = {
+      value = tf "module.deployment_validation.github_subject";
+    };
+    github_oidc_provider_arn = {
+      value = tf "module.github_oidc.oidc_provider_arn";
+    };
+    github_oidc_subject = {
+      value = tf "module.github_oidc.trusted_subject";
+    };
+    github_publish_role_arn = {
+      value = tf "module.github_oidc.publish_role_arn";
+    };
+    internet_gateway_id = {
+      value = tf "var.enable_network ? module.network[0].internet_gateway_id : null";
+    };
+    nat_gateway_ids = {
+      value = tf "var.enable_network ? module.network[0].nat_gateway_ids : {}";
+    };
+    nat_gateway_public_ips = {
+      value = tf "var.enable_network ? module.network[0].nat_gateway_public_ips : {}";
+    };
+    node_alarm_email_subscription_arn = {
+      value = tf "var.enable_node_monitoring ? module.node_monitoring[0].email_subscription_arn : null";
+    };
+    node_alarm_names = {
+      value = tf "var.enable_node_monitoring ? module.node_monitoring[0].alarm_names : {}";
+    };
+    node_alarm_notification_kms_key_arn = {
+      value = tf "var.enable_node_monitoring ? module.node_monitoring[0].notification_kms_key_arn : null";
+    };
+    node_alarm_notification_topic_arn = {
+      value = tf "var.enable_node_monitoring ? module.node_monitoring[0].notification_topic_arn : null";
+    };
+    node_alarm_settings = {
+      value = tf "var.enable_node_monitoring ? module.node_monitoring[0].settings : null";
+    };
+    node_backup_plan_id = {
+      value = tf "var.enable_node_backups ? module.node_backups[0].plan_id : null";
+    };
+    node_backup_retention_days = {
+      value = tf "var.enable_node_backups ? module.node_backups[0].retention_days : null";
+    };
+    node_backup_service_role_arn = {
+      value = tf "var.enable_node_backups ? module.node_backups[0].service_role_arn : null";
+    };
+    node_backup_settings = {
+      value = tf "var.enable_node_backups ? module.node_backups[0].settings : null";
+    };
+    node_backup_vault_arn = {
+      value = tf "var.enable_node_backups ? module.node_backups[0].vault_arn : null";
+    };
+    node_restore_service_role_arn = {
+      value = tf "var.enable_node_backups ? module.node_backups[0].restore_role_arn : null";
+    };
     openbao_unseal_kms_key_arn = {
       value = tf "var.enable_openbao ? aws_kms_key.openbao_unseal[0].arn : null";
+    };
+    private_subnet_ids = {
+      value = tf "var.enable_network ? module.network[0].private_subnet_ids : {}";
+    };
+    public_subnet_ids = {
+      value = tf "var.enable_network ? module.network[0].public_subnet_ids : {}";
+    };
+    runtime_secrets_kms_key_id = {
+      value = tf "var.enable_runtime_secrets ? module.runtime_secrets[0].kms_key_id : null";
     };
     security_group_ids = {
       value = tf "var.enable_network ? module.network[0].security_group_ids : {}";
     };
-    annual_budget_limit_usd = {
-      value = tf "var.account_annual_cost_limit_usd";
+    selected_ami_ids = {
+      value = tf "var.enable_ec2_launch_templates ? module.ec2_launch_templates[0].selected_ami_ids : {}";
     };
     ses_pricing_plan = {
       value = "NONE";
       description = "Enforced and verified by lucidity infra apply through the SES v2 account-pricing API.";
+    };
+    vpc_cidr = {
+      value = tf "var.enable_network ? module.network[0].vpc_cidr : null";
+    };
+    vpc_flow_log_group_name = {
+      value = tf "var.enable_network ? module.network[0].flow_log_group_name : null";
+    };
+    vpc_flow_log_id = {
+      value = tf "var.enable_network ? module.network[0].flow_log_id : null";
+    };
+    vpc_flow_log_settings = {
+      value = tf "var.enable_network ? module.network[0].flow_log_settings : null";
+    };
+    vpc_id = {
+      value = tf "var.enable_network ? module.network[0].vpc_id : null";
+    };
+    worker_instance_profile_name = {
+      value = tf "var.enable_instance_management ? module.instance_management[0].instance_profile_names.worker : null";
+    };
+    worker_instance_type = {
+      value = tf "var.worker_instance_type";
+    };
+    worker_runtime_role_arn = {
+      value = tf "var.enable_instance_management ? module.instance_management[0].role_arns.worker : null";
     };
   };
 }

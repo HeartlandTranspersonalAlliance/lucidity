@@ -19,107 +19,66 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  NIX_CACHE_WRITE: ${{ github.event_name == 'merge_group' || github.event_name == 'release' || github.event_name == 'schedule' || github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+
 jobs:
-  changes:
+  hermetic:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      controller: ${{ steps.classify.outputs.controller }}
-      worker: ${{ steps.classify.outputs.worker }}
-      roles: ${{ steps.classify.outputs.roles }}
-      mesh: ${{ steps.classify.outputs.mesh }}
-      full: ${{ steps.classify.outputs.full }}
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - id: classify
-        name: Classify affected roles
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          MERGE_BASE: ${{ github.event.merge_group.base_sha }}
-          MERGE_HEAD: ${{ github.event.merge_group.head_sha }}
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD: ${{ github.event.pull_request.head.sha }}
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          controller=false
-          worker=false
-          mesh=false
-          full=false
-          case "${EVENT_NAME}" in
-            pull_request) base=${PR_BASE}; head=${PR_HEAD} ;;
-            merge_group)
-              base=${MERGE_BASE}; head=${MERGE_HEAD}; full=true
-              controller=true; worker=true; mesh=true
-              ;;
-            *)
-              controller=true; worker=true; mesh=true; full=true
-              ;;
-          esac
-          if [[ ${EVENT_NAME} == pull_request || ${EVENT_NAME} == merge_group ]]; then
-            while IFS= read -r path; do
-              case "${path}" in
-                README.md|docs/*|LICENSE|proposal.md|*.md)
-                  ;;
-                nix/modules/aspects/controller.nix|nix/infra/*openbao*|nix/pkgs/openbao-*|scripts/bootstrap-controller.sh)
-                  controller=true; mesh=true
-                  ;;
-                nix/modules/aspects/worker.nix|scripts/bootstrap-worker.sh)
-                  worker=true
-                  ;;
-                nix/lib/nebula-config.nix|nix/tests/mesh.nix)
-                  controller=true; worker=true; mesh=true
-                  ;;
-                nix/home/*|nix/modules/*|nix/lib/*|nix/pkgs/*|nix/infra/*|flake.nix|flake.lock|secretspec.toml|tofu/*|tests/*|.github/workflows/validate.yml)
-                  controller=true; worker=true; mesh=true
-                  ;;
-                *)
-                  controller=true; worker=true; mesh=true
-                  ;;
-              esac
-            done < <(git diff --name-only --diff-filter=ACDMRT "${base}" "${head}")
-          fi
-          {
-            echo "controller=${controller}"
-            echo "worker=${worker}"
-            echo "mesh=${mesh}"
-            echo "full=${full}"
-            if [[ ${controller} == true && ${worker} == true ]]; then
-              echo 'roles=["controller","worker"]'
-            elif [[ ${controller} == true ]]; then
-              echo 'roles=["controller"]'
-            elif [[ ${worker} == true ]]; then
-              echo 'roles=["worker"]'
-            else
-              echo 'roles=[]'
-            fi
-          } >> "${GITHUB_OUTPUT}"
-
-  static:
-    needs: changes
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
+      - name: Initialize hermetic cache report
+        run: echo "HERMETIC_STARTED_AT=$(date +%s)" >>"${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Install locked Nix
         uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
-      - name: Build Nix-native static and formatting checks
+        with:
+          kvm: true
+      - name: Require the Cachix write token for trusted events
+        if: env.NIX_CACHE_WRITE == 'true'
+        env:
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        run: test -n "${CACHIX_AUTH_TOKEN}" || { echo '::error::CACHIX_AUTH_TOKEN is required for trusted cache-writing events'; exit 1; }
+      - name: Configure the public Lucidity Nix cache
+        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71
+        with:
+          name: lucidity
+          authToken: ${{ env.NIX_CACHE_WRITE == 'true' && secrets.CACHIX_AUTH_TOKEN || '' }}
+          skipPush: ${{ env.NIX_CACHE_WRITE != 'true' }}
+          pushFilter: lucidity-(controller|worker)-bootc-context
+      - name: Evaluate and build the authoritative hermetic check graph
+        id: hermetic-check
+        run: nix flake check --show-trace --print-build-logs
+      - name: Summarize hermetic cache performance
+        if: always()
+        env:
+          CHECK_OUTCOME: ${{ steps.hermetic-check.outcome }}
         run: |
-          nix flake check --no-build --show-trace
-          nix build --no-link \
-            .#checks.x86_64-linux.static \
-            .#checks.x86_64-linux.treefmt \
-            --print-build-logs
+          finished_at=$(date +%s)
+          started_at=${HERMETIC_STARTED_AT:-${finished_at}}
+          [[ ${started_at} =~ ^[0-9]+$ ]] || started_at=${finished_at}
+          elapsed=$((finished_at - started_at))
+          baseline=510
+          difference=$((baseline - elapsed))
+          if (( difference >= 0 )); then
+            comparison="${difference}s faster"
+          else
+            comparison="$((-difference))s slower"
+          fi
+          {
+            echo '### Hermetic Nix graph cache performance'
+            echo
+            echo "- Outcome: \`${CHECK_OUTCOME:-skipped}\`"
+            echo "- Observed: ${elapsed}s"
+            echo "- Pre-cache baseline: ${baseline}s (8m30s)"
+            echo "- Difference: ${comparison}"
+          } >>"${GITHUB_STEP_SUMMARY}"
 
-  role:
-    needs: [changes, static]
-    if: needs.changes.outputs.roles != '[]'
+  lifecycle:
+    needs: hermetic
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     permissions:
@@ -128,73 +87,52 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        role: ${{ fromJSON(needs.changes.outputs.roles) }}
+        role: [controller, worker]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Install locked Nix
         uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
-      - id: cache
-        name: Authenticate to GHCR and restore role-scoped cache
+        with:
+          kvm: true
+      - name: Require the Cachix write token for trusted events
+        if: env.NIX_CACHE_WRITE == 'true'
         env:
-          GHCR_CACHE_WRITE: ${{ github.event_name != 'pull_request' }}
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        run: test -n "${CACHIX_AUTH_TOKEN}" || { echo '::error::CACHIX_AUTH_TOKEN is required for trusted cache-writing events'; exit 1; }
+      - name: Configure the public Lucidity Nix cache
+        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71
+        with:
+          name: lucidity
+          authToken: ${{ env.NIX_CACHE_WRITE == 'true' && secrets.CACHIX_AUTH_TOKEN || '' }}
+          skipPush: ${{ env.NIX_CACHE_WRITE != 'true' }}
+          pushFilter: lucidity-(controller|worker)-bootc-context
+      - name: Restore the role-scoped OCI cache
+        env:
+          GHCR_CACHE_WRITE: true
           GITHUB_TOKEN: ${{ github.token }}
-        run: nix run .#lucidity -- ci cache configure "${{ matrix.role }}"
-      - name: Build and validate generated bootc role
-        if: needs.changes.outputs.full != 'true'
+        run: nix run .#ci -- cache configure "${{ matrix.role }}"
+      - name: Run the flake-owned bootc switch and rollback lifecycle
         env:
           CONTAINER_ENGINE: docker
-          IMAGE_NAME: localhost/lucidity-${{ matrix.role }}:${{ github.sha }}
-        run: nix run .#lucidity -- vm test "${{ matrix.role }}"
-      - name: Full bootc switch, rollback, and persistence lifecycle
-        if: needs.changes.outputs.full == 'true'
-        env:
-          CONTAINER_ENGINE: docker
-          IMAGE_NAME: localhost/lucidity-${{ matrix.role }}:${{ github.sha }}
           LUCIDITY_FULL_GUEST_TEST: "1"
-        run: nix run .#lucidity -- vm test "${{ matrix.role }}"
+        run: nix run ".#test-${{ matrix.role }}"
       - name: Remove OCI cache credentials
         if: always()
-        run: nix run .#lucidity -- ci cache cleanup
-
-  mesh:
-    needs: [changes, static]
-    if: needs.changes.outputs.mesh == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - name: Install locked Nix
-        uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
-      - name: Enable KVM
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-      - name: Test direct and relayed mesh policy
-        run: nix build --no-link .#checks.x86_64-linux.mesh-vm --print-build-logs
+        run: nix run .#ci -- cache cleanup
 
   required:
     name: required
     if: always()
-    needs: [changes, static, role, mesh]
+    needs: [hermetic, lifecycle]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Require successful applicable validation
+      - name: Require the hermetic graph and applicable lifecycle
         env:
-          CHANGES_RESULT: ${{ needs.changes.result }}
-          MESH_RESULT: ${{ needs.mesh.result }}
-          ROLE_RESULT: ${{ needs.role.result }}
-          STATIC_RESULT: ${{ needs.static.result }}
+          HERMETIC_RESULT: ${{ needs.hermetic.result }}
+          LIFECYCLE_RESULT: ${{ needs.lifecycle.result }}
         run: |
-          set -Eeuo pipefail
-          for result in "${CHANGES_RESULT}" "${STATIC_RESULT}"; do
-            [[ ${result} == success ]]
-          done
-          for result in "${ROLE_RESULT}" "${MESH_RESULT}"; do
-            [[ ${result} == success || ${result} == skipped ]]
-          done
+          [[ ${HERMETIC_RESULT} == success ]]
+          [[ ${LIFECYCLE_RESULT} == success || ${LIFECYCLE_RESULT} == skipped ]]

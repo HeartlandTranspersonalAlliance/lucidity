@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+repo_root=${LUCIDITY_REPOSITORY_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 readonly repo_root
 
 role=${1:-worker}
@@ -56,7 +56,8 @@ ssh_base=(
     -o UserKnownHostsFile=/dev/null
     -p "${ssh_port}"
 )
-admin_ssh=("${ssh_base[@]}" -i "${admin_identity}" root@127.0.0.1)
+admin_login=("${ssh_base[@]}" -i "${admin_identity}" admin@127.0.0.1)
+admin_ssh=("${admin_login[@]}" sudo -n)
 if [[ ${role} == worker ]]; then
     coolify_ssh=("${ssh_base[@]}" -i "${coolify_identity}" root@127.0.0.1)
 fi
@@ -130,20 +131,18 @@ wait_for_controller() {
 }
 
 assert_deployment() {
-    local expected_version=$1
-    local expected_ref=$2
-    local marker=$3
-    local expected_env_hash=${4:-}
-    local expected_key_hash=${5:-}
-    local expected_services_hash=${6:-}
+    local expected_ref=$1
+    local marker=$2
+    local expected_env_hash=${3:-}
+    local expected_key_hash=${4:-}
+    local expected_services_hash=${5:-}
     "${admin_ssh[@]}" bash -Eeuo pipefail -s -- \
-        "${role}" "${expected_version}" "${expected_ref}" "${marker}" \
+        "${role}" "${expected_ref}" "${marker}" \
         "${expected_env_hash}" "${expected_key_hash}" "${expected_services_hash}" <<'REMOTE'
 role=$1
-expected_version=$2
-expected_ref=$3
-expected_marker=$4
-assertion="read image version"
+expected_ref=$2
+expected_marker=$3
+assertion="read the booted image reference"
 report_assertion_failure() {
     local status=$?
     trap - ERR
@@ -172,7 +171,6 @@ report_assertion_failure() {
 trap report_assertion_failure ERR
 assertion="wait for Determinate Nix installation"
 systemctl start determinate-nix-install.service
-[[ $(cat /usr/lib/coolify-aws/image-version) == "${expected_version}" ]]
 assertion="read the booted image reference"
 bootc status --booted --format json | grep -Fq "${expected_ref}"
 assertion="verify SELinux enforcing mode"
@@ -186,6 +184,12 @@ systemctl is-active --quiet nix-daemon.service
 assertion="verify /nix is mounted from persistent storage"
 mountpoint --quiet /nix
 [[ $(stat -c '%d:%i' /nix) == "$(stat -c '%d:%i' /var/lib/nix)" ]]
+assertion="run the locked Nix smoke build"
+install -d -m 0755 /var/lib/coolify-aws
+/nix/var/nix/profiles/default/bin/nix build \
+    --no-write-lock-file \
+    --out-link /var/lib/coolify-aws/nix-smoke-result \
+    /usr/share/lucidity/nix-smoke
 assertion="read the persistent Nix smoke build"
 [[ $(</var/lib/coolify-aws/nix-smoke-result) == "Determinate Nix guest build passed" ]]
 assertion="verify the deployment has no Nix SELinux denials"
@@ -215,9 +219,9 @@ if [[ ${role} == worker ]]; then
     exit 0
 fi
 
-expected_env_hash=$5
-expected_key_hash=$6
-expected_services_hash=$7
+expected_env_hash=$4
+expected_key_hash=$5
+expected_services_hash=$6
 assertion="verify controller storage is active"
 systemctl is-active --quiet coolify-controller-storage.service
 assertion="verify controller bootstrap is active"
@@ -332,19 +336,19 @@ fi
 reboot_and_wait
 wait_for_worker
 wait_for_controller
-assert_deployment lifecycle-v1 "${v1_ref}" "${marker}" "${env_hash}" "${key_hash}" "${services_hash}"
+assert_deployment "${v1_ref}" "${marker}" "${env_hash}" "${key_hash}" "${services_hash}"
 
 "${admin_ssh[@]}" bootc upgrade --tag lifecycle-v2
 reboot_and_wait
 wait_for_worker
 wait_for_controller
-assert_deployment lifecycle-v2 "${v2_ref}" "${marker}" "${env_hash}" "${key_hash}" "${services_hash}"
+assert_deployment "${v2_ref}" "${marker}" "${env_hash}" "${key_hash}" "${services_hash}"
 
 "${admin_ssh[@]}" bootc rollback
 reboot_and_wait
 wait_for_worker
 wait_for_controller
-assert_deployment lifecycle-v1 "${v1_ref}" "${marker}" "${env_hash}" "${key_hash}" "${services_hash}"
+assert_deployment "${v1_ref}" "${marker}" "${env_hash}" "${key_hash}" "${services_hash}"
 
 "${admin_ssh[@]}" systemctl unmask bootc-fetch-apply-updates.timer
 "${admin_ssh[@]}" systemctl start bootc-fetch-apply-updates.timer

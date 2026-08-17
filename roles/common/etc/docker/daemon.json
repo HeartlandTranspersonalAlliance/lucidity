@@ -1,9 +1,0 @@
-{
-  "data-root": "/var/lib/docker",
-  "live-restore": true,
-  "log-driver": "local",
-  "log-opts": {
-    "max-file": "5",
-    "max-size": "20m"
-  }
-}

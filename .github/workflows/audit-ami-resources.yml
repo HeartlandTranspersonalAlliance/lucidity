@@ -13,6 +13,9 @@ permissions:
   contents: read
   id-token: write
 
+env:
+  NIX_CACHE_WRITE: ${{ github.event_name == 'merge_group' || github.event_name == 'release' || github.event_name == 'schedule' || github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+
 jobs:
   audit:
     if: vars.AWS_AMI_AUDIT_ROLE_ARN != ''
@@ -20,6 +23,27 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install locked Nix
+        uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
+        with:
+          kvm: true
+
+      - name: Require the Cachix write token for trusted events
+        if: env.NIX_CACHE_WRITE == 'true'
+        env:
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        run: test -n "${CACHIX_AUTH_TOKEN}" || { echo '::error::CACHIX_AUTH_TOKEN is required for trusted cache-writing events'; exit 1; }
+
+      - name: Configure the public Lucidity Nix cache
+        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71
+        with:
+          name: lucidity
+          authToken: ${{ env.NIX_CACHE_WRITE == 'true' && secrets.CACHIX_AUTH_TOKEN || '' }}
+          skipPush: ${{ env.NIX_CACHE_WRITE != 'true' }}
+          pushFilter: lucidity-(controller|worker)-bootc-context
 
       - name: Configure read-only audit credentials
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
@@ -34,4 +58,4 @@ jobs:
         env:
           AMI_VALIDATION_MAX_AGE_HOURS: 12
           AWS_REGION: us-east-2
-        run: ./scripts/audit-ami-validation-resources.sh
+        run: nix run .#audit-ami-resources

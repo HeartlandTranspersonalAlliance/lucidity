@@ -25,6 +25,8 @@ jobs:
 
       - name: Install Determinate Nix
         uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
+        with:
+          kvm: true
 
       - name: Update flake lock and open a pull request
         uses: DeterminateSystems/update-flake-lock@834c491b2ece4de0bbd00d85214bb5e83b4da5c6 # v28

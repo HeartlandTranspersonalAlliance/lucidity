@@ -39,6 +39,9 @@ on:
         required: false
         type: string
         default: ""
+    secrets:
+      CACHIX_AUTH_TOKEN:
+        required: true
   workflow_dispatch:
     inputs:
       ami_role:
@@ -97,6 +100,7 @@ env:
   AWS_REGION: us-east-2
   CI_TOOLS_IMAGE: localhost/coolify-aws-ci-tools:ami
   IMAGE: localhost/coolify-bootc-${{ inputs.ami_role || 'worker' }}:ami-validation
+  NIX_CACHE_WRITE: ${{ github.event_name == 'merge_group' || github.event_name == 'release' || github.event_name == 'schedule' || github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
 
 jobs:
   ami:
@@ -104,10 +108,28 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     steps:
+      - name: Initialize AMI cache report
+        run: echo "AMI_STARTED_AT=$(date +%s)" >>"${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install locked Nix
         uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
+        with:
+          kvm: true
+
+      - name: Require the Cachix write token for trusted events
+        if: env.NIX_CACHE_WRITE == 'true'
+        env:
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        run: test -n "${CACHIX_AUTH_TOKEN}" || { echo '::error::CACHIX_AUTH_TOKEN is required for trusted cache-writing events'; exit 1; }
+
+      - name: Configure the public Lucidity Nix cache
+        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71
+        with:
+          name: lucidity
+          authToken: ${{ env.NIX_CACHE_WRITE == 'true' && secrets.CACHIX_AUTH_TOKEN || '' }}
+          skipPush: ${{ env.NIX_CACHE_WRITE != 'true' }}
+          pushFilter: lucidity-(controller|worker)-bootc-context
 
       - name: Report runner capacity
         run: |
@@ -125,40 +147,7 @@ jobs:
           TEST_CONTROLLER_SECURITY_GROUP: ${{ vars.AWS_AMI_TEST_CONTROLLER_SECURITY_GROUP_ID }}
           TEST_WORKER_INSTANCE_PROFILE: ${{ vars.AWS_AMI_TEST_WORKER_INSTANCE_PROFILE_NAME }}
           TEST_WORKER_SECURITY_GROUP: ${{ vars.AWS_AMI_TEST_WORKER_SECURITY_GROUP_ID }}
-        run: |
-          case "${AMI_ROLE}" in
-            controller)
-              ecr_repository_url=${ECR_CONTROLLER_REPOSITORY_URL}
-              test_instance_profile=${TEST_CONTROLLER_INSTANCE_PROFILE}
-              test_security_group=${TEST_CONTROLLER_SECURITY_GROUP}
-              ;;
-            worker)
-              ecr_repository_url=${ECR_WORKER_REPOSITORY_URL}
-              test_instance_profile=${TEST_WORKER_INSTANCE_PROFILE}
-              test_security_group=${TEST_WORKER_SECURITY_GROUP}
-              ;;
-            *) echo "ami_role must be controller or worker" >&2; exit 2 ;;
-          esac
-          if [[ "${AMI_LIFECYCLE}" == retained ]]; then
-            [[ "${ecr_repository_url}" =~ ^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[a-z0-9]+([._/-][a-z0-9]+)*$ ]] || {
-              echo "the ${AMI_ROLE} ECR repository URL must be configured for retained AMIs" >&2
-              exit 1
-            }
-            if [[ -n "${RELEASE_VERSION}" ]]; then
-              image_ref="${ecr_repository_url}:${RELEASE_VERSION}"
-            else
-              image_ref="${ecr_repository_url}:sha-${GITHUB_SHA}"
-            fi
-          else
-            image_ref="${IMAGE}"
-          fi
-          {
-            echo "AMI_ARTIFACT=image-output/${AMI_ROLE}/coolify-${AMI_ROLE}-ami.raw"
-            echo "ECR_REPOSITORY_URL=${ecr_repository_url}"
-            echo "IMAGE_REF=${image_ref}"
-            echo "TEST_INSTANCE_PROFILE=${test_instance_profile}"
-            echo "TEST_SECURITY_GROUP=${test_security_group}"
-          } >> "${GITHUB_ENV}"
+        run: nix run .#ci -- ami resolve
 
       - name: Configure AWS credentials for retained ECR candidate
         if: inputs.ami_lifecycle == 'retained'
@@ -174,58 +163,31 @@ jobs:
         if: inputs.ami_lifecycle == 'retained'
         env:
           SOURCE_IMAGE_DIGEST: ${{ inputs.source_image_digest }}
-        run: |
-          registry=${IMAGE_REF%%/*}
-          image_without_tag=${IMAGE_REF%:*}
-          repository_name=${image_without_tag#*/}
-          source_tag=${IMAGE_REF##*:}
-          resolved_digest=$(aws ecr batch-get-image \
-            --region "${AWS_REGION}" \
-            --repository-name "${repository_name}" \
-            --image-ids "imageTag=${source_tag}" \
-            --query 'images[0].imageId.imageDigest' \
-            --output text)
-          [[ ${resolved_digest} =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "retained ${AMI_ROLE} candidate did not resolve to an OCI digest" >&2; exit 1; }
-          if [[ -n "${SOURCE_IMAGE_DIGEST}" && "${resolved_digest}" != "${SOURCE_IMAGE_DIGEST}" ]]; then
-            echo "retained ${AMI_ROLE} candidate digest does not match the release manifest input" >&2
-            exit 1
-          fi
-          aws ecr get-login-password --region "${AWS_REGION}" | sudo podman login --username AWS --password-stdin "${registry}"
-          sudo podman pull "${IMAGE_REF}"
-          sudo env \
-            PATH="${PATH}" \
-            CONTAINER_ENGINE=podman \
-            IMAGE_NAME="${IMAGE_REF}" \
-            nix run .#lucidity -- build "${AMI_ROLE}" --validate-only
-          [[ $(sudo podman image inspect --format '{{.Os}}/{{.Architecture}}' "${IMAGE_REF}") == linux/amd64 ]] || {
-            echo "retained AMI source is not linux/amd64" >&2
-            exit 1
-          }
+        run: nix run .#ci -- ami pull
+
+      - id: tooling-cache
+        name: Authenticate to GHCR and restore tooling cache
+        env:
+          GHCR_CACHE_ENGINE: ${{ inputs.ami_lifecycle == 'retained' && 'podman' || 'docker' }}
+          GHCR_CACHE_WRITE: ${{ env.NIX_CACHE_WRITE }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: nix run .#ci -- cache configure ci-tools
 
       - name: Build pinned image tooling
         env:
           AMI_LIFECYCLE: ${{ inputs.ami_lifecycle || 'disposable' }}
         run: |
-          source image/image-builder.env
           if [[ "${AMI_LIFECYCLE}" == retained ]]; then
-            sudo podman build \
-              --build-arg "IMAGE_BUILDER_IMAGE=${IMAGE_BUILDER_IMAGE}" \
-              --tag "${CI_TOOLS_IMAGE}" \
-              --file ci/Containerfile \
-              .
+            sudo env PATH="${PATH}" LUCIDITY_REPOSITORY_ROOT="${GITHUB_WORKSPACE}" CONTAINER_ENGINE=podman CI_TOOLS_IMAGE="${CI_TOOLS_IMAGE}" BUILD_CACHE_FROM="${BUILD_CACHE_FROM}" BUILD_CACHE_TO="${BUILD_CACHE_TO}" REGISTRY_AUTH_FILE="${REGISTRY_AUTH_FILE}" nix run .#ci -- build-tools-image
           else
-            docker build \
-              --build-arg "IMAGE_BUILDER_IMAGE=${IMAGE_BUILDER_IMAGE}" \
-              --tag "${CI_TOOLS_IMAGE}" \
-              --file ci/Containerfile \
-              .
+            CONTAINER_ENGINE=docker nix run .#ci -- build-tools-image
           fi
 
       - id: cache
         name: Authenticate to GHCR and restore role-scoped cache
         if: inputs.ami_lifecycle != 'retained'
         env:
-          GHCR_CACHE_WRITE: ${{ github.event_name != 'pull_request' }}
+          GHCR_CACHE_WRITE: ${{ env.NIX_CACHE_WRITE }}
           GITHUB_TOKEN: ${{ github.token }}
         run: nix run .#lucidity -- ci cache configure "${AMI_ROLE}"
 
@@ -247,19 +209,19 @@ jobs:
               CONTAINER_ENGINE=podman \
               IMAGE_NAME="${IMAGE_REF}" \
               VM_TOOL_IMAGE="${CI_TOOLS_IMAGE}" \
-              ./scripts/build-disk.sh "${AMI_ROLE}" ami
+              nix run .#disk -- build "${AMI_ROLE}" ami
             sudo env \
               CONTAINER_ENGINE=podman \
               VM_TOOL_IMAGE="${CI_TOOLS_IMAGE}" \
-              ./scripts/validate-disk.sh "${AMI_ARTIFACT}"
+              nix run .#disk -- validate "${AMI_ARTIFACT}"
           else
             CONTAINER_ENGINE=docker \
               IMAGE_NAME="${IMAGE_REF}" \
               VM_TOOL_IMAGE="${CI_TOOLS_IMAGE}" \
-              ./scripts/build-disk.sh "${AMI_ROLE}" ami
+              nix run .#disk -- build "${AMI_ROLE}" ami
             CONTAINER_ENGINE=docker \
               VM_TOOL_IMAGE="${CI_TOOLS_IMAGE}" \
-              ./scripts/validate-disk.sh "${AMI_ARTIFACT}"
+              nix run .#disk -- validate "${AMI_ARTIFACT}"
           fi
 
       - name: Require configured AWS validation identifiers
@@ -274,38 +236,7 @@ jobs:
           SOURCE_IMAGE_DIGEST: ${{ inputs.source_image_digest }}
           SBOM_SHA256: ${{ inputs.sbom_sha256 }}
           TEST_SUBNET: ${{ vars.AWS_AMI_TEST_SUBNET_ID }}
-        run: |
-          if [[ "${RUN_AWS_LAUNCH}" == true && "${RUN_AWS_VALIDATION}" != true ]]; then
-            echo "run_aws_launch requires run_aws_validation" >&2
-            exit 1
-          fi
-          if [[ "${AMI_LIFECYCLE}" == retained ]]; then
-            [[ "${RUN_AWS_VALIDATION}" == true ]] || { echo "retained AMI publication requires run_aws_validation" >&2; exit 1; }
-            [[ "${RUN_AWS_LAUNCH}" == true ]] || { echo "retained AMI publication requires the EC2 launch gate" >&2; exit 1; }
-            [[ "${GITHUB_REF}" == refs/heads/main ]] || { echo "retained AMIs may be published only from main" >&2; exit 1; }
-            test -n "${ECR_REPOSITORY_URL}" || { echo "the ${AMI_ROLE} ECR repository URL is required for retained AMIs" >&2; exit 1; }
-          fi
-          if [[ -n "${RELEASE_VERSION}" || -n "${SOURCE_IMAGE_DIGEST}" || -n "${SBOM_SHA256}" ]]; then
-            [[ "${AMI_LIFECYCLE}" == retained ]] || { echo "release metadata is restricted to retained AMIs" >&2; exit 1; }
-            [[ "${RELEASE_VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "release_version must be v-prefixed SemVer" >&2; exit 1; }
-            [[ "${SOURCE_IMAGE_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "source_image_digest must be a lowercase OCI SHA-256 digest" >&2; exit 1; }
-            [[ "${SBOM_SHA256}" =~ ^[0-9a-f]{64}$ ]] || { echo "sbom_sha256 must be a lowercase SHA-256 digest" >&2; exit 1; }
-          fi
-          [[ "${RUN_AWS_VALIDATION}" == true ]] || exit 0
-          test -n "${IMPORT_ROLE_ARN}" || { echo "AWS_AMI_IMPORT_ROLE_ARN repository variable is required" >&2; exit 1; }
-          test -n "${SNAPSHOT_KMS_KEY_ARN}" || { echo "AWS_AMI_SNAPSHOT_KMS_KEY_ARN repository variable is required" >&2; exit 1; }
-          if [[ "${RUN_AWS_LAUNCH}" == true ]]; then
-            test -n "${TEST_INSTANCE_PROFILE}" || { echo "the ${AMI_ROLE} AMI test instance-profile repository variable is required" >&2; exit 1; }
-            test -n "${TEST_SECURITY_GROUP}" || { echo "the ${AMI_ROLE} AMI test security-group repository variable is required" >&2; exit 1; }
-            test -n "${TEST_SUBNET}" || { echo "AWS_AMI_TEST_SUBNET_ID repository variable is required" >&2; exit 1; }
-          fi
-
-      - name: Resolve the pinned coldsnap binary
-        if: inputs.run_aws_validation
-        run: |
-          coldsnap_path=$(nix build --no-link --print-out-paths .#coldsnap)
-          test -x "${coldsnap_path}/bin/coldsnap"
-          echo "COLDSNAP_COMMAND=${coldsnap_path}/bin/coldsnap" >> "${GITHUB_ENV}"
+        run: nix run .#ci -- ami validate-inputs
 
       - name: Configure short-lived AWS credentials
         if: inputs.run_aws_validation
@@ -332,12 +263,34 @@ jobs:
           AMI_TEST_INSTANCE_TYPE: t3a.small
           AMI_TEST_SECURITY_GROUP_ID: ${{ env.TEST_SECURITY_GROUP }}
           AMI_TEST_SUBNET_ID: ${{ vars.AWS_AMI_TEST_SUBNET_ID }}
-        run: ./scripts/validate-ami-import.sh "${AMI_ARTIFACT}"
+        run: nix run .#ami -- validate "${AMI_ARTIFACT}"
 
       - name: Remove retained ECR login
         if: always() && inputs.ami_lifecycle == 'retained'
         run: sudo podman logout "${IMAGE_REF%%/*}"
 
       - name: Remove GHCR login and BuildKit builder
-        if: always() && steps.cache.outcome != 'skipped'
+        if: always() && (steps.tooling-cache.outcome != 'skipped' || steps.cache.outcome != 'skipped')
         run: nix run .#lucidity -- ci cache cleanup
+
+      - name: Summarize AMI cache performance
+        if: always()
+        run: |
+          finished_at=$(date +%s)
+          started_at=${AMI_STARTED_AT:-${finished_at}}
+          [[ ${started_at} =~ ^[0-9]+$ ]] || started_at=${finished_at}
+          elapsed=$((finished_at - started_at))
+          baseline=611
+          difference=$((baseline - elapsed))
+          if (( difference >= 0 )); then
+            comparison="${difference}s faster"
+          else
+            comparison="$((-difference))s slower"
+          fi
+          {
+            echo '### AMI cache performance'
+            echo
+            echo "- Observed: ${elapsed}s"
+            echo "- Pre-cache baseline: ${baseline}s (10m11s)"
+            echo "- Difference: ${comparison}"
+          } >>"${GITHUB_STEP_SUMMARY}"

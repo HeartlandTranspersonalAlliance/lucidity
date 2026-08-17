@@ -16,6 +16,9 @@ on:
         description: Exact main-branch commit whose immutable candidates must be published
         required: true
         type: string
+    secrets:
+      CACHIX_AUTH_TOKEN:
+        required: true
   workflow_dispatch:
 
 concurrency:
@@ -30,6 +33,7 @@ permissions:
 env:
   AWS_REGION: us-east-2
   IMAGE_TAG: sha-${{ inputs.source_sha || github.sha }}
+  NIX_CACHE_WRITE: ${{ github.event_name == 'merge_group' || github.event_name == 'release' || github.event_name == 'schedule' || github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
 
 jobs:
   publish:
@@ -48,23 +52,27 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           ref: ${{ inputs.source_sha || github.sha }}
 
       - name: Install locked Nix
         uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
+        with:
+          kvm: true
 
-      - name: Require configured ECR identifiers
+      - name: Require the Cachix write token for trusted events
+        if: env.NIX_CACHE_WRITE == 'true'
         env:
-          PUBLISH_ROLE_ARN: ${{ vars.AWS_ECR_PUBLISH_ROLE_ARN }}
-          REPOSITORY_URL: ${{ matrix.repository_url }}
-        run: |
-          test -n "${PUBLISH_ROLE_ARN}" || { echo "AWS_ECR_PUBLISH_ROLE_ARN repository variable is required" >&2; exit 1; }
-          test -n "${REPOSITORY_URL}" || { echo "AWS_ECR_${{ matrix.role == 'controller' && 'CONTROLLER' || 'WORKER' }}_REPOSITORY_URL repository variable is required" >&2; exit 1; }
-          [[ "${IMAGE_TAG}" =~ ^sha-[0-9a-f]{40}$ ]] || { echo "image tag must contain the full Git commit SHA" >&2; exit 1; }
-          [[ "${REPOSITORY_URL}" =~ ^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[a-z0-9]+([._/-][a-z0-9]+)*$ ]] || {
-            echo "repository URL is not a private commercial-region ECR repository" >&2
-            exit 1
-          }
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        run: test -n "${CACHIX_AUTH_TOKEN}" || { echo '::error::CACHIX_AUTH_TOKEN is required for trusted cache-writing events'; exit 1; }
+
+      - name: Configure the public Lucidity Nix cache
+        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71
+        with:
+          name: lucidity
+          authToken: ${{ env.NIX_CACHE_WRITE == 'true' && secrets.CACHIX_AUTH_TOKEN || '' }}
+          skipPush: ${{ env.NIX_CACHE_WRITE != 'true' }}
+          pushFilter: lucidity-(controller|worker)-bootc-context
 
       - name: Configure short-lived AWS credentials
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
@@ -75,37 +83,13 @@ jobs:
           role-duration-seconds: 3600
           role-session-name: lucidity-publish-${{ github.run_id }}-${{ matrix.role }}
 
-      - name: Resolve immutable image reference
+      - name: Resolve immutable image reference and authenticate ECR
         id: image
         env:
+          PUBLISH_ROLE_ARN: ${{ vars.AWS_ECR_PUBLISH_ROLE_ARN }}
           REPOSITORY_URL: ${{ matrix.repository_url }}
-        run: |
-          repository_name=${REPOSITORY_URL#*/}
-          registry=${REPOSITORY_URL%%/*}
-          image_ref=${REPOSITORY_URL}:${IMAGE_TAG}
-          existing_digest=$(aws ecr batch-get-image \
-            --region "${AWS_REGION}" \
-            --repository-name "${repository_name}" \
-            --image-ids "imageTag=${IMAGE_TAG}" \
-            --query 'images[0].imageId.imageDigest' \
-            --output text)
-          if [[ ${existing_digest} =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            exists=true
-            echo "${image_ref} already exists as ${existing_digest}; retaining the immutable image"
-          else
-            exists=false
-          fi
-          {
-            printf 'exists=%s\n' "${exists}"
-            printf 'image_ref=%s\n' "${image_ref}"
-            printf 'registry=%s\n' "${registry}"
-            printf 'repository_name=%s\n' "${repository_name}"
-          } >> "${GITHUB_OUTPUT}"
-
-      - name: Authenticate Docker to ECR
-        run: |
-          aws ecr get-login-password --region "${AWS_REGION}" | \
-            docker login --username AWS --password-stdin "${{ steps.image.outputs.registry }}"
+          ROLE: ${{ matrix.role }}
+        run: nix run .#ci -- ecr resolve "${ROLE}" "${REPOSITORY_URL}" "${IMAGE_TAG}"
 
       - id: cache
         name: Authenticate to GHCR and restore role-scoped cache
@@ -113,7 +97,7 @@ jobs:
         env:
           GHCR_CACHE_WRITE: true
           GITHUB_TOKEN: ${{ github.token }}
-        run: nix run .#lucidity -- ci cache configure "${{ matrix.role }}"
+        run: nix run .#ci -- cache configure "${{ matrix.role }}"
 
       - name: Build and validate AMD64 bootc image
         if: steps.image.outputs.exists != 'true'
@@ -122,37 +106,26 @@ jobs:
           CONTAINER_ENGINE: docker
           IMAGE_NAME: ${{ steps.image.outputs.image_ref }}
           IMAGE_VERSION: ${{ env.IMAGE_TAG }}
-        run: |
-          nix run .#lucidity -- build "${{ matrix.role }}"
-          [[ $(docker image inspect --format '{{.Os}}/{{.Architecture}}' "${IMAGE_NAME}") == linux/amd64 ]] || {
-            echo "local image is not linux/amd64" >&2
-            exit 1
-          }
+        run: nix run .#build-${{ matrix.role }}
 
       - name: Publish immutable image
         if: steps.image.outputs.exists != 'true'
-        run: docker push "${{ steps.image.outputs.image_ref }}"
+        env:
+          IMAGE_REF: ${{ steps.image.outputs.image_ref }}
+        run: nix run .#ci -- ecr push "${IMAGE_REF}"
 
       - name: Verify published tag and architecture
         env:
           IMAGE_REF: ${{ steps.image.outputs.image_ref }}
           REPOSITORY_NAME: ${{ steps.image.outputs.repository_name }}
-        run: |
-          remote_digest=$(aws ecr batch-get-image \
-            --region "${AWS_REGION}" \
-            --repository-name "${REPOSITORY_NAME}" \
-            --image-ids "imageTag=${IMAGE_TAG}" \
-            --query 'images[0].imageId.imageDigest' \
-            --output text)
-          [[ ${remote_digest} =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "ECR did not return the immutable image digest" >&2; exit 1; }
-          docker manifest inspect --verbose "${IMAGE_REF}" | \
-            jq -e '.Descriptor.platform.os == "linux" and .Descriptor.platform.architecture == "amd64"' >/dev/null
-          printf '%s published as %s\n' "${IMAGE_REF}" "${remote_digest}" >> "${GITHUB_STEP_SUMMARY}"
+        run: nix run .#ci -- ecr verify "${IMAGE_REF}" "${REPOSITORY_NAME}" "${IMAGE_TAG}"
 
       - name: Remove ECR login
         if: always() && steps.image.outputs.registry != ''
-        run: docker logout "${{ steps.image.outputs.registry }}"
+        env:
+          REGISTRY: ${{ steps.image.outputs.registry }}
+        run: nix run .#ci -- ecr logout "${REGISTRY}"
 
       - name: Remove GHCR login and BuildKit builder
         if: always() && steps.cache.outcome != 'skipped'
-        run: nix run .#lucidity -- ci cache cleanup
+        run: nix run .#ci -- cache cleanup
