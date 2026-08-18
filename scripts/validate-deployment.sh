@@ -9,6 +9,9 @@ environment=${DEPLOYMENT_ENVIRONMENT:-production}
 enroll_worker=${DEPLOYMENT_ENROLL_WORKER:-true}
 controller_url=${DEPLOYMENT_CONTROLLER_URL:-}
 worker_url=${DEPLOYMENT_WORKER_URL:-}
+worker_overlay_ip=${DEPLOYMENT_WORKER_OVERLAY_IP:-100.96.0.2}
+require_https=${DEPLOYMENT_REQUIRE_HTTPS:-true}
+require_release_identity=${DEPLOYMENT_REQUIRE_RELEASE_IDENTITY:-false}
 poll_seconds=${DEPLOYMENT_SSM_POLL_SECONDS:-5}
 max_attempts=${DEPLOYMENT_SSM_MAX_ATTEMPTS:-120}
 
@@ -16,6 +19,23 @@ max_attempts=${DEPLOYMENT_SSM_MAX_ATTEMPTS:-120}
 [[ ${project} =~ ^[a-z0-9][a-z0-9-]{1,31}$ ]] || { echo "DEPLOYMENT_PROJECT is invalid" >&2; exit 2; }
 [[ ${environment} =~ ^[a-z0-9][a-z0-9-]{1,31}$ ]] || { echo "DEPLOYMENT_ENVIRONMENT is invalid" >&2; exit 2; }
 [[ ${enroll_worker} == true || ${enroll_worker} == false ]] || { echo "DEPLOYMENT_ENROLL_WORKER must be true or false" >&2; exit 2; }
+[[ ${require_https} == true || ${require_https} == false ]] || { echo "DEPLOYMENT_REQUIRE_HTTPS must be true or false" >&2; exit 2; }
+[[ ${require_release_identity} == true || ${require_release_identity} == false ]] || { echo "DEPLOYMENT_REQUIRE_RELEASE_IDENTITY must be true or false" >&2; exit 2; }
+[[ ${worker_overlay_ip} =~ ^100\.96\.0\.[0-9]{1,3}$ ]] || { echo "DEPLOYMENT_WORKER_OVERLAY_IP is invalid" >&2; exit 2; }
+if [[ ${require_https} == true ]]; then
+    [[ -n ${controller_url} && -n ${worker_url} ]] || { echo "both production HTTPS URLs are required" >&2; exit 2; }
+fi
+declare -A expected_ami_ids expected_image_digests
+expected_ami_ids[controller]=${DEPLOYMENT_CONTROLLER_AMI_ID:-}
+expected_ami_ids[worker]=${DEPLOYMENT_WORKER_AMI_ID:-}
+expected_image_digests[controller]=${DEPLOYMENT_CONTROLLER_IMAGE_DIGEST:-}
+expected_image_digests[worker]=${DEPLOYMENT_WORKER_IMAGE_DIGEST:-}
+if [[ ${require_release_identity} == true ]]; then
+    for role in controller worker; do
+        [[ ${expected_ami_ids[${role}]} =~ ^ami-[0-9a-f]+$ ]] || { echo "the expected ${role} AMI ID is required" >&2; exit 2; }
+        [[ ${expected_image_digests[${role}]} =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "the expected ${role} image digest is required" >&2; exit 2; }
+    done
+fi
 [[ ${poll_seconds} =~ ^[0-9]+$ ]] || { echo "DEPLOYMENT_SSM_POLL_SECONDS must be a non-negative integer" >&2; exit 2; }
 [[ ${max_attempts} =~ ^[1-9][0-9]*$ ]] || { echo "DEPLOYMENT_SSM_MAX_ATTEMPTS must be a positive integer" >&2; exit 2; }
 
@@ -23,7 +43,7 @@ for command in "${aws_cli}" "${curl_cli}" jq base64; do
     command -v "${command}" >/dev/null 2>&1 || { echo "${command} is required" >&2; exit 1; }
 done
 
-declare -A instance_ids private_ips vpc_ids
+declare -A instance_ids private_ips vpc_ids security_group_ids
 
 discover_node() {
     local role=$1
@@ -46,13 +66,18 @@ discover_node() {
     [[ $(jq -r '.State.Name' <<< "${instance}") == running ]] || { echo "${role} node is not running" >&2; return 1; }
     [[ $(jq -r '.Architecture' <<< "${instance}") == x86_64 ]] || { echo "${role} node is not x86_64" >&2; return 1; }
     [[ $(jq -r '.MetadataOptions.HttpTokens' <<< "${instance}") == required ]] || { echo "${role} node does not require IMDSv2" >&2; return 1; }
+    if [[ ${require_release_identity} == true ]]; then
+        [[ $(jq -r '.ImageId' <<< "${instance}") == "${expected_ami_ids[${role}]}" ]] || { echo "${role} node is not running the approved AMI" >&2; return 1; }
+    fi
 
     instance_ids[${role}]=$(jq -r '.InstanceId' <<< "${instance}")
     private_ips[${role}]=$(jq -r '.PrivateIpAddress' <<< "${instance}")
     vpc_ids[${role}]=$(jq -r '.VpcId' <<< "${instance}")
+    security_group_ids[${role}]=$(jq -r '[.SecurityGroups[].GroupId] | join(",")' <<< "${instance}")
     [[ ${instance_ids[${role}]} =~ ^i-[0-9a-f]+$ ]] || { echo "${role} node has an invalid instance ID" >&2; return 1; }
     [[ ${private_ips[${role}]} =~ ^(10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}\.[0-9]{1,3}|192\.168\.[0-9]{1,3}\.[0-9]{1,3})$ ]] || { echo "${role} node has an unexpected private address" >&2; return 1; }
     [[ ${vpc_ids[${role}]} =~ ^vpc-[0-9a-f]+$ ]] || { echo "${role} node has an invalid VPC ID" >&2; return 1; }
+    [[ ${security_group_ids[${role}]} =~ ^sg-[0-9a-f]+(,sg-[0-9a-f]+)*$ ]] || { echo "${role} node has invalid security groups" >&2; return 1; }
 
     root_volume_id=$(jq -r '.RootDeviceName as $root | .BlockDeviceMappings[] | select(.DeviceName == $root) | .Ebs.VolumeId' <<< "${instance}")
     [[ ${root_volume_id} =~ ^vol-[0-9a-f]+$ ]] || { echo "${role} node has no valid root EBS volume" >&2; return 1; }
@@ -63,6 +88,32 @@ discover_node() {
     [[ $(jq '.Volumes | length' <<< "${volume}") -eq 1 ]] || { echo "${role} root EBS volume was not found" >&2; return 1; }
     [[ $(jq -r '.Volumes[0].Encrypted' <<< "${volume}") == true ]] || { echo "${role} root EBS volume is not encrypted" >&2; return 1; }
     [[ $(jq -r '.Volumes[0].State' <<< "${volume}") == in-use ]] || { echo "${role} root EBS volume is not attached" >&2; return 1; }
+}
+
+validate_no_vpc_ssh() {
+    local -a group_ids=()
+    local -a role_groups=()
+    local role group_id response exposed
+    for role in controller worker; do
+        IFS=',' read -r -a role_groups <<<"${security_group_ids[${role}]}"
+        for group_id in "${role_groups[@]}"; do
+            [[ " ${group_ids[*]} " == *" ${group_id} "* ]] || group_ids+=("${group_id}")
+        done
+    done
+    response=$("${aws_cli}" ec2 describe-security-groups --region "${region}" --group-ids "${group_ids[@]}" --output json)
+    exposed=$(jq -r '[
+        .SecurityGroups[] as $group
+        | $group.IpPermissions[]?
+        | select(
+            .IpProtocol == "-1" or
+            (.IpProtocol == "tcp" and (.FromPort // 0) <= 22 and (.ToPort // 65535) >= 22)
+          )
+        | $group.GroupId
+      ] | unique | join(",")' <<<"${response}")
+    [[ -z ${exposed} ]] || {
+        echo "TCP/22 must not be reachable through VPC security groups: ${exposed}" >&2
+        return 1
+    }
 }
 
 wait_for_ssm() {
@@ -214,11 +265,17 @@ systemctl is-active --quiet coolify-worker-authorized-keys.service
 discover_node controller
 discover_node worker
 [[ ${vpc_ids[controller]} == "${vpc_ids[worker]}" ]] || { echo "controller and worker are not in the same VPC" >&2; exit 1; }
-echo "Discovered one hardened running controller and worker with encrypted root storage"
+validate_no_vpc_ssh
+echo "Discovered one hardened running controller and worker with encrypted root storage and no VPC SSH ingress"
 
 for role in controller worker; do
     wait_for_ssm "${instance_ids[${role}]}" "${role}"
-    ssm_run "${instance_ids[${role}]}" "${role} host" "${common_command}"
+    role_command=${common_command}
+    if [[ ${require_release_identity} == true ]]; then
+        role_command+=$'\n'
+        role_command+="bootc status --json | jq -e --arg digest '${expected_image_digests[${role}]}' '.. | strings | select(. == \"\$digest\")' >/dev/null"
+    fi
+    ssm_run "${instance_ids[${role}]}" "${role} host" "${role_command}"
 done
 echo "Both nodes passed the common host and SSM checks"
 
@@ -277,16 +334,16 @@ ssm_run "${instance_ids[controller]}" "controller to worker SSH" "
 set -Eeuo pipefail
 known_hosts=\$(mktemp)
 trap 'rm -f \"\${known_hosts}\"' EXIT
-printf '%s %s\\n' '${private_ips[worker]}' \"\$(printf '%s' '${encoded_host_key}' | base64 -d)\" > \"\${known_hosts}\"
+printf '%s %s\\n' '${worker_overlay_ip}' \"\$(printf '%s' '${encoded_host_key}' | base64 -d)\" > \"\${known_hosts}\"
 ssh -i /data/coolify/ssh/id.root@host.docker.internal \\
     -o BatchMode=yes \\
     -o ConnectTimeout=10 \\
     -o IdentitiesOnly=yes \\
     -o StrictHostKeyChecking=yes \\
     -o UserKnownHostsFile=\"\${known_hosts}\" \\
-    root@${private_ips[worker]} true
+    root@${worker_overlay_ip} true
 "
-echo "Controller-to-worker private SSH passed with the SSM-authenticated host key"
+echo "Controller-to-worker Nebula SSH passed with the SSM-authenticated host key"
 
 validate_https_url "Controller" "${controller_url}"
 validate_https_url "Worker application" "${worker_url}"
@@ -297,7 +354,7 @@ if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then
         echo
         echo "- Controller and worker: running, encrypted, IMDSv2-only, SSM online, persistent Nix healthy"
         echo "- Controller: Coolify storage and complete Compose service set healthy"
-        echo "- Worker: controller public key enrolled and private SSH verified"
+        echo "- Worker: controller public key enrolled and Nebula-only SSH verified"
         [[ -z ${controller_url} ]] || echo "- Controller HTTPS endpoint healthy"
         [[ -z ${worker_url} ]] || echo "- Worker application HTTPS endpoint healthy"
     } >> "${GITHUB_STEP_SUMMARY}"

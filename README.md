@@ -39,6 +39,7 @@ The last command runs the authoritative `nix flake check` graph.
 | Test the private mesh | `nix run .#lucidity -- vm test mesh` |
 | Generate configuration | `nix run .#lucidity -- generate` |
 | Plan AWS infrastructure | `nix run .#lucidity -- infra plan` |
+| Back up application data | `sudo lucidity backup run` |
 | Plan remote state | `nix run .#state -- plan` |
 | Show the evaluated architecture | `nix run .#architecture` |
 
@@ -73,6 +74,8 @@ Start with the [documentation index](docs/README.md).
 - [Architecture and design philosophy](docs/concepts/architecture.md)
 - [Advanced customization](docs/guides/advanced-customization.md)
 - [Troubleshooting](docs/guides/troubleshooting.md)
+- [Backup and restore](docs/guides/backup-and-restore.md)
+- [Production readiness](docs/production-readiness.md)
 - [Secrets and access](docs/security/secrets-and-access.md)
 - [CI and caching](docs/reference/ci-and-caching.md)
 - [Release process](docs/reference/releases.md)

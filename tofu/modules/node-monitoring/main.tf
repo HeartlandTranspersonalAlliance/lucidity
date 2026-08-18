@@ -7,6 +7,7 @@ locals {
   resource_prefix = "${var.project_name}-${var.environment}"
   alarm_arn       = "arn:${data.aws_partition.current.partition}:cloudwatch:${var.aws_region}:${local.account_id}:alarm:${local.resource_prefix}-*"
   topic_arn       = "arn:${data.aws_partition.current.partition}:sns:${var.aws_region}:${local.account_id}:${local.resource_prefix}-node-alarms"
+  backup_rule_arn = "arn:${data.aws_partition.current.partition}:events:${var.aws_region}:${local.account_id}:rule/${local.resource_prefix}-backup-job-failures"
   common_tags = merge(
     {
       Environment = var.environment
@@ -62,6 +63,27 @@ data "aws_iam_policy_document" "notifications_kms" {
     principals {
       type        = "Service"
       identifiers = ["cloudwatch.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:EncryptionContext:aws:sns:topicArn"
+      values   = [local.topic_arn]
+    }
+  }
+
+  statement {
+    sid    = "AllowEventBridgeNotificationEncryption"
+    effect = "Allow"
+    actions = [
+      "kms:Decrypt",
+      "kms:GenerateDataKey*",
+    ]
+    resources = ["*"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["events.amazonaws.com"]
     }
 
     condition {
@@ -147,6 +169,30 @@ data "aws_iam_policy_document" "node_alarms" {
       values   = [local.alarm_arn]
     }
   }
+
+  statement {
+    sid       = "EventBridgeBackupFailurePublish"
+    effect    = "Allow"
+    actions   = ["sns:Publish"]
+    resources = [aws_sns_topic.node_alarms.arn]
+
+    principals {
+      type        = "Service"
+      identifiers = ["events.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [local.account_id]
+    }
+
+    condition {
+      test     = "ArnEquals"
+      variable = "aws:SourceArn"
+      values   = [local.backup_rule_arn]
+    }
+  }
 }
 
 resource "aws_sns_topic_policy" "node_alarms" {
@@ -158,6 +204,36 @@ resource "aws_sns_topic_subscription" "email" {
   topic_arn = aws_sns_topic.node_alarms.arn
   protocol  = "email"
   endpoint  = var.notification_email
+}
+
+resource "aws_cloudwatch_event_rule" "backup_job_failure" {
+  name        = "${local.resource_prefix}-backup-job-failures"
+  description = "Notify operators when the Lucidity node backup job fails, aborts, expires, or completes partially"
+  event_pattern = jsonencode({
+    source        = ["aws.backup"]
+    "detail-type" = ["Backup Job State Change"]
+    detail = {
+      backupVaultName = ["${local.resource_prefix}-node-backups"]
+      state           = ["ABORTED", "EXPIRED", "FAILED", "PARTIAL"]
+    }
+  })
+
+  tags = merge(local.common_tags, { Name = "${local.resource_prefix}-backup-job-failures" })
+
+  lifecycle {
+    postcondition {
+      condition     = self.arn == local.backup_rule_arn
+      error_message = "The backup failure rule ARN must match the SNS and KMS source restriction."
+    }
+  }
+}
+
+resource "aws_cloudwatch_event_target" "backup_job_failure" {
+  rule      = aws_cloudwatch_event_rule.backup_job_failure.name
+  target_id = "encrypted-operator-notification"
+  arn       = aws_sns_topic.node_alarms.arn
+
+  depends_on = [aws_sns_topic_policy.node_alarms]
 }
 
 resource "aws_cloudwatch_metric_alarm" "status_check" {
@@ -173,7 +249,7 @@ resource "aws_cloudwatch_metric_alarm" "status_check" {
   period              = 60
   statistic           = "Maximum"
   threshold           = 1
-  treat_missing_data  = "missing"
+  treat_missing_data  = "breaching"
   actions_enabled     = true
 
   dimensions = {
@@ -199,7 +275,7 @@ resource "aws_cloudwatch_metric_alarm" "high_cpu" {
   period              = 300
   statistic           = "Average"
   threshold           = var.high_cpu_threshold_percent
-  treat_missing_data  = "missing"
+  treat_missing_data  = "notBreaching"
   actions_enabled     = true
 
   dimensions = {
@@ -225,7 +301,7 @@ resource "aws_cloudwatch_metric_alarm" "low_cpu_credit" {
   period              = 300
   statistic           = "Minimum"
   threshold           = var.low_cpu_credit_threshold
-  treat_missing_data  = "missing"
+  treat_missing_data  = "notBreaching"
   actions_enabled     = true
 
   dimensions = {

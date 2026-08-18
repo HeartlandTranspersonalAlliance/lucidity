@@ -1,4 +1,5 @@
 data "aws_partition" "current" {}
+data "aws_region" "current" {}
 
 locals {
   node_roles      = toset(["controller", "worker"])
@@ -69,6 +70,103 @@ resource "aws_iam_role_policy" "ecr_pull" {
   name   = "${local.resource_prefix}-${each.key}-ecr-pull"
   role   = aws_iam_role.node[each.key].id
   policy = data.aws_iam_policy_document.ecr_pull[each.key].json
+}
+
+data "aws_iam_policy_document" "application_backup" {
+  for_each = var.application_backup_bucket_arn == null ? toset([]) : local.node_roles
+
+  statement {
+    sid    = "ListIsolatedResticPrefix"
+    effect = "Allow"
+    actions = [
+      "s3:GetBucketLocation",
+      "s3:ListBucket",
+      "s3:ListBucketVersions",
+    ]
+    resources = [var.application_backup_bucket_arn]
+
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values = [
+        "lucidity/${each.key}",
+        "lucidity/${each.key}/*",
+      ]
+    }
+  }
+
+  statement {
+    sid    = "ManageIsolatedResticObjects"
+    effect = "Allow"
+    actions = [
+      "s3:AbortMultipartUpload",
+      "s3:DeleteObject",
+      "s3:GetObject",
+      "s3:ListMultipartUploadParts",
+      "s3:PutObject",
+    ]
+    resources = ["${var.application_backup_bucket_arn}/lucidity/${each.key}/*"]
+  }
+
+  dynamic "statement" {
+    for_each = var.application_backup_bucket_kms_key_arn == null ? [] : [var.application_backup_bucket_kms_key_arn]
+    content {
+      sid    = "UseBackupBucketKey"
+      effect = "Allow"
+      actions = [
+        "kms:Decrypt",
+        "kms:Encrypt",
+        "kms:GenerateDataKey",
+      ]
+      resources = [statement.value]
+    }
+  }
+}
+
+resource "aws_iam_role_policy" "application_backup" {
+  for_each = data.aws_iam_policy_document.application_backup
+
+  name   = "${local.resource_prefix}-${each.key}-application-backup"
+  role   = aws_iam_role.node[each.key].id
+  policy = each.value.json
+}
+
+data "aws_iam_policy_document" "application_backup_secrets" {
+  for_each = {
+    for role in local.node_roles : role => lookup(var.application_backup_secret_arns, role, [])
+    if length(lookup(var.application_backup_secret_arns, role, [])) > 0
+  }
+
+  statement {
+    sid       = "ReadExactBackupSecrets"
+    effect    = "Allow"
+    actions   = ["secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue"]
+    resources = each.value
+  }
+
+  dynamic "statement" {
+    for_each = var.application_backup_secret_kms_key_arn == null ? [] : [var.application_backup_secret_kms_key_arn]
+    content {
+      sid       = "DecryptBackupSecrets"
+      effect    = "Allow"
+      actions   = ["kms:Decrypt"]
+      resources = [statement.value]
+
+      condition {
+        test     = "StringEquals"
+        variable = "kms:ViaService"
+        values   = ["secretsmanager.${data.aws_region.current.region}.amazonaws.com"]
+      }
+    }
+  }
+}
+
+resource "aws_iam_role_policy" "application_backup_secrets" {
+  for_each = data.aws_iam_policy_document.application_backup_secrets
+
+  name   = "${local.resource_prefix}-${each.key}-application-backup-secrets"
+  role   = aws_iam_role.node[each.key].id
+  policy = each.value.json
 }
 
 resource "aws_iam_role_policy_attachment" "controller_additional" {

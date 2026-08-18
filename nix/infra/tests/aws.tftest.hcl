@@ -95,6 +95,12 @@ mock_provider "aws" {
     }
   }
 
+  mock_resource "aws_cloudwatch_event_rule" {
+    defaults = {
+      arn = "arn:aws:events:us-east-2:123456789012:rule/lucidity-production-backup-job-failures"
+    }
+  }
+
   mock_resource "aws_subnet" {
     defaults = {
       id = "subnet-0123456789abcdef0"
@@ -524,7 +530,11 @@ run "production_node_monitoring_contract" {
       output.node_alarm_names.high_cpu.worker == "lucidity-production-worker-high-cpu" &&
       output.node_alarm_names.low_cpu_credit.controller == "lucidity-production-controller-low-cpu-credit" &&
       output.node_alarm_settings.status_check.datapoints_to_alarm == 2 &&
+      output.node_alarm_settings.status_check.treat_missing_data == "breaching" &&
+      output.node_alarm_settings.backup_job_failures.vault_name == "lucidity-production-node-backups" &&
+      contains(output.node_alarm_settings.backup_job_failures.states, "FAILED") &&
       output.node_alarm_settings.high_cpu.threshold_percent == 85 &&
+      output.node_alarm_settings.high_cpu.treat_missing_data == "notBreaching" &&
       output.node_alarm_settings.low_cpu_credit.threshold == 20
     )
     error_message = "Enabled node monitoring must create encrypted notifications and stable status, CPU, and credit alarms for both roles."

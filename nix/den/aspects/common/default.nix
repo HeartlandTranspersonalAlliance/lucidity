@@ -13,6 +13,7 @@
         openbao
         openssh
         ripgrep
+        restic
         secretspec
         tmux
         vim
@@ -30,6 +31,15 @@
         "/var/usrlocal"
       ];
       files = {
+        "etc/lucidity/secretspec.toml" = builtins.readFile ../../../../secretspec.toml;
+        "etc/lucidity/backup-target.env.example" = ''
+          # Copy to /etc/lucidity/backup-target.env and select exactly one backend.
+          # Keep credentials in SecretSpec, never in this file.
+          LUCIDITY_BACKUP_BACKEND=aws-s3
+          LUCIDITY_BACKUP_REPOSITORY=s3:s3.us-east-2.amazonaws.com/example-bucket/lucidity/@ROLE@
+          # LUCIDITY_BACKUP_PATHS=/var/lib/coolify:/var/lib/nebula
+          # LUCIDITY_BACKUP_HOOK_DIRECTORY=/etc/lucidity/backup.d
+        '';
         "etc/docker/daemon.json" = builtins.toJSON {
           data-root = "/var/lib/docker";
           live-restore = true;

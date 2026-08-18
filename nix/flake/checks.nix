@@ -97,6 +97,12 @@
       ! grep -Fq 'Requires=lucidity-nix-profile.service' ${rolePackages.bootc-context-worker}/rootfs/usr/lib/systemd/system/lucidity-admin-authorized-key.service
       grep -Fq '100.96.0.1' ${rolePackages.bootc-context-worker}/rootfs/etc/nebula/config.yml.in
       grep -Fq 'address = "127.0.0.1:8200"' ${rolePackages.bootc-context-controller}/rootfs/etc/openbao/openbao.hcl.in
+      test -f ${rolePackages.bootc-context-controller}/rootfs/usr/lib/systemd/system/lucidity-backup.service
+      test -f ${rolePackages.bootc-context-controller}/rootfs/usr/lib/systemd/system/lucidity-backup.timer
+      test -f ${rolePackages.bootc-context-worker}/rootfs/usr/lib/systemd/system/lucidity-backup.service
+      test -f ${rolePackages.bootc-context-worker}/rootfs/usr/lib/systemd/system/lucidity-backup.timer
+      grep -Fq 'Requires=openbao.service' ${rolePackages.bootc-context-controller}/rootfs/usr/lib/systemd/system/lucidity-backup.service
+      ! grep -Fq 'openbao.service' ${rolePackages.bootc-context-worker}/rootfs/usr/lib/systemd/system/lucidity-backup.service
       ! grep -R -E 'GetSecretValue|BatchGetSecretValue' ${rolePackages.bootc-context-controller}/rootfs/usr/libexec
       touch "$out"
     '';
@@ -201,6 +207,16 @@
       ${pkgs.jq}/bin/jq -e '
         (.required | sort) == ["ADMIN_SSH_PUBLIC_KEY", "COOLIFY_WORKER_SSH_PUBLIC_KEY"]
       ' vm-worker-schema.json >/dev/null
+      ${pkgs.secretspec}/bin/secretspec schema \
+        --file ${secretspecSource}/secretspec.toml --profile backup-controller-aws --output backup-controller-schema.json
+      ${pkgs.jq}/bin/jq -e '
+        .required == ["RESTIC_PASSWORD_FILE"]
+      ' backup-controller-schema.json >/dev/null
+      ${pkgs.secretspec}/bin/secretspec schema \
+        --file ${secretspecSource}/secretspec.toml --profile backup-worker-s3 --output backup-worker-schema.json
+      ${pkgs.jq}/bin/jq -e '
+        (.required | sort) == ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "RESTIC_PASSWORD_FILE"]
+      ' backup-worker-schema.json >/dev/null
       touch "$out"
     '';
     repositoryCheck =
@@ -242,6 +258,9 @@
         rg -q '^\[profiles\.coolify\]$' secretspec.toml
         rg -q '^aws-production = "awssm://us-east-2?' secretspec.toml
         rg -q '^COOLIFY_API_TOKEN = \{ required = true \}$' secretspec.toml
+        rg -Fq 'RESTIC_PASSWORD_FILE = { description = "Restic repository encryption password materialized as a private temporary file", required = false, as_path = true }' secretspec.toml
+        rg -q '^\[scopes\.backup-aws\]$' secretspec.toml
+        rg -q '^\[scopes\.backup-s3\]$' secretspec.toml
         rg -q 'coolify-worker-storage.service' nix/den/classes/bootc/image.nix
         rg -q 'Environment=COOLIFY_CURL_BIN=/usr/bin/curl' nix/den/classes/bootc/image.nix
         rg -q 'lucidity-admin-authorized-key.service' nix/den/classes/bootc/image.nix
@@ -277,7 +296,7 @@
         cache_action='cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71'
         trusted_events="github.event_name == 'merge_group' || github.event_name == 'release' || github.event_name == 'schedule' || github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')"
         mapfile -t cache_workflows < <(rg -l -F 'run: nix ' .github/workflows | sort)
-        test "''${#cache_workflows[@]}" -eq 8
+        test "''${#cache_workflows[@]}" -eq 9
         for workflow in "''${cache_workflows[@]}"; do
           rg -Fq "$trusted_events" "$workflow"
           rg -Fq "$cache_action" "$workflow"
@@ -293,9 +312,9 @@
             test "''${caches[$index]}" -gt "''${installers[$index]}"
           done
         done
-        test "$(rg -F "$cache_action" .github/workflows | wc -l)" -eq 12
-        test "$(rg -F 'pushFilter: lucidity-(controller|worker)-bootc-context' .github/workflows | wc -l)" -eq 12
-        test "$(rg -F 'kvm: true' .github/workflows | wc -l)" -eq 13
+        test "$(rg -F "$cache_action" .github/workflows | wc -l)" -eq 14
+        test "$(rg -F 'pushFilter: lucidity-(controller|worker)-bootc-context' .github/workflows | wc -l)" -eq 14
+        test "$(rg -F 'kvm: true' .github/workflows | wc -l)" -eq 15
         ! rg -q '99-kvm4all|udevadm.*kvm' .github/workflows
         ! rg -q 'pathsToPush:.*(qcow2|raw|ami|bootc-context)' .github/workflows
         test "$(rg -F 'cache configure ci-tools' .github/workflows | wc -l)" -eq 3
@@ -586,6 +605,16 @@
       ];
       nativeBuildInputs = [pkgs.jq];
     };
+    backupUnitCheck = mkShellTest {
+      name = "backup-unit";
+      script = "tests/test-backup.sh";
+      files = [
+        ../../tests/test-backup.sh
+        ../den/aspects/common/files/backup.sh
+        ../../secretspec.toml
+      ];
+      nativeBuildInputs = [pkgs.findutils pkgs.gnused pkgs.util-linux];
+    };
     textStyleUnitCheck = mkShellTest {
       name = "text-style-unit";
       script = "tests/test-text-style.sh";
@@ -612,6 +641,7 @@
       amiImportUnitCheck
       amiAuditUnitCheck
       deploymentUnitCheck
+      backupUnitCheck
       textStyleUnitCheck
       yamlPolicyCheck
     ];
@@ -623,6 +653,7 @@
     '';
   in {
     checks = {
+      backup-unit = backupUnitCheck;
       ami-audit-unit = amiAuditUnitCheck;
       ami-import-unit = amiImportUnitCheck;
       cache-unit = cacheUnitCheck;

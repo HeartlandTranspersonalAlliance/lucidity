@@ -12,6 +12,10 @@ Both roles bind `/var/lib/coolify` onto the image-baked `/data/coolify` path so
 Coolify can manage an otherwise immutable bootc host. The controller also
 preserves `/var/lib/openbao`.
 
+Important application data is also copied to an independent restic repository.
+See the [backup and restore guide](guides/backup-and-restore.md) for supported
+S3-compatible providers, SecretSpec profiles, retention, and restore drills.
+
 ## OpenBao initialization
 
 1. Apply the reviewed generated infrastructure and boot the controller.

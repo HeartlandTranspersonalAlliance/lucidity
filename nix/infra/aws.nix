@@ -89,6 +89,17 @@ in {
     account_cost_budget_notification_email = stringVariable "Budget notification email." null;
     node_alarm_notification_email = stringVariable "Node alarm email." null;
     node_backup_retention_days = numberVariable "Daily backup retention." 7;
+    application_backup_bucket_arn = stringVariable "Optional independent AWS S3 bucket ARN for restic." null;
+    application_backup_bucket_kms_key_arn = stringVariable "Optional KMS key ARN for the restic S3 bucket." null;
+    application_backup_secret_kms_key_arn = stringVariable "Optional KMS key ARN for SecretSpec-managed restic secrets." null;
+    application_backup_secret_arns = {
+      description = "Exact SecretSpec-managed restic secret ARNs keyed by node role.";
+      type = "map(list(string))";
+      default = {
+        controller = [];
+        worker = [];
+      };
+    };
     flow_log_retention_days = numberVariable "Rejected flow-log retention." 30;
     flow_log_traffic_type = stringVariable "VPC flow traffic type." "REJECT";
     secret_recovery_window_in_days = numberVariable "Secrets Manager deletion recovery window." 30;
@@ -257,6 +268,10 @@ in {
     instance_management = {
       count = tf "var.enable_instance_management ? 1 : 0";
       source = "${moduleRoot}/instance-management";
+      application_backup_bucket_arn = tf "var.application_backup_bucket_arn";
+      application_backup_bucket_kms_key_arn = tf "var.application_backup_bucket_kms_key_arn";
+      application_backup_secret_arns = tf "var.application_backup_secret_arns";
+      application_backup_secret_kms_key_arn = tf "var.application_backup_secret_kms_key_arn";
       controller_policies = tf "merge(var.enable_runtime_secrets ? { runtime_secrets = module.runtime_secrets[0].controller_policy_arn } : {}, var.enable_openbao ? { openbao_unseal = aws_iam_policy.openbao_unseal[0].arn } : {})";
       ecr_repository_arns = tf "module.registry.repository_arns";
       environment = tf "var.environment";
@@ -376,6 +391,9 @@ in {
   output = {
     account_security_baseline = {
       value = tf "var.enable_account_security_baseline ? module.account_security_baseline[0].summary : null";
+    };
+    application_backup_access = {
+      value = tf "var.enable_instance_management ? module.instance_management[0].application_backup_access : null";
     };
     account_cost_budget_arn = {
       value = tf "var.enable_account_cost_budget ? module.account_cost_budget[0].arn : null";
