@@ -9,13 +9,13 @@ on:
         type: boolean
         default: true
       controller_url:
-        description: Optional public HTTPS URL for the Coolify controller
-        required: false
+        description: Public HTTPS URL for the Coolify controller
+        required: true
         type: string
         default: ""
       worker_url:
-        description: Optional public HTTPS URL for a worker-hosted application
-        required: false
+        description: Public HTTPS URL for a worker-hosted application
+        required: true
         type: string
         default: ""
 
@@ -71,8 +71,14 @@ jobs:
         env:
           AWS_REGION: us-east-2
           DEPLOYMENT_CONTROLLER_URL: ${{ inputs.controller_url }}
+          DEPLOYMENT_CONTROLLER_AMI_ID: ${{ vars.PRODUCTION_CONTROLLER_AMI_ID }}
+          DEPLOYMENT_CONTROLLER_IMAGE_DIGEST: ${{ vars.PRODUCTION_CONTROLLER_IMAGE_DIGEST }}
           DEPLOYMENT_ENROLL_WORKER: ${{ inputs.enroll_worker }}
           DEPLOYMENT_ENVIRONMENT: production
           DEPLOYMENT_PROJECT: lucidity
+          DEPLOYMENT_REQUIRE_HTTPS: "true"
+          DEPLOYMENT_REQUIRE_RELEASE_IDENTITY: "true"
+          DEPLOYMENT_WORKER_AMI_ID: ${{ vars.PRODUCTION_WORKER_AMI_ID }}
+          DEPLOYMENT_WORKER_IMAGE_DIGEST: ${{ vars.PRODUCTION_WORKER_IMAGE_DIGEST }}
           DEPLOYMENT_WORKER_URL: ${{ inputs.worker_url }}
         run: nix run .#validate-deployment

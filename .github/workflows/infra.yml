@@ -1,0 +1,166 @@
+name: Plan and apply production infrastructure
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/infra.yml"
+      - "flake.lock"
+      - "flake.nix"
+      - "nix/infra/**"
+      - "nix/pkgs/lucidity.nix"
+      - "nix/pkgs/lucidity.sh"
+      - "tofu/**"
+  workflow_dispatch:
+
+concurrency:
+  group: lucidity-production-infra-${{ github.event_name == 'workflow_dispatch' && 'apply' || github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-east-2
+  NIX_CACHE_WRITE: ${{ github.event_name == 'merge_group' || github.event_name == 'release' || github.event_name == 'schedule' || github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+
+jobs:
+  plan:
+    name: Create reviewable saved plan
+    if: vars.AWS_INFRA_PLAN_ROLE_ARN != '' && vars.AWS_STATE_BUCKET_NAME != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout the exact plan source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install locked Nix
+        uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
+        with:
+          kvm: true
+
+      - name: Require the Cachix write token for trusted events
+        if: env.NIX_CACHE_WRITE == 'true'
+        env:
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        run: test -n "${CACHIX_AUTH_TOKEN}" || { echo '::error::CACHIX_AUTH_TOKEN is required for trusted cache-writing events'; exit 1; }
+
+      - name: Configure the public Lucidity Nix cache
+        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71
+        with:
+          name: lucidity
+          authToken: ${{ env.NIX_CACHE_WRITE == 'true' && secrets.CACHIX_AUTH_TOKEN || '' }}
+          skipPush: ${{ env.NIX_CACHE_WRITE != 'true' }}
+          pushFilter: lucidity-(controller|worker)-bootc-context
+
+      - name: Configure read-only planning credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          allowed-account-ids: 467590374785
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_INFRA_PLAN_ROLE_ARN }}
+          role-duration-seconds: 1800
+          role-session-name: lucidity-infra-plan-${{ github.run_id }}
+
+      - name: Write the non-secret remote-state coordinates
+        env:
+          STATE_BUCKET: ${{ vars.AWS_STATE_BUCKET_NAME }}
+        run: |
+          install -d -m 0700 .lucidity
+          printf 'bucket = "%s"\nkey = "lucidity/production/terraform.tfstate"\nregion = "us-east-2"\nencrypt = true\nuse_lockfile = true\n' "${STATE_BUCKET}" >.lucidity/backend.aws.s3.tfbackend
+
+      - name: Create the saved production plan
+        run: nix run .#infra -- plan -input=false -lock-timeout=5m -out=production.tfplan
+
+      - name: Produce an integrity record and redacted review summary
+        run: |
+          plan=.lucidity/tofu/aws/production.tfplan
+          sha256sum "${plan}" >production.tfplan.sha256
+          nix run .#infra -- show -json "${plan}" |
+            jq '{format_version,terraform_version,resource_changes:[.resource_changes[] | {address,module_address,mode,type,name,change:{actions:.change.actions}}]}' \
+              >production-plan-summary.json
+          jq -r '.resource_changes[] | "- `\(.address)`: `\(.change.actions | join(", "))`"' production-plan-summary.json >>"${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload the exact plan and redacted summary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: production-plan-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            .lucidity/tofu/aws/production.tfplan
+            production.tfplan.sha256
+            production-plan-summary.json
+          retention-days: 1
+
+  apply:
+    name: Apply the approved saved plan
+    needs: plan
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    environment: production
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout the exact planned source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install locked Nix
+        uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
+        with:
+          kvm: true
+
+      - name: Require the Cachix write token
+        env:
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        run: test -n "${CACHIX_AUTH_TOKEN}" || { echo '::error::CACHIX_AUTH_TOKEN is required for trusted cache-writing events'; exit 1; }
+
+      - name: Configure the public Lucidity Nix cache
+        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71
+        with:
+          name: lucidity
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          skipPush: false
+          pushFilter: lucidity-(controller|worker)-bootc-context
+
+      - name: Configure protected apply credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          allowed-account-ids: 467590374785
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_INFRA_APPLY_ROLE_ARN }}
+          role-duration-seconds: 2700
+          role-session-name: lucidity-infra-apply-${{ github.run_id }}
+
+      - name: Download the exact saved plan
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: production-plan-${{ github.sha }}
+          path: .
+
+      - name: Verify plan integrity and configure remote state
+        env:
+          STATE_BUCKET: ${{ vars.AWS_STATE_BUCKET_NAME }}
+        run: |
+          sha256sum --check production.tfplan.sha256
+          install -d -m 0700 .lucidity
+          printf 'bucket = "%s"\nkey = "lucidity/production/terraform.tfstate"\nregion = "us-east-2"\nencrypt = true\nuse_lockfile = true\n' "${STATE_BUCKET}" >.lucidity/backend.aws.s3.tfbackend
+
+      - name: Apply only the approved saved plan
+        run: nix run .#infra -- apply "$PWD/.lucidity/tofu/aws/production.tfplan" -input=false -auto-approve
+
+      - name: Validate the deployed singleton
+        env:
+          DEPLOYMENT_CONTROLLER_URL: ${{ vars.PRODUCTION_CONTROLLER_URL }}
+          DEPLOYMENT_CONTROLLER_AMI_ID: ${{ vars.PRODUCTION_CONTROLLER_AMI_ID }}
+          DEPLOYMENT_CONTROLLER_IMAGE_DIGEST: ${{ vars.PRODUCTION_CONTROLLER_IMAGE_DIGEST }}
+          DEPLOYMENT_ENVIRONMENT: production
+          DEPLOYMENT_PROJECT: lucidity
+          DEPLOYMENT_REQUIRE_HTTPS: "true"
+          DEPLOYMENT_REQUIRE_RELEASE_IDENTITY: "true"
+          DEPLOYMENT_WORKER_AMI_ID: ${{ vars.PRODUCTION_WORKER_AMI_ID }}
+          DEPLOYMENT_WORKER_IMAGE_DIGEST: ${{ vars.PRODUCTION_WORKER_IMAGE_DIGEST }}
+          DEPLOYMENT_WORKER_URL: ${{ vars.PRODUCTION_WORKER_URL }}
+        run: nix run .#validate-deployment

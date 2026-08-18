@@ -39,7 +39,7 @@ case "${service} ${operation}" in
             --arg id "${instance_id}" \
             --arg ip "${private_ip}" \
             --arg volume "${volume_id}" \
-            '{InstanceId: $id, PrivateIpAddress: $ip, VpcId: "vpc-01111111111111111", Architecture: "x86_64", RootDeviceName: "/dev/xvda", State: {Name: "running"}, MetadataOptions: {HttpTokens: "required"}, BlockDeviceMappings: [{DeviceName: "/dev/xvda", Ebs: {VolumeId: $volume}}]}')
+            '{InstanceId: $id, ImageId: (if $id | contains("111111") then "ami-01111111111111111" else "ami-02222222222222222" end), PrivateIpAddress: $ip, VpcId: "vpc-01111111111111111", Architecture: "x86_64", RootDeviceName: "/dev/xvda", State: {Name: "running"}, MetadataOptions: {HttpTokens: "required"}, SecurityGroups: [{GroupId: (if $id | contains("111111") then "sg-01111111111111111" else "sg-02222222222222222" end)}], BlockDeviceMappings: [{DeviceName: "/dev/xvda", Ebs: {VolumeId: $volume}}]}')
         if [[ ${scenario} == duplicate-controller && ${role} == controller ]]; then
             jq -nc --argjson instance "${instance}" '{Reservations: [{Instances: [$instance, $instance]}]}'
         else
@@ -50,6 +50,13 @@ case "${service} ${operation}" in
         encrypted=true
         [[ ${scenario} == unencrypted ]] && encrypted=false
         jq -nc --argjson encrypted "${encrypted}" '{Volumes: [{Encrypted: $encrypted, State: "in-use"}]}'
+        ;;
+    "ec2 describe-security-groups")
+        if [[ ${scenario} == vpc-ssh-exposed ]]; then
+            jq -nc '{SecurityGroups: [{GroupId: "sg-01111111111111111", IpPermissions: [{IpProtocol: "tcp", FromPort: 22, ToPort: 22, IpRanges: [{CidrIp: "10.20.0.0/16"}]}]}, {GroupId: "sg-02222222222222222", IpPermissions: []}]}'
+        else
+            jq -nc '{SecurityGroups: [{GroupId: "sg-01111111111111111", IpPermissions: []}, {GroupId: "sg-02222222222222222", IpPermissions: []}]}'
+        fi
         ;;
     "ssm describe-instance-information")
         instance_id=$(argument_value --filters "$@")

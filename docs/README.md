@@ -14,6 +14,8 @@ design context, customization, operations, and reference material.
 - [Troubleshooting](guides/troubleshooting.md)
 - [Local VM validation](local-vm-validation.md)
 - [Operations and recovery](operations.md)
+- [Application backup and restore](guides/backup-and-restore.md)
+- [Production readiness roadmap](production-readiness.md)
 - [Controller and worker recovery](node-recovery.md)
 - [Production node monitoring](node-monitoring.md)
 - [Determinate Nix operations](determinate-nix.md)

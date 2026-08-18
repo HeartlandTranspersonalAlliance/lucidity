@@ -38,6 +38,8 @@
         AuthorizedKeysFile .ssh/authorized_keys
       '';
       "etc/lucidity/role" = "${role}\n";
+      "etc/lucidity/backup-target.env.example" = builtins.replaceStrings ["@ROLE@"] [role] cfg.files."etc/lucidity/backup-target.env.example";
+      "usr/libexec/lucidity/backup" = builtins.readFile ../../aspects/common/files/backup.sh;
       "usr/lib/lucidity/profile-path" = "${systemProfile}\n";
       "usr/lib/lucidity/home-activation-path" = "${homeActivation}\n";
       "usr/share/lucidity/nix-smoke/flake.nix" = builtins.readFile ../../../smoke/flake.nix;
@@ -61,6 +63,10 @@
         d /var/lib/nebula 0700 root root -
         d /var/lib/nix 0755 root root -
         d /var/lib/coolify 0700 root root -
+        d /var/lib/lucidity-backup 0700 root root -
+        d /var/lib/lucidity-backup/staging 0700 root root -
+        d /var/lib/lucidity-restore 0700 root root -
+        d /etc/lucidity/backup.d 0700 root root -
         d /var/usrlocal 0755 root root -
         d /var/usrlocal/bin 0755 root root -
         d /etc/coolify-worker 0700 root root -
@@ -284,6 +290,50 @@
         OnCalendar=daily
         Persistent=true
         RandomizedDelaySec=30m
+
+        [Install]
+        WantedBy=timers.target
+      '';
+      "usr/lib/systemd/system/lucidity-backup.service" = ''
+        [Unit]
+        Description=Back up Lucidity application data to an independent restic repository
+        Wants=network-online.target
+        After=network-online.target
+        ConditionPathExists=/etc/lucidity/backup-target.env
+        ${lib.optionalString isController "Requires=openbao.service\nAfter=openbao.service"}
+
+        [Service]
+        Type=oneshot
+        User=root
+        UMask=0077
+        ${lib.optionalString isController "LoadCredential=bao-token:/var/lib/openbao/backup-token"}
+        Environment=PATH=${systemProfile}/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        ExecStart=/usr/libexec/lucidity/backup run
+        LockPersonality=yes
+        NoNewPrivileges=yes
+        PrivateTmp=yes
+        ProtectClock=yes
+        ProtectControlGroups=yes
+        ProtectHome=read-only
+        ProtectHostname=yes
+        ProtectKernelLogs=yes
+        ProtectKernelModules=yes
+        ProtectKernelTunables=yes
+        ProtectSystem=strict
+        ReadWritePaths=/var/lib/lucidity-backup /var/lib/lucidity-restore ${lib.optionalString isController "/var/lib/openbao/snapshots"}
+        RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+        RestrictNamespaces=yes
+        RestrictRealtime=yes
+        SystemCallArchitectures=native
+      '';
+      "usr/lib/systemd/system/lucidity-backup.timer" = ''
+        [Unit]
+        Description=Daily Lucidity application-data backup
+
+        [Timer]
+        OnCalendar=*-*-* 03:30:00 UTC
+        Persistent=true
+        RandomizedDelaySec=15m
 
         [Install]
         WantedBy=timers.target
@@ -624,6 +674,7 @@
       "lucidity-admin-authorized-key.service"
       "nebula.service"
       "lucidity-nebula-expiry.timer"
+      "lucidity-backup.timer"
     ]
     ++ lib.optionals isController [
       "openbao.service"

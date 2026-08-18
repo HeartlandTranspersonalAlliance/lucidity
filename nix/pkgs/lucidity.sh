@@ -29,6 +29,8 @@ Usage: lucidity COMMAND [ARGUMENTS]
   ci benchmark resolve|verify-target
   ci audit-ami-resources
   ci validate-deployment
+  backup init|run|check
+  backup restore SNAPSHOT DESTINATION
   infra plan [OpenTofu arguments]
   infra apply SAVED_PLAN [OpenTofu apply arguments]
   infra output [OpenTofu output arguments]
@@ -1445,6 +1447,10 @@ case "$command" in
     ami) ami_command "$@" ;;
     vm) vm_command "$@" ;;
     ci) ci_command "$@" ;;
+    backup)
+        [[ -x /usr/libexec/lucidity/backup ]] || die "backup runtime is unavailable on this host"
+        exec /usr/libexec/lucidity/backup "$@"
+        ;;
     infra) infra "$@" ;;
     state) state "$@" ;;
     secrets) secrets_command "$@" ;;

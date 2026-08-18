@@ -54,6 +54,9 @@ in {
           .variable.cloudflare_zone_id.default = null |
           .variable.github_oidc_provider_arn.default = null |
           .variable.root_volume_kms_key_arn.default = null
+          | .variable.application_backup_bucket_arn.default = null
+          | .variable.application_backup_bucket_kms_key_arn.default = null
+          | .variable.application_backup_secret_kms_key_arn.default = null
         ' ${config.terranix.terranixConfigurations.aws.result.terraformConfiguration} > "$out"
       '';
     awsProductionVars = pkgs.writeText "lucidity-production.auto.tfvars.json" (

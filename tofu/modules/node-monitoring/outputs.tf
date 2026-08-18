@@ -25,22 +25,30 @@ output "notification_kms_key_arn" {
 output "settings" {
   description = "Auditable alarm thresholds and evaluation windows."
   value = {
+    backup_job_failures = {
+      event_rule_name = aws_cloudwatch_event_rule.backup_job_failure.name
+      states          = ["ABORTED", "EXPIRED", "FAILED", "PARTIAL"]
+      vault_name      = "${var.project_name}-${var.environment}-node-backups"
+    }
     high_cpu = {
       datapoints_to_alarm = 3
       evaluation_periods  = 5
       period_seconds      = 300
       threshold_percent   = var.high_cpu_threshold_percent
+      treat_missing_data  = "notBreaching"
     }
     low_cpu_credit = {
       datapoints_to_alarm = 2
       evaluation_periods  = 3
       period_seconds      = 300
       threshold           = var.low_cpu_credit_threshold
+      treat_missing_data  = "notBreaching"
     }
     status_check = {
       datapoints_to_alarm = 2
       evaluation_periods  = 3
       period_seconds      = 60
+      treat_missing_data  = "breaching"
     }
   }
 }
