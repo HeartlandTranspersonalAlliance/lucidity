@@ -24,8 +24,10 @@ Usage: lucidity COMMAND [ARGUMENTS]
   ci ecr resolve ROLE REPOSITORY_URL IMAGE_TAG
   ci ecr push IMAGE_REF
   ci ecr verify IMAGE_REF REPOSITORY_NAME IMAGE_TAG
+  ci ecr pin-local IMAGE_REF DIGEST
   ci ecr logout REGISTRY
   ci ami resolve|pull|validate-inputs
+  ci timing summarize LABEL STARTED_AT [BASELINE_SECONDS]
   ci benchmark resolve|verify-target
   ci audit-ami-resources
   ci validate-deployment
@@ -52,7 +54,7 @@ Usage: lucidity COMMAND [ARGUMENTS]
   mesh revoke FINGERPRINT
   mesh rotate
   release local
-  release prepare auto|patch|minor|major
+  release prepare auto|patch|minor|major [SOURCE_SHA]
   release image controller|worker REPOSITORY_URL RELEASE_TAG SOURCE_SHA
   release inventory RELEASE_TAG
   release manifest RELEASE_TAG VERSION SOURCE_SHA
@@ -698,12 +700,58 @@ ci_ecr_verify() {
     if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then
         printf '%s published as %s\n' "$image_ref" "$remote_digest" >>"$GITHUB_STEP_SUMMARY"
     fi
+    if [[ -n ${GITHUB_OUTPUT:-} ]]; then
+        printf 'digest=%s\n' "$remote_digest" >>"$GITHUB_OUTPUT"
+    fi
+}
+
+ci_ecr_pin_local() {
+    image_ref=${1:-}
+    digest=${2:-}
+    [[ $image_ref =~ ^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[a-z0-9]+([._/-][a-z0-9]+)*:sha-[0-9a-f]{40}$ && $digest =~ ^sha256:[0-9a-f]{64}$ && $# -eq 2 ]] ||
+        die "ci ecr pin-local requires an immutable ECR IMAGE_REF and DIGEST"
+    immutable_ref=${image_ref%:*}@$digest
+    docker pull "$immutable_ref"
+    [[ $(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$immutable_ref") == linux/amd64 ]] ||
+        die "verified local ECR image is not linux/amd64"
+    if [[ -n ${GITHUB_ENV:-} ]]; then
+        printf 'VERIFIED_IMAGE_REF=%s\n' "$immutable_ref" >>"$GITHUB_ENV"
+    else
+        printf '%s\n' "$immutable_ref"
+    fi
 }
 
 ci_ecr_logout() {
     registry=${1:-}
     [[ -n $registry && $# -eq 1 ]] || die "ci ecr logout requires REGISTRY"
     docker logout "$registry"
+}
+
+ci_timing_summarize() {
+    label=${1:-}
+    started_at=${2:-}
+    baseline=${3:-}
+    [[ -n $label && $started_at =~ ^[0-9]+$ && ($# -eq 2 || ($# -eq 3 && $baseline =~ ^[0-9]+$)) ]] ||
+        die "ci timing summarize requires LABEL STARTED_AT and an optional BASELINE_SECONDS"
+    finished_at=$(date +%s)
+    elapsed=$((finished_at - started_at))
+    ((elapsed >= 0)) || die "ci timing summarize received a future start time"
+    if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then
+        {
+            printf '### %s performance\n\n' "$label"
+            printf -- '- Observed: %ss\n' "$elapsed"
+            if [[ -n $baseline ]]; then
+                difference=$((baseline - elapsed))
+                if ((difference >= 0)); then
+                    printf -- '- Baseline: %ss (%ss faster)\n' "$baseline" "$difference"
+                else
+                    printf -- '- Baseline: %ss (%ss slower)\n' "$baseline" "$((-difference))"
+                fi
+            fi
+        } >>"$GITHUB_STEP_SUMMARY"
+    else
+        printf '%s: %ss\n' "$label" "$elapsed"
+    fi
 }
 
 ci_ami_resolve() {
@@ -878,8 +926,9 @@ ci_command() {
                 resolve) ci_ecr_resolve "$@" ;;
                 push) ci_ecr_push "$@" ;;
                 verify) ci_ecr_verify "$@" ;;
+                pin-local) ci_ecr_pin_local "$@" ;;
                 logout) ci_ecr_logout "$@" ;;
-                *) die "ci ecr requires resolve, push, verify, or logout" ;;
+                *) die "ci ecr requires resolve, push, verify, pin-local, or logout" ;;
             esac
             ;;
         ami)
@@ -903,7 +952,16 @@ ci_command() {
                 *) die "ci benchmark requires resolve or verify-target" ;;
             esac
             ;;
-        *) die "ci requires cache, ecr, ami, benchmark, build-tools-image, audit-ami-resources, or validate-deployment" ;;
+        timing)
+            shift
+            action=${1:-}
+            shift || true
+            case "$action" in
+                summarize) ci_timing_summarize "$@" ;;
+                *) die "ci timing requires summarize" ;;
+            esac
+            ;;
+        *) die "ci requires cache, ecr, ami, benchmark, timing, build-tools-image, audit-ami-resources, or validate-deployment" ;;
     esac
 }
 
@@ -927,12 +985,6 @@ prepare_infra() {
         backend_args=(-backend=false)
     fi
     ln -sfn "$production_vars" "$workdir/production.auto.tfvars.json"
-}
-
-ses_plan_none() {
-    aws sesv2 put-account-pricing-attributes --pricing-plan NONE
-    current=$(aws sesv2 get-account --query 'PricingAttributes.CurrentPlan' --output text)
-    [[ $current == NONE ]] || die "SES pricing plan verification returned $current"
 }
 
 infra() {
@@ -973,7 +1025,6 @@ infra() {
         die "plan contains $deletions deletion(s); review the mesh and ingress cutover, then set LUCIDITY_ALLOW_DELETIONS=1"
     fi
     tofu -chdir="$workdir" apply "$@" "$saved_plan"
-    ses_plan_none
 }
 
 prepare_state() {
@@ -1205,16 +1256,36 @@ release_local() {
 
 release_prepare() {
     requested_bump=${1:-}
-    [[ $requested_bump =~ ^(auto|patch|minor|major)$ && $# -eq 1 ]] ||
-        die "release prepare requires auto, patch, minor, or major"
+    requested_source_sha=${2:-}
+    [[ $requested_bump =~ ^(auto|patch|minor|major)$ && ($# -eq 1 || $# -eq 2) ]] ||
+        die "release prepare requires auto, patch, minor, or major and an optional source SHA"
     root=$(repository_root)
     [[ ${GITHUB_REF:-refs/heads/main} == refs/heads/main ]] || die "releases may run only from main"
-    seed_version=$(<"$root/VERSION")
-    [[ $seed_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "VERSION must contain X.Y.Z"
-    source_sha=$(git -C "$root" rev-parse HEAD)
-    if [[ -n ${GITHUB_SHA:-} && $source_sha != "$GITHUB_SHA" ]]; then
+    tooling_sha=$(git -C "$root" rev-parse HEAD)
+    if [[ -n ${GITHUB_SHA:-} && $tooling_sha != "$GITHUB_SHA" ]]; then
         die "checkout does not match the dispatched commit"
     fi
+    source_sha=$tooling_sha
+    if [[ -n $requested_source_sha ]]; then
+        [[ $requested_source_sha =~ ^[0-9a-f]{40}$ ]] || die "release source SHA must be a full lowercase Git SHA"
+        source_sha=$(git -C "$root" rev-parse --verify "$requested_source_sha^{commit}" 2>/dev/null) ||
+            die "release source SHA does not resolve to a commit"
+        git -C "$root" merge-base --is-ancestor "$source_sha" "$tooling_sha" ||
+            die "release source SHA must be an ancestor of the dispatched main commit"
+        mapfile -t resume_changes < <(git -C "$root" diff --name-only "$source_sha..$tooling_sha")
+        for changed_path in "${resume_changes[@]}"; do
+            case "$changed_path" in
+                .github/workflows/release.yml | CHANGELOG.md | docs/reference/ci-and-caching.md | docs/reference/releases.md | nix/flake/checks.nix | nix/pkgs/lucidity.sh) ;;
+                *) die "release resume includes non-tooling path: $changed_path" ;;
+            esac
+        done
+    fi
+    seed_version=$(git -C "$root" show "$source_sha:VERSION")
+    [[ $seed_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "VERSION must contain X.Y.Z"
+    git -C "$root" show "$source_sha:README.md" | grep -Fq "Current version: **$seed_version**" ||
+        die "release source README does not match VERSION"
+    git -C "$root" show "$source_sha:CHANGELOG.md" | grep -Fq "## [$seed_version] - " ||
+        die "release source changelog does not contain the prepared version"
 
     last_tag=$(git -C "$root" tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname |
         grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)
@@ -1222,15 +1293,15 @@ release_prepare() {
         version=$seed_version
         selected_bump=initial
     else
-        [[ $(git -C "$root" rev-list --count "$last_tag..HEAD") -gt 0 ]] ||
+        [[ $(git -C "$root" rev-list --count "$last_tag..$source_sha") -gt 0 ]] ||
             die "no commits exist after $last_tag"
-        git -C "$root" merge-base --is-ancestor "$last_tag" HEAD ||
-            die "latest release tag $last_tag is not an ancestor of main"
+        git -C "$root" merge-base --is-ancestor "$last_tag" "$source_sha" ||
+            die "latest release tag $last_tag is not an ancestor of the release source"
         base_version=${last_tag#v}
         IFS=. read -r major minor patch <<<"$base_version"
         selected_bump=$requested_bump
         if [[ $selected_bump == auto ]]; then
-            release_log=$(git -C "$root" log "$last_tag..HEAD" --format='%s%n%b')
+            release_log=$(git -C "$root" log "$last_tag..$source_sha" --format='%s%n%b')
             if grep -Eq '(^[[:alnum:]-]+(\([^)]*\))?!:)|(^BREAKING[ -]CHANGE:)' <<<"$release_log"; then
                 selected_bump="major"
             elif grep -Eq '^feat(\([^)]*\))?:' <<<"$release_log"; then
@@ -1256,7 +1327,8 @@ release_prepare() {
         die "Git tag $tag already exists without a resumable draft release"
     fi
     if [[ -n ${GITHUB_OUTPUT:-} ]]; then
-        printf 'source_sha=%s\ntag=%s\nversion=%s\n' "$source_sha" "$tag" "$version" >>"$GITHUB_OUTPUT"
+        printf 'source_sha=%s\ntag=%s\ntooling_sha=%s\nversion=%s\n' \
+            "$source_sha" "$tag" "$tooling_sha" "$version" >>"$GITHUB_OUTPUT"
     fi
     printf 'Selected %s with a %s bump from %s\n' "$tag" "$selected_bump" "${last_tag:-VERSION seed}"
 }
@@ -1327,7 +1399,8 @@ release_image() {
         '{role:$role,repository:$repository,source_tag:$source_tag,release_tag:$release_tag,digest:$digest,sbom_asset:$sbom_asset,sbom_sha256:$sbom_sha256,sbom_asset_sha256:$sbom_asset_sha256}' \
         >"$release_dir/$role.metadata.json"
     if [[ -n ${GITHUB_OUTPUT:-} ]]; then
-        printf 'digest=%s\npath=%s\nrepository_name=%s\n' "$source_digest" "$sbom_path" "$repository_name" >>"$GITHUB_OUTPUT"
+        printf 'digest=%s\npath=%s\nrepository_name=%s\nsbom_sha256=%s\n' \
+            "$source_digest" "$sbom_path" "$repository_name" "$sbom_sha256" >>"$GITHUB_OUTPUT"
     fi
 }
 

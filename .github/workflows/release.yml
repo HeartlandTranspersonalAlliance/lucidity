@@ -13,6 +13,11 @@ on:
           - minor
           - major
         default: auto
+      source_sha:
+        description: Optional exact ancestor to resume after a release-tool-only main hotfix
+        required: false
+        type: string
+        default: ""
 
 concurrency:
   group: lucidity-release
@@ -36,9 +41,10 @@ jobs:
     outputs:
       source_sha: ${{ steps.version.outputs.source_sha }}
       tag: ${{ steps.version.outputs.tag }}
+      tooling_sha: ${{ steps.version.outputs.tooling_sha }}
       version: ${{ steps.version.outputs.version }}
     steps:
-      - name: Checkout release source
+      - name: Checkout dispatched release tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
@@ -67,33 +73,20 @@ jobs:
       - name: Calculate and validate the semantic version
         id: version
         env:
+          RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}
           REQUESTED_BUMP: ${{ inputs.bump }}
-        run: nix run .#release -- prepare "${REQUESTED_BUMP}"
+        run: nix run .#release -- prepare "${REQUESTED_BUMP}" "${RELEASE_SOURCE_SHA}"
 
-  candidate:
-    name: Require immutable candidates
+  roles:
+    name: Build, promote, and retain ${{ matrix.role }}
     needs: prepare
-    permissions:
-      contents: read
-      id-token: write
-      packages: write
-    uses: ./.github/workflows/publish.yml
-    with:
-      source_sha: ${{ needs.prepare.outputs.source_sha }}
-    secrets:
-      CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
-
-  images:
-    name: Promote and inventory ${{ matrix.role }}
-    needs:
-      - prepare
-      - candidate
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 180
     permissions:
       attestations: write
       contents: read
       id-token: write
+      packages: write
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -101,14 +94,21 @@ jobs:
         include:
           - role: controller
             repository_url: ${{ vars.AWS_ECR_CONTROLLER_REPOSITORY_URL }}
+            test_instance_profile: ${{ vars.AWS_AMI_TEST_CONTROLLER_INSTANCE_PROFILE_NAME }}
+            test_security_group: ${{ vars.AWS_AMI_TEST_CONTROLLER_SECURITY_GROUP_ID }}
           - role: worker
             repository_url: ${{ vars.AWS_ECR_WORKER_REPOSITORY_URL }}
+            test_instance_profile: ${{ vars.AWS_AMI_TEST_WORKER_INSTANCE_PROFILE_NAME }}
+            test_security_group: ${{ vars.AWS_AMI_TEST_WORKER_SECURITY_GROUP_ID }}
     steps:
-      - name: Checkout release source
+      - name: Initialize release AMI cache report
+        run: echo "ROLE_STARTED_AT=$(date +%s)" >>"${GITHUB_ENV}"
+
+      - name: Checkout validated release tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-          ref: ${{ needs.prepare.outputs.source_sha }}
+          ref: ${{ needs.prepare.outputs.tooling_sha }}
 
       - name: Install locked Nix
         uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
@@ -129,7 +129,7 @@ jobs:
           skipPush: ${{ env.NIX_CACHE_WRITE != 'true' }}
           pushFilter: lucidity-(controller|worker)-bootc-context
 
-      - name: Configure short-lived ECR credentials
+      - name: Configure short-lived ECR publisher credentials
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
           allowed-account-ids: 467590374785
@@ -137,6 +137,50 @@ jobs:
           role-to-assume: ${{ vars.AWS_ECR_PUBLISH_ROLE_ARN }}
           role-duration-seconds: 3600
           role-session-name: lucidity-release-${{ github.run_id }}-${{ matrix.role }}
+
+      - name: Resolve the immutable candidate and authenticate ECR
+        id: candidate
+        env:
+          IMAGE_TAG: sha-${{ needs.prepare.outputs.source_sha }}
+          PUBLISH_ROLE_ARN: ${{ vars.AWS_ECR_PUBLISH_ROLE_ARN }}
+          REPOSITORY_URL: ${{ matrix.repository_url }}
+          ROLE: ${{ matrix.role }}
+        run: nix run .#ci -- ecr resolve "${ROLE}" "${REPOSITORY_URL}" "${IMAGE_TAG}"
+
+      - id: role-cache
+        name: Authenticate to GHCR and restore the role-scoped cache
+        env:
+          GHCR_CACHE_WRITE: true
+          GITHUB_TOKEN: ${{ github.token }}
+        run: nix run .#ci -- cache configure "${{ matrix.role }}"
+
+      - name: Build and validate the local AMD64 candidate
+        env:
+          ARCH: amd64
+          CONTAINER_ENGINE: docker
+          IMAGE_NAME: ${{ steps.candidate.outputs.image_ref }}
+          IMAGE_VERSION: sha-${{ needs.prepare.outputs.source_sha }}
+        run: nix run .#build-${{ matrix.role }}
+
+      - name: Publish the immutable candidate when absent
+        if: steps.candidate.outputs.exists != 'true'
+        env:
+          IMAGE_REF: ${{ steps.candidate.outputs.image_ref }}
+        run: nix run .#ci -- ecr push "${IMAGE_REF}"
+
+      - name: Verify the remote candidate digest and architecture
+        id: verified
+        env:
+          IMAGE_REF: ${{ steps.candidate.outputs.image_ref }}
+          IMAGE_TAG: sha-${{ needs.prepare.outputs.source_sha }}
+          REPOSITORY_NAME: ${{ steps.candidate.outputs.repository_name }}
+        run: nix run .#ci -- ecr verify "${IMAGE_REF}" "${REPOSITORY_NAME}" "${IMAGE_TAG}"
+
+      - name: Pin the local candidate to the verified ECR digest
+        env:
+          IMAGE_REF: ${{ steps.candidate.outputs.image_ref }}
+          SOURCE_IMAGE_DIGEST: ${{ steps.verified.outputs.digest }}
+        run: nix run .#ci -- ecr pin-local "${IMAGE_REF}" "${SOURCE_IMAGE_DIGEST}"
 
       - name: Promote the immutable image and generate its SBOM
         id: image
@@ -155,6 +199,77 @@ jobs:
           predicate-type: https://spdx.dev/Document/v2.3
           predicate-path: ${{ steps.image.outputs.path }}
 
+      - name: Initialize raw AMI cache report
+        run: echo "AMI_STARTED_AT=$(date +%s)" >>"${GITHUB_ENV}"
+
+      - id: tooling-cache
+        name: Restore the tooling-image cache
+        env:
+          GHCR_CACHE_WRITE: true
+          GITHUB_TOKEN: ${{ github.token }}
+        run: nix run .#ci -- cache configure ci-tools
+
+      - name: Build pinned image tooling
+        env:
+          CI_TOOLS_IMAGE: localhost/coolify-aws-ci-tools:release
+          CONTAINER_ENGINE: docker
+        run: nix run .#ci -- build-tools-image
+
+      - name: Build the raw AMI artifact from the verified local image
+        env:
+          CONTAINER_ENGINE: docker
+          IMAGE_NAME: ${{ env.VERIFIED_IMAGE_REF }}
+          VM_TOOL_IMAGE: localhost/coolify-aws-ci-tools:release
+        run: nix run .#disk -- build "${{ matrix.role }}" ami
+
+      - name: Validate the raw AMI artifact locally
+        env:
+          CONTAINER_ENGINE: docker
+          VM_TOOL_IMAGE: localhost/coolify-aws-ci-tools:release
+        run: nix run .#disk -- validate "image-output/${{ matrix.role }}/coolify-${{ matrix.role }}-ami.raw"
+
+      - name: Require complete retained-AMI inputs
+        env:
+          AMI_LIFECYCLE: retained
+          AMI_ROLE: ${{ matrix.role }}
+          ECR_REPOSITORY_URL: ${{ matrix.repository_url }}
+          IMPORT_ROLE_ARN: ${{ vars.AWS_AMI_IMPORT_ROLE_ARN }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.tag }}
+          RUN_AWS_LAUNCH: true
+          RUN_AWS_VALIDATION: true
+          SBOM_SHA256: ${{ steps.image.outputs.sbom_sha256 }}
+          SNAPSHOT_KMS_KEY_ARN: ${{ vars.AWS_AMI_SNAPSHOT_KMS_KEY_ARN }}
+          SOURCE_IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          TEST_INSTANCE_PROFILE: ${{ matrix.test_instance_profile }}
+          TEST_SECURITY_GROUP: ${{ matrix.test_security_group }}
+          TEST_SUBNET: ${{ vars.AWS_AMI_TEST_SUBNET_ID }}
+        run: nix run .#ci -- ami validate-inputs
+
+      - name: Configure short-lived AMI validation credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          allowed-account-ids: 467590374785
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_AMI_IMPORT_ROLE_ARN }}
+          role-duration-seconds: 10800
+          role-session-name: lucidity-release-ami-${{ github.run_id }}-${{ matrix.role }}
+
+      - name: Retain and boot-validate the AMI
+        env:
+          AMI_EXPECTED_BOOTC_IMAGE_REF: ${{ env.VERIFIED_IMAGE_REF }}
+          AMI_LAUNCH_VALIDATION: true
+          AMI_LIFECYCLE: retained
+          AMI_RELEASE_VERSION: ${{ needs.prepare.outputs.tag }}
+          AMI_SBOM_SHA256: ${{ steps.image.outputs.sbom_sha256 }}
+          AMI_SNAPSHOT_KMS_KEY_ARN: ${{ vars.AWS_AMI_SNAPSHOT_KMS_KEY_ARN }}
+          AMI_SOURCE_IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          AMI_SOURCE_REVISION: ${{ needs.prepare.outputs.source_sha }}
+          AMI_TEST_INSTANCE_PROFILE_NAME: ${{ matrix.test_instance_profile }}
+          AMI_TEST_INSTANCE_TYPE: t3a.small
+          AMI_TEST_SECURITY_GROUP_ID: ${{ matrix.test_security_group }}
+          AMI_TEST_SUBNET_ID: ${{ vars.AWS_AMI_TEST_SUBNET_ID }}
+        run: nix run .#ami -- validate "image-output/${{ matrix.role }}/coolify-${{ matrix.role }}-ami.raw"
+
       - name: Upload release inventory
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -163,11 +278,29 @@ jobs:
           path: release/
           retention-days: 7
 
+      - name: Remove ECR login
+        if: always() && steps.candidate.outputs.registry != ''
+        env:
+          REGISTRY: ${{ steps.candidate.outputs.registry }}
+        run: nix run .#ci -- ecr logout "${REGISTRY}"
+
+      - name: Remove GHCR login and BuildKit builder
+        if: always() && (steps.role-cache.outcome != 'skipped' || steps.tooling-cache.outcome != 'skipped')
+        run: nix run .#ci -- cache cleanup
+
+      - name: Summarize same-runner release performance
+        if: always()
+        run: nix run .#ci -- timing summarize "${{ matrix.role }} same-runner release" "${ROLE_STARTED_AT}"
+
+      - name: Compare raw AMI work with the split-runner baseline
+        if: always() && env.AMI_STARTED_AT != ''
+        run: nix run .#ci -- timing summarize "${{ matrix.role }} raw AMI" "${AMI_STARTED_AT}" 611
+
   inventory:
     name: Validate role release inventories
     needs:
       - prepare
-      - images
+      - roles
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -177,11 +310,11 @@ jobs:
       worker_digest: ${{ steps.inventory.outputs.worker_digest }}
       worker_sbom_sha256: ${{ steps.inventory.outputs.worker_sbom_sha256 }}
     steps:
-      - name: Checkout release source
+      - name: Checkout validated release tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-          ref: ${{ needs.prepare.outputs.source_sha }}
+          ref: ${{ needs.prepare.outputs.tooling_sha }}
 
       - name: Install locked Nix
         uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
@@ -215,68 +348,24 @@ jobs:
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         run: nix run .#release -- inventory "${RELEASE_TAG}"
 
-  controller-ami:
-    name: Retain and validate controller AMI
-    needs:
-      - prepare
-      - inventory
-    permissions:
-      contents: read
-      id-token: write
-      packages: write
-    uses: ./.github/workflows/ami.yml
-    with:
-      ami_role: controller
-      run_aws_validation: true
-      ami_lifecycle: retained
-      run_aws_launch: true
-      release_version: ${{ needs.prepare.outputs.tag }}
-      source_image_digest: ${{ needs.inventory.outputs.controller_digest }}
-      sbom_sha256: ${{ needs.inventory.outputs.controller_sbom_sha256 }}
-    secrets:
-      CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
-
-  worker-ami:
-    name: Retain and validate worker AMI
-    needs:
-      - prepare
-      - inventory
-    permissions:
-      contents: read
-      id-token: write
-      packages: write
-    uses: ./.github/workflows/ami.yml
-    with:
-      ami_role: worker
-      run_aws_validation: true
-      ami_lifecycle: retained
-      run_aws_launch: true
-      release_version: ${{ needs.prepare.outputs.tag }}
-      source_image_digest: ${{ needs.inventory.outputs.worker_digest }}
-      sbom_sha256: ${{ needs.inventory.outputs.worker_sbom_sha256 }}
-    secrets:
-      CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
-
   release:
     name: Publish immutable release
     needs:
       - prepare
-      - images
+      - roles
       - inventory
-      - controller-ami
-      - worker-ami
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: write
       id-token: write
     steps:
-      - name: Checkout release source
+      - name: Checkout validated release tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ needs.prepare.outputs.source_sha }}
+          ref: ${{ needs.prepare.outputs.tooling_sha }}
 
       - name: Install locked Nix
         uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
