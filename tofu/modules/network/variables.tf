@@ -106,6 +106,17 @@ variable "flow_log_traffic_type" {
   }
 }
 
+variable "nebula_udp_port" {
+  description = "Public UDP port used by the controller lighthouse and relay."
+  type        = number
+  default     = 4242
+
+  validation {
+    condition     = var.nebula_udp_port >= 1 && var.nebula_udp_port <= 65535
+    error_message = "The Nebula UDP port must be between 1 and 65535."
+  }
+}
+
 variable "tags" {
   description = "Additional tags applied to network resources."
   type        = map(string)

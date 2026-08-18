@@ -50,7 +50,7 @@ output "security_group_ids" {
 
 output "flow_log_id" {
   description = "VPC Flow Log ID."
-  value       = aws_flow_log.this.id
+  value       = aws_flow_log.rejected.id
 }
 
 output "flow_log_group_name" {
@@ -61,8 +61,8 @@ output "flow_log_group_name" {
 output "flow_log_settings" {
   description = "Cost and retention controls applied to VPC Flow Logs."
   value = {
-    max_aggregation_interval_seconds = aws_flow_log.this.max_aggregation_interval
+    max_aggregation_interval_seconds = aws_flow_log.rejected.max_aggregation_interval
     retention_days                   = aws_cloudwatch_log_group.flow_logs.retention_in_days
-    traffic_type                     = aws_flow_log.this.traffic_type
+    traffic_type                     = aws_flow_log.rejected.traffic_type
   }
 }

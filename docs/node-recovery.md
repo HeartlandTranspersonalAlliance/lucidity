@@ -40,10 +40,10 @@ enable_node_backups   = true
 After apply, record these outputs in the operational inventory:
 
 ```bash
-tofu -chdir=tofu/environments/aws output node_backup_vault_arn
-tofu -chdir=tofu/environments/aws output node_backup_plan_id
-tofu -chdir=tofu/environments/aws output node_restore_service_role_arn
-tofu -chdir=tofu/environments/aws output ec2_instance_ids
+nix run .#infra -- output node_backup_vault_arn
+nix run .#infra -- output node_backup_plan_id
+nix run .#infra -- output node_restore_service_role_arn
+nix run .#infra -- output ec2_instance_ids
 ```
 
 For each instance ARN, confirm a `COMPLETED` recovery point exists after the first

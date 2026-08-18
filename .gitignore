@@ -15,6 +15,8 @@
 *.tfbackend
 !*.tfbackend.example
 .terraform/
+.lucidity/
+generated/
 /tofu/bootstrap/state/backend.tf
 override.tf
 override.tf.json
@@ -27,6 +29,10 @@ image-output/
 *.qcow2
 *.raw
 *.vmdk
+
+# Local Nix build outputs
+/result
+/result-*
 
 # Editors and operating systems
 .idea/

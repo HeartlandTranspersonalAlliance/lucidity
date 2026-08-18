@@ -72,7 +72,10 @@ resource "aws_iam_role_policy" "ecr_pull" {
 }
 
 resource "aws_iam_role_policy_attachment" "controller_additional" {
-  for_each = var.controller_policy_arns
+  # The keys must be known while planning even when an ARN comes from a resource
+  # created in the same apply. Keying this resource by the ARN itself makes the
+  # dependency graph impossible to plan from an empty foundation.
+  for_each = var.controller_policies
 
   policy_arn = each.value
   role       = aws_iam_role.node["controller"].name

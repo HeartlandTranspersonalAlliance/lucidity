@@ -24,6 +24,7 @@ permissions:
 env:
   AWS_REGION: us-east-2
   GH_TOKEN: ${{ github.token }}
+  NIX_CACHE_WRITE: ${{ github.event_name == 'merge_group' || github.event_name == 'release' || github.event_name == 'schedule' || github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
 
 jobs:
   prepare:
@@ -44,63 +45,30 @@ jobs:
           persist-credentials: false
           ref: ${{ github.sha }}
 
-      - name: Calculate the semantic version
+      - name: Install locked Nix
+        uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
+        with:
+          kvm: true
+
+      - name: Require the Cachix write token for trusted events
+        if: env.NIX_CACHE_WRITE == 'true'
+        env:
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        run: test -n "${CACHIX_AUTH_TOKEN}" || { echo '::error::CACHIX_AUTH_TOKEN is required for trusted cache-writing events'; exit 1; }
+
+      - name: Configure the public Lucidity Nix cache
+        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71
+        with:
+          name: lucidity
+          authToken: ${{ env.NIX_CACHE_WRITE == 'true' && secrets.CACHIX_AUTH_TOKEN || '' }}
+          skipPush: ${{ env.NIX_CACHE_WRITE != 'true' }}
+          pushFilter: lucidity-(controller|worker)-bootc-context
+
+      - name: Calculate and validate the semantic version
         id: version
         env:
           REQUESTED_BUMP: ${{ inputs.bump }}
-        shell: bash
-        run: |
-          [[ "${GITHUB_REF}" == refs/heads/main ]] || { echo "releases may run only from main" >&2; exit 1; }
-          seed_version=$(<VERSION)
-          [[ "${seed_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "VERSION must contain X.Y.Z" >&2; exit 1; }
-          source_sha=$(git rev-parse HEAD)
-          [[ "${source_sha}" == "${GITHUB_SHA}" ]] || { echo "checkout does not match the dispatched commit" >&2; exit 1; }
-
-          last_tag=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)
-          if [[ -z "${last_tag}" ]]; then
-            version=${seed_version}
-            selected_bump="initial"
-          else
-            [[ $(git rev-list --count "${last_tag}..HEAD") -gt 0 ]] || { echo "no commits exist after ${last_tag}" >&2; exit 1; }
-            git merge-base --is-ancestor "${last_tag}" HEAD || { echo "latest release tag ${last_tag} is not an ancestor of main" >&2; exit 1; }
-            base_version=${last_tag#v}
-            IFS=. read -r major minor patch <<< "${base_version}"
-            selected_bump=${REQUESTED_BUMP}
-            if [[ "${selected_bump}" == auto ]]; then
-              release_log=$(git log "${last_tag}..HEAD" --format='%s%n%b')
-              if grep -Eq '(^[[:alnum:]-]+(\([^)]*\))?!:)|(^BREAKING[ -]CHANGE:)' <<< "${release_log}"; then
-                selected_bump="major"
-              elif grep -Eq '^feat(\([^)]*\))?:' <<< "${release_log}"; then
-                selected_bump="minor"
-              else
-                selected_bump="patch"
-              fi
-            fi
-            case "${selected_bump}" in
-              major) version="$((major + 1)).0.0" ;;
-              minor) version="${major}.$((minor + 1)).0" ;;
-              patch) version="${major}.${minor}.$((patch + 1))" ;;
-              *) echo "unsupported release bump: ${selected_bump}" >&2; exit 1 ;;
-            esac
-          fi
-          tag="v${version}"
-          tag_commit=$(git rev-parse --verify --quiet "refs/tags/${tag}^{commit}" || true)
-          if release_state=$(gh release view "${tag}" --json isDraft,targetCommitish 2>/dev/null); then
-            [[ $(jq -r .isDraft <<< "${release_state}") == true ]] || { echo "published GitHub release ${tag} already exists" >&2; exit 1; }
-            [[ $(jq -r .targetCommitish <<< "${release_state}") == "${source_sha}" ]] || { echo "draft ${tag} targets a different commit" >&2; exit 1; }
-            [[ -z "${tag_commit}" || "${tag_commit}" == "${source_sha}" ]] || { echo "draft ${tag} has a conflicting Git tag" >&2; exit 1; }
-            echo "A matching draft ${tag} exists; this run will verify and resume it"
-          elif [[ -n "${tag_commit}" ]]; then
-            echo "Git tag ${tag} already exists without a resumable draft release" >&2
-            exit 1
-          fi
-          {
-            echo "source_sha=${source_sha}"
-            echo "tag=${tag}"
-            echo "version=${version}"
-          } >> "${GITHUB_OUTPUT}"
-          printf 'Selected %s with a %s bump from %s\n' "${tag}" "${selected_bump}" "${last_tag:-VERSION seed}"
-
+        run: nix run .#release -- prepare "${REQUESTED_BUMP}"
 
   candidate:
     name: Require immutable candidates
@@ -112,6 +80,8 @@ jobs:
     uses: ./.github/workflows/publish.yml
     with:
       source_sha: ${{ needs.prepare.outputs.source_sha }}
+    secrets:
+      CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
 
   images:
     name: Promote and inventory ${{ matrix.role }}
@@ -140,18 +110,24 @@ jobs:
           persist-credentials: false
           ref: ${{ needs.prepare.outputs.source_sha }}
 
-      - name: Validate release identifiers
+      - name: Install locked Nix
+        uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
+        with:
+          kvm: true
+
+      - name: Require the Cachix write token for trusted events
+        if: env.NIX_CACHE_WRITE == 'true'
         env:
-          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
-          REPOSITORY_URL: ${{ matrix.repository_url }}
-          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
-        run: |
-          [[ "${SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]]
-          [[ "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          [[ "${REPOSITORY_URL}" =~ ^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[a-z0-9]+([._/-][a-z0-9]+)*$ ]] || {
-            echo "the ${{ matrix.role }} ECR repository URL is missing or invalid" >&2
-            exit 1
-          }
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        run: test -n "${CACHIX_AUTH_TOKEN}" || { echo '::error::CACHIX_AUTH_TOKEN is required for trusted cache-writing events'; exit 1; }
+
+      - name: Configure the public Lucidity Nix cache
+        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71
+        with:
+          name: lucidity
+          authToken: ${{ env.NIX_CACHE_WRITE == 'true' && secrets.CACHIX_AUTH_TOKEN || '' }}
+          skipPush: ${{ env.NIX_CACHE_WRITE != 'true' }}
+          pushFilter: lucidity-(controller|worker)-bootc-context
 
       - name: Configure short-lived ECR credentials
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
@@ -162,124 +138,14 @@ jobs:
           role-duration-seconds: 3600
           role-session-name: lucidity-release-${{ github.run_id }}-${{ matrix.role }}
 
-      - name: Promote the tested manifest without rebuilding
+      - name: Promote the immutable image and generate its SBOM
         id: image
         env:
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
           REPOSITORY_URL: ${{ matrix.repository_url }}
-          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
-        run: |
-          repository_name=${REPOSITORY_URL#*/}
-          source_tag="sha-${SOURCE_SHA}"
-          source_response=$(aws ecr batch-get-image \
-            --region "${AWS_REGION}" \
-            --repository-name "${repository_name}" \
-            --image-ids "imageTag=${source_tag}" \
-            --accepted-media-types \
-              application/vnd.oci.image.manifest.v1+json \
-              application/vnd.docker.distribution.manifest.v2+json \
-            --output json)
-          source_digest=$(jq -r '.images[0].imageId.imageDigest // empty' <<< "${source_response}")
-          image_manifest=$(jq -r '.images[0].imageManifest // empty' <<< "${source_response}")
-          media_type=$(jq -r '.images[0].imageManifestMediaType // empty' <<< "${source_response}")
-          [[ "${source_digest}" =~ ^sha256:[0-9a-f]{64}$ && -n "${image_manifest}" && -n "${media_type}" ]] || {
-            echo "immutable candidate ${REPOSITORY_URL}:${source_tag} is unavailable" >&2
-            exit 1
-          }
-
-          release_response=$(aws ecr batch-get-image \
-            --region "${AWS_REGION}" \
-            --repository-name "${repository_name}" \
-            --image-ids "imageTag=${RELEASE_TAG}" \
-            --output json)
-          release_digest=$(jq -r '.images[0].imageId.imageDigest // empty' <<< "${release_response}")
-          if [[ -n "${release_digest}" ]]; then
-            [[ "${release_digest}" == "${source_digest}" ]] || {
-              echo "immutable ${RELEASE_TAG} already refers to a different digest" >&2
-              exit 1
-            }
-          else
-            aws ecr put-image \
-              --region "${AWS_REGION}" \
-              --repository-name "${repository_name}" \
-              --image-tag "${RELEASE_TAG}" \
-              --image-manifest "${image_manifest}" \
-              --image-manifest-media-type "${media_type}" >/dev/null
-          fi
-          verified_digest=$(aws ecr batch-get-image \
-            --region "${AWS_REGION}" \
-            --repository-name "${repository_name}" \
-            --image-ids "imageTag=${RELEASE_TAG}" \
-            --query 'images[0].imageId.imageDigest' \
-            --output text)
-          [[ "${verified_digest}" == "${source_digest}" ]]
-          {
-            echo "digest=${source_digest}"
-            echo "repository_name=${repository_name}"
-          } >> "${GITHUB_OUTPUT}"
-
-      - name: Authenticate Docker to ECR
-        env:
-          REPOSITORY_URL: ${{ matrix.repository_url }}
-        run: |
-          registry=${REPOSITORY_URL%%/*}
-          aws ecr get-login-password --region "${AWS_REGION}" | docker login --username AWS --password-stdin "${registry}"
-
-      - name: Install Nix for pinned Syft
-        uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
-
-      - name: Generate the digest-bound SPDX SBOM
-        id: sbom
-        env:
-          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
-          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
-          REPOSITORY_URL: ${{ matrix.repository_url }}
           ROLE: ${{ matrix.role }}
-        run: |
-          syft_store=$(nix build .#syft --no-link --print-out-paths)
-          syft_command="${syft_store}/bin/syft"
-          [[ -x "${syft_command}" ]]
-          immutable_image="${REPOSITORY_URL}@${IMAGE_DIGEST}"
-          docker pull "${immutable_image}"
-          "${syft_command}" scan "${immutable_image}" \
-            --config .github/syft.yaml \
-            --exclude './nix/store/**' \
-            --source-name "${REPOSITORY_URL}" \
-            --source-version "${IMAGE_DIGEST}" \
-            --output spdx-json | jq -c '
-              .packages |= map(
-                if has("externalRefs") then
-                  .externalRefs |= map(select(.referenceType != "cpe23Type")) |
-                  if (.externalRefs | length) == 0 then del(.externalRefs) else . end
-                else . end
-              )
-            ' > sbom.spdx.json
-          jq -e '
-            type == "object" and
-            (.spdxVersion | type == "string" and startswith("SPDX-")) and
-            (.packages | type == "array")
-          ' sbom.spdx.json >/dev/null
-          sbom_sha256=$(sha256sum sbom.spdx.json | cut -d' ' -f1)
-          asset="lucidity-${ROLE}-${RELEASE_TAG}.spdx.json.gz"
-          install -d -m 0755 release
-          gzip -9c sbom.spdx.json > "release/${asset}"
-          (
-            cd release
-            sha256sum "${asset}" > "${asset}.sha256"
-          )
-          asset_sha256=$(sha256sum "release/${asset}" | cut -d' ' -f1)
-          jq -n \
-            --arg role "${ROLE}" \
-            --arg repository "${REPOSITORY_URL}" \
-            --arg source_tag "sha-${{ needs.prepare.outputs.source_sha }}" \
-            --arg release_tag "${RELEASE_TAG}" \
-            --arg digest "${IMAGE_DIGEST}" \
-            --arg sbom_asset "${asset}" \
-            --arg sbom_sha256 "${sbom_sha256}" \
-            --arg sbom_asset_sha256 "${asset_sha256}" \
-            '{role:$role,repository:$repository,source_tag:$source_tag,release_tag:$release_tag,digest:$digest,sbom_asset:$sbom_asset,sbom_sha256:$sbom_sha256,sbom_asset_sha256:$sbom_asset_sha256}' \
-            > "release/${ROLE}.metadata.json"
-          echo "path=sbom.spdx.json" >> "${GITHUB_OUTPUT}"
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+        run: nix run .#release -- image "${ROLE}" "${REPOSITORY_URL}" "${RELEASE_TAG}" "${SOURCE_SHA}"
 
       - name: Attest the SBOM against the immutable image digest
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
@@ -287,7 +153,7 @@ jobs:
           subject-name: ${{ matrix.repository_url }}
           subject-digest: ${{ steps.image.outputs.digest }}
           predicate-type: https://spdx.dev/Document/v2.3
-          predicate-path: ${{ steps.sbom.outputs.path }}
+          predicate-path: ${{ steps.image.outputs.path }}
 
       - name: Upload release inventory
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -296,12 +162,6 @@ jobs:
           if-no-files-found: error
           path: release/
           retention-days: 7
-
-      - name: Remove ECR login
-        if: always()
-        env:
-          REPOSITORY_URL: ${{ matrix.repository_url }}
-        run: docker logout "${REPOSITORY_URL%%/*}"
 
   inventory:
     name: Validate role release inventories
@@ -317,6 +177,31 @@ jobs:
       worker_digest: ${{ steps.inventory.outputs.worker_digest }}
       worker_sbom_sha256: ${{ steps.inventory.outputs.worker_sbom_sha256 }}
     steps:
+      - name: Checkout release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.prepare.outputs.source_sha }}
+
+      - name: Install locked Nix
+        uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
+        with:
+          kvm: true
+
+      - name: Require the Cachix write token for trusted events
+        if: env.NIX_CACHE_WRITE == 'true'
+        env:
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        run: test -n "${CACHIX_AUTH_TOKEN}" || { echo '::error::CACHIX_AUTH_TOKEN is required for trusted cache-writing events'; exit 1; }
+
+      - name: Configure the public Lucidity Nix cache
+        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71
+        with:
+          name: lucidity
+          authToken: ${{ env.NIX_CACHE_WRITE == 'true' && secrets.CACHIX_AUTH_TOKEN || '' }}
+          skipPush: ${{ env.NIX_CACHE_WRITE != 'true' }}
+          pushFilter: lucidity-(controller|worker)-bootc-context
+
       - name: Download image inventories
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
@@ -328,23 +213,7 @@ jobs:
         id: inventory
         env:
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
-        run: |
-          mapfile -t metadata_files < <(find release -maxdepth 1 -type f -name '*.metadata.json' -print | sort)
-          [[ ${#metadata_files[@]} -eq 2 ]] || { echo "expected controller and worker release inventories" >&2; exit 1; }
-          jq -s -e --arg release_tag "${RELEASE_TAG}" '
-            length == 2 and
-            ([.[].role] | sort == ["controller","worker"]) and
-            all(.[]; (.digest | test("^sha256:[0-9a-f]{64}$"))) and
-            all(.[]; (.sbom_sha256 | test("^[0-9a-f]{64}$"))) and
-            all(.[]; .release_tag == $release_tag)
-          ' "${metadata_files[@]}" >/dev/null
-          for role in controller worker; do
-            metadata=$(jq -c --arg role "${role}" 'select(.role == $role)' "${metadata_files[@]}")
-            {
-              echo "${role}_digest=$(jq -r .digest <<< "${metadata}")"
-              echo "${role}_sbom_sha256=$(jq -r .sbom_sha256 <<< "${metadata}")"
-            } >> "${GITHUB_OUTPUT}"
-          done
+        run: nix run .#release -- inventory "${RELEASE_TAG}"
 
   controller-ami:
     name: Retain and validate controller AMI
@@ -364,6 +233,8 @@ jobs:
       release_version: ${{ needs.prepare.outputs.tag }}
       source_image_digest: ${{ needs.inventory.outputs.controller_digest }}
       sbom_sha256: ${{ needs.inventory.outputs.controller_sbom_sha256 }}
+    secrets:
+      CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
 
   worker-ami:
     name: Retain and validate worker AMI
@@ -383,6 +254,8 @@ jobs:
       release_version: ${{ needs.prepare.outputs.tag }}
       source_image_digest: ${{ needs.inventory.outputs.worker_digest }}
       sbom_sha256: ${{ needs.inventory.outputs.worker_sbom_sha256 }}
+    secrets:
+      CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
 
   release:
     name: Publish immutable release
@@ -405,6 +278,25 @@ jobs:
           persist-credentials: false
           ref: ${{ needs.prepare.outputs.source_sha }}
 
+      - name: Install locked Nix
+        uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
+        with:
+          kvm: true
+
+      - name: Require the Cachix write token for trusted events
+        if: env.NIX_CACHE_WRITE == 'true'
+        env:
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        run: test -n "${CACHIX_AUTH_TOKEN}" || { echo '::error::CACHIX_AUTH_TOKEN is required for trusted cache-writing events'; exit 1; }
+
+      - name: Configure the public Lucidity Nix cache
+        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71
+        with:
+          name: lucidity
+          authToken: ${{ env.NIX_CACHE_WRITE == 'true' && secrets.CACHIX_AUTH_TOKEN || '' }}
+          skipPush: ${{ env.NIX_CACHE_WRITE != 'true' }}
+          pushFilter: lucidity-(controller|worker)-bootc-context
+
       - name: Download image inventories
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
@@ -426,126 +318,11 @@ jobs:
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
-        run: |
-          images=$(jq -s 'sort_by(.role)' release/*.metadata.json)
-          amis='{}'
-          for role in controller worker; do
-            image_digest=$(jq -r --arg role "${role}" '.[] | select(.role == $role) | .digest' <<< "${images}")
-            sbom_sha256=$(jq -r --arg role "${role}" '.[] | select(.role == $role) | .sbom_sha256' <<< "${images}")
-            ami_response=$(aws ec2 describe-images \
-              --region "${AWS_REGION}" \
-              --owners self \
-              --filters \
-                'Name=tag:Project,Values=lucidity' \
-                'Name=tag:Purpose,Values=ami-release' \
-                "Name=tag:Role,Values=${role}" \
-                "Name=tag:SourceRevision,Values=${SOURCE_SHA}" \
-                "Name=tag:ReleaseVersion,Values=${RELEASE_TAG}" \
-                "Name=tag:SourceImageDigest,Values=${image_digest}" \
-                "Name=tag:SbomSha256,Values=${sbom_sha256}" \
-                'Name=tag:ReleaseStatus,Values=validated' \
-              --output json)
-            [[ $(jq '.Images | length' <<< "${ami_response}") -eq 1 ]] || {
-              echo "expected exactly one validated retained ${role} release AMI" >&2
-              exit 1
-            }
-            ami_id=$(jq -r '.Images[0].ImageId' <<< "${ami_response}")
-            snapshot_id=$(jq -r '.Images[0].BlockDeviceMappings[0].Ebs.SnapshotId' <<< "${ami_response}")
-            [[ "${ami_id}" =~ ^ami-[0-9a-f]+$ && "${snapshot_id}" =~ ^snap-[0-9a-f]+$ ]]
-            snapshot_response=$(aws ec2 describe-snapshots \
-              --region "${AWS_REGION}" \
-              --snapshot-ids "${snapshot_id}" \
-              --output json)
-            [[ $(jq -r '.Snapshots[0].Encrypted' <<< "${snapshot_response}") == true ]]
-            snapshot_kms_key_arn=$(jq -r '.Snapshots[0].KmsKeyId // empty' <<< "${snapshot_response}")
-            snapshot_volume_size_gib=$(jq -r '.Snapshots[0].VolumeSize // empty' <<< "${snapshot_response}")
-            [[ "${snapshot_kms_key_arn}" =~ ^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/[0-9a-f-]+$ ]]
-            [[ "${snapshot_volume_size_gib}" =~ ^[1-9][0-9]*$ ]]
-            for expected_tag in \
-              "Role=${role}" \
-              "ReleaseVersion=${RELEASE_TAG}" \
-              "SourceImageDigest=${image_digest}" \
-              "SbomSha256=${sbom_sha256}" \
-              'ReleaseStatus=validated'; do
-              tag_key=${expected_tag%%=*}
-              tag_value=${expected_tag#*=}
-              jq -e --arg key "${tag_key}" --arg value "${tag_value}" \
-                'any(.Snapshots[0].Tags[]?; .Key == $key and .Value == $value)' \
-                <<< "${snapshot_response}" >/dev/null || {
-                  echo "retained ${role} snapshot is missing ${tag_key}=${tag_value}" >&2
-                  exit 1
-                }
-            done
-            ami_record=$(jq -n \
-              --arg ami_id "${ami_id}" \
-              --arg name "$(jq -r '.Images[0].Name // empty' <<< "${ami_response}")" \
-              --arg created_at "$(jq -r '.Images[0].CreationDate // empty' <<< "${ami_response}")" \
-              --arg snapshot_id "${snapshot_id}" \
-              --arg snapshot_kms_key_arn "${snapshot_kms_key_arn}" \
-              --argjson snapshot_volume_size_gib "${snapshot_volume_size_gib}" \
-              --arg source_image_digest "${image_digest}" \
-              --arg sbom_sha256 "${sbom_sha256}" \
-              --arg validation_run "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-              '{ami_id:$ami_id,name:$name,created_at:$created_at,snapshot_id:$snapshot_id,snapshot_kms_key_arn:$snapshot_kms_key_arn,snapshot_volume_size_gib:$snapshot_volume_size_gib,source_image_digest:$source_image_digest,sbom_sha256:$sbom_sha256,validation_run:$validation_run}')
-            amis=$(jq -cn \
-              --argjson current "${amis}" \
-              --arg role "${role}" \
-              --argjson record "${ami_record}" \
-              '$current + {($role):$record}')
-          done
-          created_at=$(date --utc +%Y-%m-%dT%H:%M:%SZ)
-          jq -n \
-            --argjson schema_version 2 \
-            --arg version "${RELEASE_VERSION}" \
-            --arg tag "${RELEASE_TAG}" \
-            --arg source_commit "${SOURCE_SHA}" \
-            --arg created_at "${created_at}" \
-            --arg region "${AWS_REGION}" \
-            --arg repository "${GITHUB_REPOSITORY}" \
-            --arg release_run "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-            --argjson images "${images}" \
-            --argjson amis "${amis}" \
-            '{schema_version:$schema_version,version:$version,tag:$tag,source_commit:$source_commit,created_at:$created_at,repository:$repository,release_run:$release_run,images:$images,aws:{region:$region,amis:$amis}}' \
-            > release/release-manifest.json
-          jq -e '
-            .schema_version == 2 and
-            (.images | length) == 2 and
-            (.aws.amis | keys | sort == ["controller","worker"]) and
-            all(.aws.amis[]; (.ami_id | test("^ami-")) and (.snapshot_id | test("^snap-")))
-          ' release/release-manifest.json >/dev/null
-          (
-            cd release
-            sha256sum release-manifest.json > release-manifest.json.sha256
-          )
+        run: nix run .#release -- manifest "${RELEASE_TAG}" "${RELEASE_VERSION}" "${SOURCE_SHA}"
 
       - name: Publish the immutable GitHub release
         env:
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
-        run: |
-          mapfile -t assets < <(find release -maxdepth 1 -type f \
-            \( -name '*.spdx.json.gz' -o -name '*.spdx.json.gz.sha256' -o -name 'release-manifest.json' -o -name 'release-manifest.json.sha256' \) \
-            -print | sort)
-          [[ ${#assets[@]} -eq 6 ]] || { echo "expected two SBOMs, their checksums, and the release manifest pair" >&2; exit 1; }
-          if release_state=$(gh release view "${RELEASE_TAG}" --json isDraft,targetCommitish 2>/dev/null); then
-            [[ $(jq -r .isDraft <<< "${release_state}") == true ]]
-            [[ $(jq -r .targetCommitish <<< "${release_state}") == "${SOURCE_SHA}" ]]
-            gh release upload "${RELEASE_TAG}" "${assets[@]}" --clobber
-          else
-            gh release create "${RELEASE_TAG}" \
-              "${assets[@]}" \
-              --draft \
-              --generate-notes \
-              --target "${SOURCE_SHA}" \
-              --title "Lucidity ${RELEASE_VERSION}"
-          fi
-          mapfile -t expected_names < <(printf '%s\n' "${assets[@]##*/}" | sort)
-          mapfile -t actual_names < <(gh release view "${RELEASE_TAG}" --json assets --jq '.assets[].name' | sort)
-          [[ "${expected_names[*]}" == "${actual_names[*]}" ]] || { echo "draft release asset set does not match the verified release inventory" >&2; exit 1; }
-          gh release edit "${RELEASE_TAG}" --draft=false
-          {
-            echo "## Immutable Lucidity release ${RELEASE_TAG}"
-            echo
-            echo "Published tested ECR digests, SPDX SBOMs, checksums, and both retained EBS Direct AMIs without rebuilding the images."
-          } >> "${GITHUB_STEP_SUMMARY}"
+        run: nix run .#release -- publish "${RELEASE_TAG}" "${RELEASE_VERSION}" "${SOURCE_SHA}"

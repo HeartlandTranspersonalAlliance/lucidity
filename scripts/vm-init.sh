@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+repo_root=${LUCIDITY_REPOSITORY_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 readonly repo_root
 # shellcheck disable=SC1091
 source "${repo_root}/image/image-builder.env"
@@ -60,46 +60,18 @@ if [[ ${role} == worker ]]; then
     coolify_key=$(<"${vm_dir}/coolify.pub")
 fi
 
-cat > "${vm_dir}/user-data" <<EOF
-#cloud-config
-hostname: coolify-${role}-test
-manage_etc_hosts: true
-disable_root: false
-ssh_pwauth: false
-# bootc owns root filesystem growth; cloud-init cannot resize composefs.
-resize_rootfs: false
-users:
-  - default
-  - name: root
-    lock_passwd: true
-    ssh_authorized_keys:
-      - ${admin_key}
-write_files:
-  # This insecure registry is reachable only from the disposable QEMU guest.
-  # Production hosts use authenticated HTTPS ECR references instead.
-  - path: /etc/containers/registries.conf.d/99-coolify-lifecycle-test.conf
-    owner: root:root
-    permissions: '0644'
-    content: |
-      [[registry]]
-      location = "${registry_host}"
-      insecure = true
-EOF
-
-if [[ ${role} == worker ]]; then
-    cat >> "${vm_dir}/user-data" <<EOF
-  - path: /etc/coolify-worker/authorized_keys
-    owner: root:root
-    permissions: '0600'
-    content: |
-      ${coolify_key}
-EOF
+cloud_init_package=$(nix build --no-link --print-out-paths "${repo_root}#cloud-init-${role}")
+cloud_init_generator=${cloud_init_package}/bin/lucidity-cloud-init-${role}
+if [[ ${role} == controller ]]; then
+    ADMIN_SSH_PUBLIC_KEY=${admin_key} \
+        "${cloud_init_generator}" user-data "${registry_host}" >"${vm_dir}/user-data"
+else
+    ADMIN_SSH_PUBLIC_KEY=${admin_key} \
+        COOLIFY_WORKER_SSH_PUBLIC_KEY=${coolify_key} \
+        "${cloud_init_generator}" user-data "${registry_host}" >"${vm_dir}/user-data"
 fi
-
-cat > "${vm_dir}/meta-data" <<EOF
-instance-id: coolify-${role}-local-1
-local-hostname: coolify-${role}-test
-EOF
+chmod 0600 "${vm_dir}/user-data"
+"${cloud_init_generator}" meta-data >"${vm_dir}/meta-data"
 
 if command -v xorriso >/dev/null 2>&1; then
     (

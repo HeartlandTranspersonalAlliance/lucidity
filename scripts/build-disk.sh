@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+repo_root=${LUCIDITY_REPOSITORY_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 readonly repo_root
 # The path is derived from this script's canonical repository location.
 # shellcheck disable=SC1091
@@ -80,10 +80,12 @@ fi
 [[ ${container_engine} == podman ]] || { echo "unsupported container engine: ${container_engine}" >&2; exit 2; }
 if [[ $(id -u) -eq 0 ]]; then
     privileged_engine=(podman)
+elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+    privileged_engine=(sudo -n podman)
 elif command -v run0 >/dev/null 2>&1; then
     privileged_engine=(run0 podman)
 else
-    echo "run0 is required for privileged image builds (or run this script as root)" >&2
+    echo "passwordless sudo or run0 is required for privileged image builds" >&2
     exit 1
 fi
 

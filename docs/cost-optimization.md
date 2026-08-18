@@ -50,8 +50,8 @@ a complete IPv6 egress path.
   status checks and five-minute CPU and credit metrics used by the alarms.
 - VPC Flow Logs capture rejected traffic only and expire after 30 days.
 - AWS Backup keeps 7 daily incremental recovery points in warm regional storage.
-- The bundled runtime secret uses the AWS managed `aws/secretsmanager` KMS key, so it
-  does not create another customer-managed key with a monthly storage charge.
+- The bundled runtime secret uses a dedicated rotating customer-managed KMS key so
+  its controller policy can be scoped to one key and Secrets Manager service path.
 - The optional account-wide AWS Budget alerts at 80 percent actual spend, 100 percent
   forecasted spend, and 100 percent actual spend without enabling automated actions.
 
@@ -65,14 +65,13 @@ and internet egress after the first month. Resize only from measured peaks: the 
 database, media, bridge processes, application containers, and Coolify builds share the
 worker's memory and disk budget.
 
-Using the us-east-2 prices reviewed on 2026-08-16, the conservative two-node annual
-baseline is about USD 809.66: USD 494.06 for on-demand compute, USD 87.60 for two
-public IPv4 addresses, USD 115.20 for 120 GiB of gp3, USD 24.00 for the AMI and alarm
-customer-managed KMS keys, USD 4.80 for the runtime secret, and USD 84.00 for 140 GiB
-of snapshot storage. This leaves about USD 290.34 of the USD 1,100 gross annual budget
-for flow-log ingestion, incremental backup churn, ECR, S3 state, internet transfer,
-and growth. The budget intentionally excludes credits and refunds, while the expiring
-grant credits reduce the invoice separately.
+The earlier USD 809.66 two-node estimate predates the customer-managed runtime key and
+the account security baseline. It is no longer a complete production forecast.
+Before enabling the USD 1,100 budget, refresh the us-east-2 estimate for CloudTrail,
+Config, GuardDuty, Inspector, Security Hub, the audit bucket, all enabled KMS keys,
+flow-log ingestion, incremental backup churn, ECR, S3 state, and internet transfer.
+The budget intentionally excludes credits and refunds, while grant credits reduce the
+invoice separately.
 
 ## References
 

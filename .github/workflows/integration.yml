@@ -1,0 +1,231 @@
+name: Validate local Coolify integration
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/integration.yml
+      - ci/**
+      - flake.lock
+      - flake.nix
+      - image/image-builder.env
+      - nix/**
+      - secretspec.toml
+      - scripts/build-disk.sh
+      - scripts/vm-integration.sh
+      - scripts/vm-init.sh
+      - scripts/vm-start.sh
+      - scripts/vm-validate.sh
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: localhost/coolify-bootc-worker:integration
+  CONTROLLER_IMAGE: localhost/coolify-bootc-controller:integration
+  CI_TOOLS_IMAGE: localhost/coolify-aws-ci-tools:integration
+  BUILDX_BUILDER_NAME: lucidity-integration
+  NIX_CACHE_WRITE: ${{ github.event_name == 'merge_group' || github.event_name == 'release' || github.event_name == 'schedule' || github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+
+jobs:
+  controller-worker:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Initialize integration report
+        run: echo "INTEGRATION_STARTED_AT=$(date +%s)" >>"${GITHUB_ENV}"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install locked Nix
+        uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
+        with:
+          kvm: true
+
+      - name: Require the Cachix write token for trusted events
+        if: env.NIX_CACHE_WRITE == 'true'
+        env:
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        run: test -n "${CACHIX_AUTH_TOKEN}" || { echo '::error::CACHIX_AUTH_TOKEN is required for trusted cache-writing events'; exit 1; }
+
+      - name: Configure the public Lucidity Nix cache
+        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71
+        with:
+          name: lucidity
+          authToken: ${{ env.NIX_CACHE_WRITE == 'true' && secrets.CACHIX_AUTH_TOKEN || '' }}
+          skipPush: ${{ env.NIX_CACHE_WRITE != 'true' }}
+          pushFilter: lucidity-(controller|worker)-bootc-context
+
+      - id: tooling-cache
+        name: Authenticate to GHCR and restore tooling cache
+        env:
+          GHCR_CACHE_WRITE: ${{ env.NIX_CACHE_WRITE }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: nix run .#ci -- cache configure ci-tools
+
+      - name: Build pinned VM tooling image
+        id: tooling
+        run: |
+          started=${SECONDS}
+          record_duration() {
+            echo "seconds=$((SECONDS - started))" >>"${GITHUB_OUTPUT}"
+          }
+          trap record_duration EXIT
+          nix run .#ci -- build-tools-image
+
+      - id: controller-cache
+        name: Authenticate to GHCR and restore controller cache
+        env:
+          GHCR_CACHE_WRITE: ${{ env.NIX_CACHE_WRITE }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: nix run .#lucidity -- ci cache configure controller
+
+      - name: Build and validate controller disk
+        id: controller
+        env:
+          CONTAINER_ENGINE: docker
+          IMAGE_NAME: ${{ env.CONTROLLER_IMAGE }}
+          VM_TOOL_IMAGE: ${{ env.CI_TOOLS_IMAGE }}
+        run: |
+          started=${SECONDS}
+          record_duration() {
+            echo "seconds=$((SECONDS - started))" >>"${GITHUB_OUTPUT}"
+          }
+          trap record_duration EXIT
+          nix run .#build-controller
+          nix run .#disk -- build controller qcow2
+          nix run .#disk -- validate image-output/controller/coolify-controller-qcow2.qcow2
+
+      - id: worker-cache
+        name: Authenticate to GHCR and restore worker cache
+        env:
+          GHCR_CACHE_WRITE: ${{ env.NIX_CACHE_WRITE }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: nix run .#lucidity -- ci cache configure worker
+
+      - name: Build and validate worker disk
+        id: worker
+        env:
+          CONTAINER_ENGINE: docker
+          IMAGE_NAME: ${{ env.IMAGE }}
+          VM_TOOL_IMAGE: ${{ env.CI_TOOLS_IMAGE }}
+        run: |
+          started=${SECONDS}
+          record_duration() {
+            echo "seconds=$((SECONDS - started))" >>"${GITHUB_OUTPUT}"
+          }
+          trap record_duration EXIT
+          nix run .#build-worker
+          nix run .#disk -- build worker qcow2
+          nix run .#disk -- validate image-output/worker/coolify-worker-qcow2.qcow2
+
+      - name: Validate controller-worker integration
+        id: integration
+        env:
+          CONTAINER_ENGINE: docker
+          VM_TOOL_IMAGE: ${{ env.CI_TOOLS_IMAGE }}
+          VM_WAIT_ATTEMPTS: 300
+          VM_CONTROLLER_WAIT_ATTEMPTS: 600
+        run: |
+          started=${SECONDS}
+          record_duration() {
+            echo "seconds=$((SECONDS - started))" >>"${GITHUB_OUTPUT}"
+          }
+          trap record_duration EXIT
+          nix run .#test-integration
+
+      - name: Collect failure diagnostics and stop guests
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          install -d -m 0700 diagnostics
+          if [[ ${JOB_STATUS} != success ]]; then
+            docker logs coolify-controller-vm >diagnostics/controller-vm.log 2>&1 || true
+            docker logs coolify-worker-vm >diagnostics/worker-vm.log 2>&1 || true
+            collect_guest_diagnostics() {
+              local role=$1
+              local port=$2
+              local identity=$3
+              [[ -f ${identity} ]] || return 0
+              ssh \
+                -o BatchMode=yes \
+                -o ConnectTimeout=5 \
+                -o IdentitiesOnly=yes \
+                -o StrictHostKeyChecking=no \
+                -o UserKnownHostsFile=/dev/null \
+                -i "${identity}" \
+                -p "${port}" \
+                admin@127.0.0.1 \
+                sudo -n journalctl -b --no-pager -n 400 \
+                  -u cloud-final.service \
+                  -u determinate-nix-install.service \
+                  -u lucidity-nix-profile.service \
+                  -u "coolify-${role}-storage.service" \
+                  -u "coolify-${role}-bootstrap.service" \
+                  -u "coolify-${role}-authorized-keys.service" \
+                  >"diagnostics/${role}-guest-journal.log" 2>&1 || true
+            }
+            collect_guest_diagnostics controller 2223 image-output/vm-controller/admin
+            collect_guest_diagnostics worker 2222 image-output/vm/admin
+            sed -n '1,200p' diagnostics/controller-vm.log || true
+            sed -n '1,200p' diagnostics/worker-vm.log || true
+            sed -n '1,240p' diagnostics/controller-guest-journal.log || true
+            sed -n '1,240p' diagnostics/worker-guest-journal.log || true
+          fi
+          nix run .#lucidity -- vm stop controller || true
+          nix run .#lucidity -- vm stop worker || true
+          nix run .#lucidity -- ci cache cleanup
+
+      - name: Summarize integration build
+        if: always()
+        env:
+          CONTROLLER_OUTCOME: ${{ steps.controller.outcome }}
+          CONTROLLER_SECONDS: ${{ steps.controller.outputs.seconds }}
+          INTEGRATION_OUTCOME: ${{ steps.integration.outcome }}
+          INTEGRATION_SECONDS: ${{ steps.integration.outputs.seconds }}
+          TOOLING_OUTCOME: ${{ steps.tooling.outcome }}
+          TOOLING_SECONDS: ${{ steps.tooling.outputs.seconds }}
+          WORKER_OUTCOME: ${{ steps.worker.outcome }}
+          WORKER_SECONDS: ${{ steps.worker.outputs.seconds }}
+        run: |
+          finished_at=$(date +%s)
+          started_at=${INTEGRATION_STARTED_AT:-${finished_at}}
+          [[ ${started_at} =~ ^[0-9]+$ ]] || started_at=${finished_at}
+          elapsed=$((finished_at - started_at))
+          baseline=1979
+          difference=$((baseline - elapsed))
+          if (( difference >= 0 )); then
+            comparison="${difference}s faster"
+          else
+            comparison="$((-difference))s slower"
+          fi
+          {
+            echo '### Controller-worker integration'
+            echo
+            echo '| Phase | Outcome | Duration |'
+            echo '| --- | --- | ---: |'
+            echo "| VM tooling | \`${TOOLING_OUTCOME:-skipped}\` | ${TOOLING_SECONDS:-0}s |"
+            echo "| Controller image and disk | \`${CONTROLLER_OUTCOME:-skipped}\` | ${CONTROLLER_SECONDS:-0}s |"
+            echo "| Worker image and disk | \`${WORKER_OUTCOME:-skipped}\` | ${WORKER_SECONDS:-0}s |"
+            echo "| Guest boot and Coolify API deployment | \`${INTEGRATION_OUTCOME:-skipped}\` | ${INTEGRATION_SECONDS:-0}s |"
+            echo "| Total | | ${elapsed}s |"
+            echo
+            echo "Pre-cache baseline: ${baseline}s (32m59s); observed run was ${comparison}."
+          } >>"${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload integration failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lucidity-controller-worker-diagnostics
+          path: diagnostics/
+          if-no-files-found: error
+          retention-days: 7

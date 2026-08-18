@@ -171,7 +171,7 @@ nix_bin=/nix/var/nix/profiles/default/bin/nix
 "${nix_bin}" build \
     --no-write-lock-file \
     --out-link /var/lib/coolify-aws/nix-smoke-result \
-    /usr/share/coolify-aws/nix-smoke
+    /usr/share/lucidity/nix-smoke
 [[ $(</var/lib/coolify-aws/nix-smoke-result) == "Determinate Nix guest build passed" ]]
 if journalctl -b --no-pager | grep -Eiq "avc:[[:space:]]+denied.*(/nix|nix-daemon)"; then
     exit 1

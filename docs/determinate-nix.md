@@ -23,7 +23,7 @@ getenforce
 The install is complete only when `/nix/receipt.json` exists, the daemon is active,
 the two paths identify the same bind-mounted directory, and `getenforce` prints
 `Enforcing`. The hosted controller and worker lifecycle gates additionally build the
-locked flake under `/usr/share/coolify-aws/nix-smoke` and verify its persistent store
+locked flake under `/usr/share/lucidity/nix-smoke` and verify its persistent store
 result after bootc update and rollback.
 
 Inspect first-boot failures with:
@@ -46,9 +46,26 @@ Do not create or edit `nix.mount`; the OSTree planner owns it. Put intentional N
 configuration overrides in `/etc/nix/nix.custom.conf`, leaving the generated
 `/etc/nix/nix.conf` under Determinate Nix control.
 
+## CI binary cache
+
+GitHub-hosted runners install Determinate Nix with KVM explicitly enabled and then
+attach the public `lucidity` Cachix cache. The cache URL and signing key are declared
+in `flake.nix`, so the same trust configuration applies to local flake consumers.
+Pull-request jobs receive no Cachix credential and run with `skipPush`; trusted
+merge-queue, `main`, release, schedule, workflow-call, and manual jobs fail early if
+`CACHIX_AUTH_TOKEN` is unavailable.
+
+Cachix stores reusable Nix derivations and test results. It deliberately filters
+the large `lucidity-*-bootc-context` outputs, and it never stores raw AMIs, qcow2
+disks, secrets, or mutable guest state. OCI layers use GHCR instead, with separate
+`controller`, `worker`, and `ci-tools` scopes. To assess a seeded cache, rerun the
+same commit on a fresh runner and confirm that `vm-test-run-lucidity-mesh-vm` is
+substituted from `lucidity.cachix.org` rather than rebuilt. Timing summaries are
+observability only and are not test assertions.
+
 ## Upgrade
 
-Upgrade the pinned installer in `Containerfile` by reviewing an official release,
+Upgrade the pinned installer in `nix/den/classes/bootc/image.nix` by reviewing an official release,
 updating its version, commit, binary digest, and license digest together, then passing
 both complete guest lifecycle jobs. Updating the image does not replace an existing
 persistent Nix installation. Schedule Determinate Nix package upgrades separately

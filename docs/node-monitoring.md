@@ -36,7 +36,7 @@ Applying the stack sends an SNS confirmation message. The recipient must confirm
 before alarms can deliver email. Verify the subscription after confirmation:
 
 ```bash
-tofu -chdir=tofu/environments/aws output node_alarm_notification_topic_arn
+nix run .#infra -- output node_alarm_notification_topic_arn
 aws sns list-subscriptions-by-topic \
   --region us-east-2 \
   --topic-arn arn:aws:sns:us-east-2:ACCOUNT_ID:lucidity-production-node-alarms
