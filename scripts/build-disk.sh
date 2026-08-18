@@ -44,20 +44,29 @@ output_dir=$(realpath "${output_dir}")
 
 if [[ ${container_engine} == docker ]]; then
     echo "Building ${image_type} artifact from ${source_image} (${source_arch}) in a privileged tooling container"
+    docker_config=${DOCKER_CONFIG:-${HOME}/.docker}/config.json
+    docker_run_args=(
+        --rm
+        --interactive
+        --privileged
+        --volume "${output_dir}:/output"
+        --env "SOURCE_IMAGE=${source_image}"
+        --env "BUILDER_ARCH=${builder_arch}"
+        --env "IMAGE_TYPE=${image_type}"
+        --env "IMAGE_ROOT_FS=${IMAGE_ROOT_FS}"
+        --env "IMAGE_SIZE_GIB=${IMAGE_SIZE_GIB}"
+        --env "OUTPUT_NAME=${output_name}"
+        --entrypoint /bin/bash
+    )
+    if [[ -f ${docker_config} ]]; then
+        # The pinned builder may need to resolve a private digest after loading it.
+        # Mount Docker's short-lived auth file read-only; never copy or print it.
+        docker_run_args+=(--volume "${docker_config}:/root/.docker/config.json:ro")
+    fi
     # The quoted script expands the explicitly passed environment inside the tooling container.
     # shellcheck disable=SC2016
     "${container_engine}" save "${source_image}" | "${container_engine}" run \
-        --rm \
-        --interactive \
-        --privileged \
-        --volume "${output_dir}:/output" \
-        --env "SOURCE_IMAGE=${source_image}" \
-        --env "BUILDER_ARCH=${builder_arch}" \
-        --env "IMAGE_TYPE=${image_type}" \
-        --env "IMAGE_ROOT_FS=${IMAGE_ROOT_FS}" \
-        --env "IMAGE_SIZE_GIB=${IMAGE_SIZE_GIB}" \
-        --env "OUTPUT_NAME=${output_name}" \
-        --entrypoint /bin/bash \
+        "${docker_run_args[@]}" \
         "${tool_image}" \
         -Eeuo pipefail -c '
             podman load
