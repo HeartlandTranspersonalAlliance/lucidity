@@ -30,3 +30,7 @@ design context, customization, operations, and reference material.
 - [Release process](reference/releases.md)
 - [Upstream OSBuild AWS uploader evaluation](upstream-aws-uploader-evaluation.md)
 - [Project changelog](../CHANGELOG.md)
+
+## Proposals
+
+- [Digest-pinned PR validation shards](proposals/pr-validation-shards.md)
