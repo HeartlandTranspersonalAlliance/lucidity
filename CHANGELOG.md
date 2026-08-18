@@ -7,33 +7,7 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-### Changed
-
-- Documentation is now organized by concepts, guides, security, operations,
-  and reference material.
-- Production infrastructure changes now use a reviewable saved OpenTofu plan,
-  an integrity check, and an independently approved GitHub environment.
-- Deployment acceptance verifies that VPC security groups expose no SSH and
-  tests controller-to-worker access only through the Nebula address.
-
-### Added
-
-- Provider-neutral restic backups for AWS S3, Backblaze B2, Garage, and
-  experimental RustFS destinations, with role-isolated repositories and safe
-  staged restores.
-- SecretSpec backup profiles that use loopback OpenBao on the controller and
-  AWS Secrets Manager with exact IAM grants on the worker.
-- Backup-failure notifications, explicit CloudWatch missing-data behavior, and
-  a production-readiness gate with 24-hour RPO and 8-hour RTO targets.
-
-### Security
-
-- Restic passwords are materialized as private files, never passed through Nix
-  derivations or committed configuration.
-- AWS S3 access uses the EC2 instance role; other S3-compatible providers use
-  role-scoped keys resolved only for the backup process.
-
-## [0.2.0] - 2026-08-17
+## [0.2.0] - 2026-08-18
 
 ### Added
 
@@ -48,6 +22,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   runtime-secret initialization.
 - Immutable release inventory, SPDX SBOMs, checksums, retained AMI validation,
   and GitHub release publication.
+- Provider-neutral restic backups for AWS S3, Backblaze B2, Garage, and
+  experimental RustFS destinations, with role-isolated repositories and safe
+  staged restores.
+- SecretSpec backup profiles that use loopback OpenBao on the controller and
+  AWS Secrets Manager with exact IAM grants on the worker.
+- Backup-failure notifications, explicit CloudWatch missing-data behavior, and
+  a production-readiness gate with 24-hour RPO and 8-hour RTO targets.
 
 ### Changed
 
@@ -60,6 +41,12 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   changes do not invalidate focused checks.
 - KVM setup is owned by the pinned Determinate Nix action, and trusted workflows
   fail clearly when the Cachix write token is unavailable.
+- Documentation is organized by concepts, guides, security, operations, and
+  reference material.
+- Production infrastructure changes use a reviewable saved OpenTofu plan, an
+  integrity check, and an independently approved GitHub environment.
+- Deployment acceptance verifies that VPC security groups expose no SSH and
+  tests controller-to-worker access only through the Nebula address.
 
 ### Security
 
@@ -71,6 +58,10 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   credentials.
 - Raw disks, retained AMIs, secrets, mutable runtime state, and large bootc
   contexts are excluded from direct Cachix upload.
+- Restic passwords are materialized as private files, never passed through Nix
+  derivations or committed configuration.
+- AWS S3 access uses the EC2 instance role; other S3-compatible providers use
+  role-scoped keys resolved only for the backup process.
 
 ### Fixed
 
