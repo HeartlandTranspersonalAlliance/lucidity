@@ -276,8 +276,17 @@
           exit 1
         fi
         rg -Fq 'run: nix run .#release -- prepare' .github/workflows/release.yml
+        rg -Fq 'source_sha:' .github/workflows/release.yml
+        rg -Fq 'tooling_sha: ''${{ steps.version.outputs.tooling_sha }}' .github/workflows/release.yml
+        test "$(rg -F 'ref: ''${{ needs.prepare.outputs.tooling_sha }}' .github/workflows/release.yml | wc -l)" -eq 3
+        ! rg -Fq 'ref: ''${{ needs.prepare.outputs.source_sha }}' .github/workflows/release.yml
         rg -Fq 'run: nix run .#release -- image' .github/workflows/release.yml
         rg -Fq 'run: nix run .#release -- manifest' .github/workflows/release.yml
+        rg -Fq 'run: nix run .#ci -- ecr pin-local' .github/workflows/release.yml
+        rg -Fq 'IMAGE_NAME: ''${{ env.VERIFIED_IMAGE_REF }}' .github/workflows/release.yml
+        rg -Fq 'run: nix run .#ci -- timing summarize' .github/workflows/release.yml
+        ! rg -Fq 'uses: ./.github/workflows/ami.yml' .github/workflows/release.yml
+        ! rg -Fq 'uses: ./.github/workflows/publish.yml' .github/workflows/release.yml
         ! rg -q '^        run: \|' .github/workflows/release.yml
         rg -Fq 'run: nix run .#ci -- ecr resolve' .github/workflows/publish.yml
         ! rg -q '^        run: \|' .github/workflows/publish.yml
@@ -317,7 +326,7 @@
         test "$(rg -F 'kvm: true' .github/workflows | wc -l)" -eq 15
         ! rg -q '99-kvm4all|udevadm.*kvm' .github/workflows
         ! rg -q 'pathsToPush:.*(qcow2|raw|ami|bootc-context)' .github/workflows
-        test "$(rg -F 'cache configure ci-tools' .github/workflows | wc -l)" -eq 3
+        test "$(rg -F 'cache configure ci-tools' .github/workflows | wc -l)" -eq 4
         rg -Fq 'BUILD_CACHE_FROM="''${BUILD_CACHE_FROM}"' .github/workflows/ami.yml
         rg -Fq 'BUILD_CACHE_TO="''${BUILD_CACHE_TO}"' .github/workflows/ami.yml
         ! rg -q 'tests/run\.sh|tests/vm-(role|mesh)\.sh|ci/run-with-progress\.sh' \
@@ -414,6 +423,13 @@
         printf '%s\n' "$MOCK_ROLE"
       fi
     '';
+    ecrPinDocker = pkgs.writeShellScriptBin "docker" ''
+      set -Eeuo pipefail
+      printf '%s\n' "$*" >>"$MOCK_DOCKER_LOG"
+      if [[ $1 == image && $2 == inspect ]]; then
+        printf 'linux/amd64\n'
+      fi
+    '';
     lifecycleNix = pkgs.writeShellScriptBin "nix" ''
       set -Eeuo pipefail
       [[ $1 == build ]]
@@ -493,42 +509,60 @@
           ${lucidity}/bin/lucidity ci cache cleanup
         touch "$out"
       '';
-    ciWorkflowUnitCheck = pkgs.runCommand "lucidity-ci-workflow-unit-check" {} ''
-      touch github.env
-      AMI_ROLE=worker \
-        AMI_LIFECYCLE=disposable \
-        IMAGE=localhost/lucidity-worker:test \
-        GITHUB_ENV=$PWD/github.env \
-        ${lucidity}/bin/lucidity ci ami resolve
-      grep -Fxq 'AMI_ARTIFACT=image-output/worker/coolify-worker-ami.raw' github.env
-      grep -Fxq 'IMAGE_REF=localhost/lucidity-worker:test' github.env
+    ciWorkflowUnitCheck =
+      pkgs.runCommand "lucidity-ci-workflow-unit-check" {
+        nativeBuildInputs = [ecrPinDocker pkgs.gnugrep];
+      } ''
+        touch github.env
+        AMI_ROLE=worker \
+          AMI_LIFECYCLE=disposable \
+          IMAGE=localhost/lucidity-worker:test \
+          GITHUB_ENV=$PWD/github.env \
+          ${lucidity}/bin/lucidity ci ami resolve
+        grep -Fxq 'AMI_ARTIFACT=image-output/worker/coolify-worker-ami.raw' github.env
+        grep -Fxq 'IMAGE_REF=localhost/lucidity-worker:test' github.env
 
-      RUN_AWS_VALIDATION=false \
-        RUN_AWS_LAUNCH=false \
-        AMI_LIFECYCLE=disposable \
-        ${lucidity}/bin/lucidity ci ami validate-inputs
-      if RUN_AWS_VALIDATION=false RUN_AWS_LAUNCH=true AMI_LIFECYCLE=disposable \
-        ${lucidity}/bin/lucidity ci ami validate-inputs 2>/dev/null; then
-        echo 'AMI input policy accepted launch without AWS validation' >&2
-        exit 1
-      fi
+        RUN_AWS_VALIDATION=false \
+          RUN_AWS_LAUNCH=false \
+          AMI_LIFECYCLE=disposable \
+          ${lucidity}/bin/lucidity ci ami validate-inputs
+        if RUN_AWS_VALIDATION=false RUN_AWS_LAUNCH=true AMI_LIFECYCLE=disposable \
+          ${lucidity}/bin/lucidity ci ami validate-inputs 2>/dev/null; then
+          echo 'AMI input policy accepted launch without AWS validation' >&2
+          exit 1
+        fi
 
-      : >github.env
-      AMI_ROLE_ARN=arn:aws:iam::123456789012:role/import \
-        SNAPSHOT_KMS_KEY_ARN=arn:aws:kms:us-east-2:123456789012:key/example \
-        TEST_INSTANCE_PROFILE=worker \
-        TEST_SECURITY_GROUP=sg-12345678 \
-        TEST_SUBNET=subnet-12345678 \
-        WORKER_REPOSITORY_URL=123456789012.dkr.ecr.us-east-2.amazonaws.com/lucidity-worker \
-        TARGET_REVISION=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+        : >github.env
+        AMI_ROLE_ARN=arn:aws:iam::123456789012:role/import \
+          SNAPSHOT_KMS_KEY_ARN=arn:aws:kms:us-east-2:123456789012:key/example \
+          TEST_INSTANCE_PROFILE=worker \
+          TEST_SECURITY_GROUP=sg-12345678 \
+          TEST_SUBNET=subnet-12345678 \
+          WORKER_REPOSITORY_URL=123456789012.dkr.ecr.us-east-2.amazonaws.com/lucidity-worker \
+          TARGET_REVISION=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+          GITHUB_ENV=$PWD/github.env \
+          ${lucidity}/bin/lucidity ci benchmark resolve
+        grep -Fxq 'WORKER_IMAGE_REF=123456789012.dkr.ecr.us-east-2.amazonaws.com/lucidity-worker:sha-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' github.env
+
+        : >github.env
+        export MOCK_DOCKER_LOG=$PWD/docker.log
         GITHUB_ENV=$PWD/github.env \
-        ${lucidity}/bin/lucidity ci benchmark resolve
-      grep -Fxq 'WORKER_IMAGE_REF=123456789012.dkr.ecr.us-east-2.amazonaws.com/lucidity-worker:sha-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' github.env
-      touch "$out"
-    '';
+          ${lucidity}/bin/lucidity ci ecr pin-local \
+            123456789012.dkr.ecr.us-east-2.amazonaws.com/lucidity/worker:sha-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+            sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        immutable_ref=123456789012.dkr.ecr.us-east-2.amazonaws.com/lucidity/worker@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        grep -Fxq "pull $immutable_ref" docker.log
+        grep -Fxq "VERIFIED_IMAGE_REF=$immutable_ref" github.env
+
+        GITHUB_STEP_SUMMARY=$PWD/summary \
+          ${lucidity}/bin/lucidity ci timing summarize 'release path' "$(date +%s)" 611
+        grep -Fq '### release path performance' summary
+        grep -Fq -- '- Baseline: 611s' summary
+        touch "$out"
+      '';
     releaseUnitCheck =
       pkgs.runCommand "lucidity-release-unit-check" {
-        nativeBuildInputs = [pkgs.jq];
+        nativeBuildInputs = [pkgs.git pkgs.jq];
       } ''
         mkdir release
         for role in controller worker; do
@@ -543,6 +577,47 @@
         GITHUB_OUTPUT="$PWD/outputs" ${lib.getExe lucidityRelease} release inventory v1.2.3
         grep -Fxq 'controller_digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' outputs
         grep -Fxq 'worker_sbom_sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' outputs
+
+        mkdir resume-repository
+        cd resume-repository
+        git init -q
+        git config user.email release-test@lucidity.invalid
+        git config user.name 'Lucidity release test'
+        mkdir -p .github/workflows docs/reference nix/flake nix/pkgs
+        touch flake.nix
+        printf '0.2.0\n' >VERSION
+        printf 'Current version: **0.2.0**\n' >README.md
+        printf '## [0.2.0] - 2026-08-18\n' >CHANGELOG.md
+        git add .
+        git commit -qm 'docs: prepare v0.2.0'
+        source_sha=$(git rev-parse HEAD)
+        printf 'release tooling\n' >.github/workflows/release.yml
+        printf 'release helper\n' >nix/pkgs/lucidity.sh
+        git add .
+        git commit -qm 'fix: resume immutable release'
+        tooling_sha=$(git rev-parse HEAD)
+        : >outputs
+        GITHUB_REF=refs/heads/main \
+          GITHUB_SHA="$tooling_sha" \
+          GITHUB_OUTPUT=$PWD/outputs \
+          LUCIDITY_REPOSITORY_ROOT=$PWD \
+          ${lib.getExe lucidityRelease} release prepare minor "$source_sha"
+        grep -Fxq "source_sha=$source_sha" outputs
+        grep -Fxq "tooling_sha=$tooling_sha" outputs
+        grep -Fxq 'tag=v0.2.0' outputs
+        grep -Fxq 'version=0.2.0' outputs
+
+        mkdir -p nix/den
+        printf 'image input\n' >nix/den/disallowed.nix
+        git add .
+        git commit -qm 'feat: change appliance input'
+        if GITHUB_REF=refs/heads/main \
+          GITHUB_SHA=$(git rev-parse HEAD) \
+          LUCIDITY_REPOSITORY_ROOT=$PWD \
+          ${lib.getExe lucidityRelease} release prepare minor "$source_sha" 2>/dev/null; then
+          echo 'release resume accepted a non-tooling change' >&2
+          exit 1
+        fi
         touch "$out"
       '';
     controllerUnitCheck =

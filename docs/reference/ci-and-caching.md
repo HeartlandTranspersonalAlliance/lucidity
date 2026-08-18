@@ -22,6 +22,11 @@ GHCR is authoritative for OCI layers. Controller, worker, and `ci-tools` use
 independent scopes. Pull requests restore scopes; trusted jobs may update them.
 The tooling builder honors `BUILD_CACHE_FROM` and `BUILD_CACHE_TO`.
 
+Release jobs preserve the stronger isolation boundary of one ephemeral runner
+per role while reusing that runner's verified local OCI layers for raw AMI
+construction. Controller and worker remain independent, and raw disks are not
+uploaded or transferred between jobs.
+
 ## Trusted lifecycle checks
 
 Pull requests run the hermetic graph, AMI compatibility, and integration tests.
@@ -31,6 +36,7 @@ the hermetic result with every lifecycle result applicable to the event.
 
 ## Performance reporting
 
-Job summaries compare observed durations with historical baselines. Timing is
-diagnostic and never a required assertion. Cache correctness is substitution of
-the same store result, not a wall-clock threshold.
+Job summaries report complete same-runner release time and compare the raw AMI
+phase with the previous 10m11s split-runner baseline. Timing is diagnostic and
+never a required assertion. Cache correctness is substitution of the same store
+result and use of the verified image digest, not a wall-clock threshold.
