@@ -284,6 +284,9 @@
         rg -Fq 'run: nix run .#release -- manifest' .github/workflows/release.yml
         rg -Fq 'run: nix run .#ci -- ecr pin-local' .github/workflows/release.yml
         rg -Fq 'IMAGE_NAME: ''${{ env.VERIFIED_IMAGE_REF }}' .github/workflows/release.yml
+        rg -Fq 'docker_run_args+=(--volume "''${docker_config}:/root/.docker/config.json:ro")' scripts/build-disk.sh
+        ! rg -q 'cat .*docker_config|cp .*docker_config' scripts/build-disk.sh
+        rg -Fq 'nix/pkgs/lucidity.sh | scripts/build-disk.sh)' nix/pkgs/lucidity.sh
         rg -Fq 'run: nix run .#ci -- timing summarize' .github/workflows/release.yml
         ! rg -Fq 'uses: ./.github/workflows/ami.yml' .github/workflows/release.yml
         ! rg -Fq 'uses: ./.github/workflows/publish.yml' .github/workflows/release.yml
@@ -583,7 +586,7 @@
         git init -q
         git config user.email release-test@lucidity.invalid
         git config user.name 'Lucidity release test'
-        mkdir -p .github/workflows docs/reference nix/flake nix/pkgs
+        mkdir -p .github/workflows docs/reference nix/flake nix/pkgs scripts
         touch flake.nix
         printf '0.2.0\n' >VERSION
         printf 'Current version: **0.2.0**\n' >README.md
@@ -593,6 +596,7 @@
         source_sha=$(git rev-parse HEAD)
         printf 'release tooling\n' >.github/workflows/release.yml
         printf 'release helper\n' >nix/pkgs/lucidity.sh
+        printf 'disk builder fix\n' >scripts/build-disk.sh
         git add .
         git commit -qm 'fix: resume immutable release'
         tooling_sha=$(git rev-parse HEAD)
