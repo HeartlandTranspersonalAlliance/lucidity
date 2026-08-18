@@ -7,6 +7,19 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- Release image promotion, SBOM generation, and retained AMI construction now
+  share one ephemeral runner per role. Verified local OCI layers are reused
+  without transferring raw multi-gigabyte disks between jobs.
+- Release job summaries report observed same-runner and raw AMI durations for
+  non-flaky comparisons with the previous split-runner baseline.
+
+### Fixed
+
+- Infrastructure apply no longer invokes the unsupported SES pricing-plan API
+  after a successful OpenTofu apply.
+
 ## [0.2.0] - 2026-08-18
 
 ### Added

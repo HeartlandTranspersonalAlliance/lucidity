@@ -24,8 +24,10 @@ Usage: lucidity COMMAND [ARGUMENTS]
   ci ecr resolve ROLE REPOSITORY_URL IMAGE_TAG
   ci ecr push IMAGE_REF
   ci ecr verify IMAGE_REF REPOSITORY_NAME IMAGE_TAG
+  ci ecr pin-local IMAGE_REF DIGEST
   ci ecr logout REGISTRY
   ci ami resolve|pull|validate-inputs
+  ci timing summarize LABEL STARTED_AT [BASELINE_SECONDS]
   ci benchmark resolve|verify-target
   ci audit-ami-resources
   ci validate-deployment
@@ -698,12 +700,58 @@ ci_ecr_verify() {
     if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then
         printf '%s published as %s\n' "$image_ref" "$remote_digest" >>"$GITHUB_STEP_SUMMARY"
     fi
+    if [[ -n ${GITHUB_OUTPUT:-} ]]; then
+        printf 'digest=%s\n' "$remote_digest" >>"$GITHUB_OUTPUT"
+    fi
+}
+
+ci_ecr_pin_local() {
+    image_ref=${1:-}
+    digest=${2:-}
+    [[ $image_ref =~ ^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[a-z0-9]+([._/-][a-z0-9]+)*:sha-[0-9a-f]{40}$ && $digest =~ ^sha256:[0-9a-f]{64}$ && $# -eq 2 ]] ||
+        die "ci ecr pin-local requires an immutable ECR IMAGE_REF and DIGEST"
+    immutable_ref=${image_ref%:*}@$digest
+    docker pull "$immutable_ref"
+    [[ $(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$immutable_ref") == linux/amd64 ]] ||
+        die "verified local ECR image is not linux/amd64"
+    if [[ -n ${GITHUB_ENV:-} ]]; then
+        printf 'VERIFIED_IMAGE_REF=%s\n' "$immutable_ref" >>"$GITHUB_ENV"
+    else
+        printf '%s\n' "$immutable_ref"
+    fi
 }
 
 ci_ecr_logout() {
     registry=${1:-}
     [[ -n $registry && $# -eq 1 ]] || die "ci ecr logout requires REGISTRY"
     docker logout "$registry"
+}
+
+ci_timing_summarize() {
+    label=${1:-}
+    started_at=${2:-}
+    baseline=${3:-}
+    [[ -n $label && $started_at =~ ^[0-9]+$ && ($# -eq 2 || ($# -eq 3 && $baseline =~ ^[0-9]+$)) ]] ||
+        die "ci timing summarize requires LABEL STARTED_AT and an optional BASELINE_SECONDS"
+    finished_at=$(date +%s)
+    elapsed=$((finished_at - started_at))
+    ((elapsed >= 0)) || die "ci timing summarize received a future start time"
+    if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then
+        {
+            printf '### %s performance\n\n' "$label"
+            printf -- '- Observed: %ss\n' "$elapsed"
+            if [[ -n $baseline ]]; then
+                difference=$((baseline - elapsed))
+                if ((difference >= 0)); then
+                    printf -- '- Baseline: %ss (%ss faster)\n' "$baseline" "$difference"
+                else
+                    printf -- '- Baseline: %ss (%ss slower)\n' "$baseline" "$((-difference))"
+                fi
+            fi
+        } >>"$GITHUB_STEP_SUMMARY"
+    else
+        printf '%s: %ss\n' "$label" "$elapsed"
+    fi
 }
 
 ci_ami_resolve() {
@@ -878,8 +926,9 @@ ci_command() {
                 resolve) ci_ecr_resolve "$@" ;;
                 push) ci_ecr_push "$@" ;;
                 verify) ci_ecr_verify "$@" ;;
+                pin-local) ci_ecr_pin_local "$@" ;;
                 logout) ci_ecr_logout "$@" ;;
-                *) die "ci ecr requires resolve, push, verify, or logout" ;;
+                *) die "ci ecr requires resolve, push, verify, pin-local, or logout" ;;
             esac
             ;;
         ami)
@@ -903,7 +952,16 @@ ci_command() {
                 *) die "ci benchmark requires resolve or verify-target" ;;
             esac
             ;;
-        *) die "ci requires cache, ecr, ami, benchmark, build-tools-image, audit-ami-resources, or validate-deployment" ;;
+        timing)
+            shift
+            action=${1:-}
+            shift || true
+            case "$action" in
+                summarize) ci_timing_summarize "$@" ;;
+                *) die "ci timing requires summarize" ;;
+            esac
+            ;;
+        *) die "ci requires cache, ecr, ami, benchmark, timing, build-tools-image, audit-ami-resources, or validate-deployment" ;;
     esac
 }
 
@@ -927,12 +985,6 @@ prepare_infra() {
         backend_args=(-backend=false)
     fi
     ln -sfn "$production_vars" "$workdir/production.auto.tfvars.json"
-}
-
-ses_plan_none() {
-    aws sesv2 put-account-pricing-attributes --pricing-plan NONE
-    current=$(aws sesv2 get-account --query 'PricingAttributes.CurrentPlan' --output text)
-    [[ $current == NONE ]] || die "SES pricing plan verification returned $current"
 }
 
 infra() {
@@ -973,7 +1025,6 @@ infra() {
         die "plan contains $deletions deletion(s); review the mesh and ingress cutover, then set LUCIDITY_ALLOW_DELETIONS=1"
     fi
     tofu -chdir="$workdir" apply "$@" "$saved_plan"
-    ses_plan_none
 }
 
 prepare_state() {
@@ -1327,7 +1378,8 @@ release_image() {
         '{role:$role,repository:$repository,source_tag:$source_tag,release_tag:$release_tag,digest:$digest,sbom_asset:$sbom_asset,sbom_sha256:$sbom_sha256,sbom_asset_sha256:$sbom_asset_sha256}' \
         >"$release_dir/$role.metadata.json"
     if [[ -n ${GITHUB_OUTPUT:-} ]]; then
-        printf 'digest=%s\npath=%s\nrepository_name=%s\n' "$source_digest" "$sbom_path" "$repository_name" >>"$GITHUB_OUTPUT"
+        printf 'digest=%s\npath=%s\nrepository_name=%s\nsbom_sha256=%s\n' \
+            "$source_digest" "$sbom_path" "$repository_name" "$sbom_sha256" >>"$GITHUB_OUTPUT"
     fi
 }
 
