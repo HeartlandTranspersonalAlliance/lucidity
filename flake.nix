@@ -49,6 +49,7 @@
         ./nix/flake/project.nix
         ./nix/flake/architecture.nix
         ./nix/flake/checks.nix
+        ./nix/flake/validation-shards.nix
         ./nix/flake/formatting.nix
         ./nix/flake/outputs.nix
       ];

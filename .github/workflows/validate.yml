@@ -122,10 +122,38 @@ jobs:
         if: always()
         run: nix run .#ci -- cache cleanup
 
+  pr-shards:
+    name: PR validation shard / ${{ matrix.shard }}
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [policy, roles]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install locked Nix
+        uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
+        with:
+          kvm: true
+      - name: Configure the public Lucidity Nix cache for pull-only access
+        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71
+        with:
+          name: lucidity
+          skipPush: true
+          pushFilter: lucidity-(controller|worker)-bootc-context
+      - name: Validate the pure plan and run the selected shard
+        run: nix run .#pr-validation -- "${{ matrix.shard }}"
+
   required:
     name: required
     if: always()
-    needs: [hermetic, lifecycle]
+    needs: [hermetic, lifecycle, pr-shards]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -133,6 +161,8 @@ jobs:
         env:
           HERMETIC_RESULT: ${{ needs.hermetic.result }}
           LIFECYCLE_RESULT: ${{ needs.lifecycle.result }}
+          PR_SHARDS_RESULT: ${{ needs.pr-shards.result }}
         run: |
           [[ ${HERMETIC_RESULT} == success ]]
           [[ ${LIFECYCLE_RESULT} == success || ${LIFECYCLE_RESULT} == skipped ]]
+          [[ ${PR_SHARDS_RESULT} == success || ${PR_SHARDS_RESULT} == skipped ]]
