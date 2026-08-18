@@ -7,6 +7,14 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- A pure, versioned PR-shard plan and Nix-wrapped hybrid validator for exact
+  flake check attributes, strict preflight validation, failure attribution, and
+  isolated mutable-profile execution and cleanup.
+- Independent pull-request matrix jobs for policy and role-validation shards,
+  with pull-only Cachix access and aggregation into the required gate.
+
 ### Changed
 
 - Release image promotion, SBOM generation, and retained AMI construction now

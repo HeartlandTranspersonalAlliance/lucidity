@@ -266,11 +266,17 @@
         rg -q 'lucidity-admin-authorized-key.service' nix/den/classes/bootc/image.nix
         rg -Fq 'secretspec run' nix/pkgs/cloud-init-fixture.nix
         rg -Fq 'nix flake check --show-trace --print-build-logs' .github/workflows/validate.yml
+        rg -Fq 'run: nix run .#pr-validation --' .github/workflows/validate.yml
+        rg -Fq "shard: [policy, roles]" .github/workflows/validate.yml
+        rg -Fq 'PR_SHARDS_RESULT' .github/workflows/validate.yml
         ! rg -q 'checks\.x86_64-linux|make |\./scripts/' .github/workflows/validate.yml
         rg -Fq 'run: nix run .#audit-ami-resources' .github/workflows/audit-ami-resources.yml
         ! rg -q 'run: \./scripts/' .github/workflows/audit-ami-resources.yml
         rg -Fq 'run: nix run .#validate-deployment' .github/workflows/validate-deployment.yml
         ! rg -q 'run: \./scripts/' .github/workflows/validate-deployment.yml
+        rg -Fq './nix/flake/validation-shards.nix' flake.nix
+        rg -Fq 'pr-validation-plan' nix/flake/validation-shards.nix
+        rg -Fq 'pr-validation-unit' nix/flake/validation-shards.nix
         if rg -n 'make |\./scripts/' .github/workflows; then
           echo "GitHub workflows must invoke flake apps instead of Make or repository scripts" >&2
           exit 1
@@ -321,9 +327,9 @@
             test "''${caches[$index]}" -gt "''${installers[$index]}"
           done
         done
-        test "$(rg -F "$cache_action" .github/workflows | wc -l)" -eq 14
-        test "$(rg -F 'pushFilter: lucidity-(controller|worker)-bootc-context' .github/workflows | wc -l)" -eq 14
-        test "$(rg -F 'kvm: true' .github/workflows | wc -l)" -eq 15
+        test "$(rg -F "$cache_action" .github/workflows | wc -l)" -eq 15
+        test "$(rg -F 'pushFilter: lucidity-(controller|worker)-bootc-context' .github/workflows | wc -l)" -eq 15
+        test "$(rg -F 'kvm: true' .github/workflows | wc -l)" -eq 16
         ! rg -q '99-kvm4all|udevadm.*kvm' .github/workflows
         ! rg -q 'pathsToPush:.*(qcow2|raw|ami|bootc-context)' .github/workflows
         test "$(rg -F 'cache configure ci-tools' .github/workflows | wc -l)" -eq 4
@@ -719,6 +725,8 @@
       backupUnitCheck
       textStyleUnitCheck
       yamlPolicyCheck
+      config.checks.pr-validation-contract
+      config.checks.pr-validation-unit
     ];
     staticCheck = pkgs.runCommand "lucidity-static-checks" {} ''
       for check in ${lib.escapeShellArgs (map toString staticChecks)}; do
