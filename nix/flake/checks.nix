@@ -319,11 +319,19 @@
         ! rg -q '^  release:' .github/workflows/validate.yml
         rg -q '^  lifecycle-controller:' .github/workflows/validate.yml
         rg -q '^  lifecycle-worker:' .github/workflows/validate.yml
-        rg -Fq "needs.prepare.outputs.lifecycle_controller == 'true'" .github/workflows/validate.yml
-        rg -Fq "needs.prepare.outputs.lifecycle_worker == 'true'" .github/workflows/validate.yml
-        rg -Fq "needs.prepare.outputs.lifecycle_cache != 'isolated'" .github/workflows/validate.yml
+        rg -Fq 'if: fromJSON(needs.prepare.outputs.plan).lifecycle.controller' .github/workflows/validate.yml
+        rg -Fq 'if: fromJSON(needs.prepare.outputs.plan).lifecycle.worker' .github/workflows/validate.yml
+        test "$(rg -F 'fromJSON(needs.prepare.outputs.plan).cache_mode' .github/workflows/validate.yml | wc -l)" -eq 12
+        ! rg -Fq 'needs.prepare.outputs.lifecycle_' .github/workflows/validate.yml
+        rg -Fq 'fetch-depth: ''${{ github.event_name == ' .github/workflows/validate.yml
+        rg -Fq "merge_group' && '0' || '1" .github/workflows/validate.yml
+        rg -Fq 'authToken: ""' .github/workflows/validate.yml
         rg -Fq 'needs: [prepare, lifecycle-controller, lifecycle-worker]' .github/workflows/validate.yml
         rg -Fq 'WORKFLOW_PLAN: ''${{ needs.prepare.outputs.plan }}' .github/workflows/validate.yml
+        rg -Fq 'git merge-base --is-ancestor "''${base_sha}" "''${head_sha}"' scripts/ci-workflow-prepare.sh
+        rg -Fq 'git diff --no-ext-diff --name-status --find-renames -z' scripts/ci-workflow-prepare.sh
+        rg -Fq 'group: lucidity-image-publication-''${{ github.sha }}' .github/workflows/publish.yml
+        rg -Fq 'group: lucidity-image-publication-''${{ inputs.source_sha || github.sha }}' .github/workflows/release.yml
         if rg -n '^\s+(aws (ecr|ec2|ssm|secretsmanager)|podman pull)' .github/workflows; then
           echo "AWS and image policy must live behind flake-owned CI commands" >&2
           exit 1

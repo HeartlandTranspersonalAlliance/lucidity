@@ -96,6 +96,17 @@ Accepted for v0.2.1:
 - retain a single stable aggregate branch gate
 - use explicit controller and worker jobs so failures remain attributable
 
+Accepted for the post-release follow-up:
+
+- parse the versioned JSON plan directly in lifecycle and cache conditions,
+  leaving scalar outputs as compatibility projections only
+- use full Git history only for merge-group classification and shallow checkout
+  for hermetic-only events
+- fail safe to both roles when the supplied merge-group base is not an ancestor
+  of the head
+- serialize normal immutable image publication with release publication and
+  avoid unnecessary cache-token and cleanup work
+
 Rejected for this milestone:
 
 - the #47 shard proposal, because integration already shares setup on one runner
@@ -109,25 +120,29 @@ Rejected for this milestone:
 
 The rollback for gating changes is to select both roles for every merge group.
 The classifier itself also fails safe to both roles for unknown paths, invalid
-SHAs, rename ambiguity, mixed role changes, or diff errors.
+or non-ancestral SHAs, rename ambiguity, mixed role changes, or diff errors.
 
 ## Authoritative planner contract
 
 `ci-workflow-prepare` is the sole producer of the workflow plan. Schema version
 1 publishes `schema_version`, `event`, `cache_mode`, the controller and worker
 booleans under `lifecycle`, `fallback`, `reason`, and the sorted unique
-`changed_paths`. It also emits compatibility outputs for GitHub job conditions,
-but those outputs are projections of the same plan rather than a second policy
-implementation.
+`changed_paths`. It also emits scalar compatibility outputs for external
+adapters, but the repository workflow parses the JSON plan directly for job and
+cache conditions so those projections cannot become a second policy source.
 
 Pull requests and main pushes are hermetic-only. Merge groups use path
 classification. Scheduled and manual runs select both roles, and unknown events
-fail safe to both roles. Unknown paths, invalid commit SHAs, malformed diffs,
-and diff errors also set `fallback` and select both roles. The manual
-`lifecycle_cache=isolated` plan bypasses both Cachix and the role-scoped OCI
-caches. Lifecycle conditions, cache mode, the prepare summary, and `required`
-all consume the published plan. The gate requires prepare to succeed, each
-planned lifecycle to succeed, and each unplanned lifecycle to be skipped.
+fail safe to both roles. Unknown paths, invalid or non-ancestral commit SHAs,
+malformed diffs, and diff errors also set `fallback` and select both roles. The
+manual `lifecycle_cache=isolated` plan bypasses both Cachix and the role-scoped
+OCI caches, including cache cleanup. Lifecycle conditions, cache mode, the
+prepare summary, and `required` all consume the published plan. The gate
+requires prepare to succeed, each planned lifecycle to succeed, and each
+unplanned lifecycle to be skipped. Publish and release workflows use the same
+source-revision-scoped, non-cancelling concurrency group so immutable-image
+critical sections for the same source do not overlap while unrelated revisions
+remain independent.
 
 ## Shell ownership audit
 

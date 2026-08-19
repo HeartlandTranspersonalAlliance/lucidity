@@ -14,7 +14,7 @@ on:
         default: ""
 
 concurrency:
-  group: lucidity-release
+  group: lucidity-image-publication-${{ inputs.source_sha || github.sha }}
   cancel-in-progress: false
 
 permissions:

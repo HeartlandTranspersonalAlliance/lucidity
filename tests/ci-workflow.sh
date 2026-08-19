@@ -88,6 +88,9 @@ unset GITHUB_OUTPUT
 
 ${prepare} merge_group invalid "${head}" warm |
     jq -e '.lifecycle.controller and .lifecycle.worker and .fallback and .reason == "invalid-sha"' >/dev/null
+divergent_head=$(printf 'divergent\n' | git commit-tree "$(git rev-parse "${head}^{tree}")")
+${prepare} merge_group "${head}" "${divergent_head}" warm |
+    jq -e '.lifecycle.controller and .lifecycle.worker and .fallback and .reason == "non-ancestral-sha"' >/dev/null
 ${prepare} merge_group "${head}" "${head}" warm |
     jq -e '(.lifecycle.controller | not) and (.lifecycle.worker | not) and (.fallback | not) and .reason == "no-changes"' >/dev/null
 ${prepare} schedule '' '' warm |

@@ -44,7 +44,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          fetch-depth: 0
+          fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '1' }}
           persist-credentials: false
       - name: Install locked Nix
         uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
@@ -74,7 +74,7 @@ jobs:
 
   lifecycle-controller:
     needs: prepare
-    if: needs.prepare.outputs.lifecycle_controller == 'true'
+    if: fromJSON(needs.prepare.outputs.plan).lifecycle.controller
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     permissions:
@@ -89,12 +89,12 @@ jobs:
         with:
           kvm: true
       - name: Require the Cachix write token for trusted events
-        if: env.NIX_CACHE_WRITE == 'true' && needs.prepare.outputs.lifecycle_cache != 'isolated'
+        if: env.NIX_CACHE_WRITE == 'true' && fromJSON(needs.prepare.outputs.plan).cache_mode != 'isolated'
         env:
           CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
         run: nix run .#ci-require-env -- CACHIX_AUTH_TOKEN
       - name: Configure the public Lucidity Nix cache
-        if: needs.prepare.outputs.lifecycle_cache != 'isolated'
+        if: fromJSON(needs.prepare.outputs.plan).cache_mode != 'isolated'
         uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71
         with:
           name: lucidity
@@ -102,30 +102,30 @@ jobs:
           skipPush: ${{ env.NIX_CACHE_WRITE != 'true' }}
           pushFilter: lucidity-(controller|worker)-bootc-context
       - name: Restore the role-scoped OCI cache
-        if: needs.prepare.outputs.lifecycle_cache != 'isolated'
+        if: fromJSON(needs.prepare.outputs.plan).cache_mode != 'isolated'
         env:
           GHCR_CACHE_WRITE: true
           GITHUB_TOKEN: ${{ github.token }}
         run: nix run .#ci -- cache configure controller
       - name: Run the flake-owned bootc switch and rollback lifecycle
-        if: needs.prepare.outputs.lifecycle_cache != 'isolated'
+        if: fromJSON(needs.prepare.outputs.plan).cache_mode != 'isolated'
         env:
           CONTAINER_ENGINE: docker
           LUCIDITY_FULL_GUEST_TEST: "1"
         run: nix run .#test-controller
       - name: Run the isolated-cache bootc switch and rollback lifecycle
-        if: needs.prepare.outputs.lifecycle_cache == 'isolated'
+        if: fromJSON(needs.prepare.outputs.plan).cache_mode == 'isolated'
         env:
           CONTAINER_ENGINE: docker
           LUCIDITY_FULL_GUEST_TEST: "1"
         run: nix --option extra-substituters "" run .#test-controller
       - name: Remove OCI cache credentials
-        if: always()
+        if: always() && fromJSON(needs.prepare.outputs.plan).cache_mode != 'isolated'
         run: nix run .#ci -- cache cleanup
 
   lifecycle-worker:
     needs: prepare
-    if: needs.prepare.outputs.lifecycle_worker == 'true'
+    if: fromJSON(needs.prepare.outputs.plan).lifecycle.worker
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     permissions:
@@ -140,12 +140,12 @@ jobs:
         with:
           kvm: true
       - name: Require the Cachix write token for trusted events
-        if: env.NIX_CACHE_WRITE == 'true' && needs.prepare.outputs.lifecycle_cache != 'isolated'
+        if: env.NIX_CACHE_WRITE == 'true' && fromJSON(needs.prepare.outputs.plan).cache_mode != 'isolated'
         env:
           CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
         run: nix run .#ci-require-env -- CACHIX_AUTH_TOKEN
       - name: Configure the public Lucidity Nix cache
-        if: needs.prepare.outputs.lifecycle_cache != 'isolated'
+        if: fromJSON(needs.prepare.outputs.plan).cache_mode != 'isolated'
         uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71
         with:
           name: lucidity
@@ -153,25 +153,25 @@ jobs:
           skipPush: ${{ env.NIX_CACHE_WRITE != 'true' }}
           pushFilter: lucidity-(controller|worker)-bootc-context
       - name: Restore the role-scoped OCI cache
-        if: needs.prepare.outputs.lifecycle_cache != 'isolated'
+        if: fromJSON(needs.prepare.outputs.plan).cache_mode != 'isolated'
         env:
           GHCR_CACHE_WRITE: true
           GITHUB_TOKEN: ${{ github.token }}
         run: nix run .#ci -- cache configure worker
       - name: Run the flake-owned bootc switch and rollback lifecycle
-        if: needs.prepare.outputs.lifecycle_cache != 'isolated'
+        if: fromJSON(needs.prepare.outputs.plan).cache_mode != 'isolated'
         env:
           CONTAINER_ENGINE: docker
           LUCIDITY_FULL_GUEST_TEST: "1"
         run: nix run .#test-worker
       - name: Run the isolated-cache bootc switch and rollback lifecycle
-        if: needs.prepare.outputs.lifecycle_cache == 'isolated'
+        if: fromJSON(needs.prepare.outputs.plan).cache_mode == 'isolated'
         env:
           CONTAINER_ENGINE: docker
           LUCIDITY_FULL_GUEST_TEST: "1"
         run: nix --option extra-substituters "" run .#test-worker
       - name: Remove OCI cache credentials
-        if: always()
+        if: always() && fromJSON(needs.prepare.outputs.plan).cache_mode != 'isolated'
         run: nix run .#ci -- cache cleanup
 
   required:
@@ -186,16 +186,11 @@ jobs:
           persist-credentials: false
       - name: Install locked Nix
         uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
-      - name: Require the Cachix write token for trusted events
-        if: env.NIX_CACHE_WRITE == 'true'
-        env:
-          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
-        run: nix run .#ci-require-env -- CACHIX_AUTH_TOKEN
       - name: Configure the public Lucidity Nix cache
         uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71
         with:
           name: lucidity
-          authToken: ${{ env.NIX_CACHE_WRITE == 'true' && secrets.CACHIX_AUTH_TOKEN || '' }}
+          authToken: ""
           skipPush: true
           pushFilter: lucidity-(controller|worker)-bootc-context
       - name: Enforce the authoritative CI plan

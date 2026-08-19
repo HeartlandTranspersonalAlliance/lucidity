@@ -56,13 +56,21 @@ classify_merge_group() {
         reason="invalid-sha"
         return
     fi
+    if ! git merge-base --is-ancestor "${base_sha}" "${head_sha}"; then
+        controller=true
+        worker=true
+        fallback=true
+        reason="non-ancestral-sha"
+        return
+    fi
 
     temporary_directory=$(mktemp -d)
     trap 'rm -rf "${temporary_directory}"; trap - RETURN' RETURN
     diff_file=${temporary_directory}/diff
     paths_file=${temporary_directory}/paths
     : >"${paths_file}"
-    if ! git diff --name-status --find-renames -z "${base_sha}" "${head_sha}" >"${diff_file}"; then
+    if ! git diff --no-ext-diff --name-status --find-renames -z \
+        "${base_sha}" "${head_sha}" -- >"${diff_file}"; then
         controller=true
         worker=true
         fallback=true
