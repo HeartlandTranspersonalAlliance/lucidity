@@ -74,6 +74,12 @@ if [[ ${container_engine} == docker ]]; then
         "${tool_image}" \
         -Eeuo pipefail -c '
             podman load
+            if [[ -n ${REGISTRY_AUTH_FILE:-} && ${SOURCE_IMAGE} == *@sha256:* ]]; then
+                # Docker archives preserve layers but not the registry digest
+                # association. Re-resolve the verified digest with the mounted
+                # auth file so image-builder can use it from local storage.
+                podman pull --authfile "${REGISTRY_AUTH_FILE}" "${SOURCE_IMAGE}"
+            fi
             image-builder --output-dir /output build \
                 --arch "${BUILDER_ARCH}" \
                 --bootc-ref "${SOURCE_IMAGE}" \

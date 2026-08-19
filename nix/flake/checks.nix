@@ -286,6 +286,8 @@
         rg -Fq 'IMAGE_NAME: ''${{ env.VERIFIED_IMAGE_REF }}' .github/workflows/release.yml
         rg -Fq -- '--volume "''${docker_config}:/root/.docker/config.json:ro"' scripts/build-disk.sh
         rg -Fq -- '--env "REGISTRY_AUTH_FILE=/root/.docker/config.json"' scripts/build-disk.sh
+        rg -Fq '[[ -n ''${REGISTRY_AUTH_FILE:-} && ''${SOURCE_IMAGE} == *@sha256:* ]]' scripts/build-disk.sh
+        rg -Fq 'podman pull --authfile "''${REGISTRY_AUTH_FILE}" "''${SOURCE_IMAGE}"' scripts/build-disk.sh
         ! rg -q 'cat .*docker_config|cp .*docker_config' scripts/build-disk.sh
         rg -Fq 'nix/pkgs/lucidity.sh | scripts/build-disk.sh)' nix/pkgs/lucidity.sh
         rg -Fq 'run: nix run .#ci -- timing summarize' .github/workflows/release.yml
