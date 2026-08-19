@@ -234,6 +234,7 @@
         for interface in generate check build vm infra state secrets mesh release; do
           grep -Eq "(^|[[:space:]])$interface([[:space:]]|$)" <<<"$help"
         done
+        grep -Fq '${pkgs.coldsnap}/bin' ${lucidity}/bin/lucidity
         grep -Fq 'secrets initialize-controller-runtime' <<<"$help"
 
         if rg -n 'secretsmanager[[:space:]]+(get-secret-value|batch-get-secret-value)' nix scripts tests; then
@@ -291,6 +292,7 @@
         rg -Fq 'podman pull --authfile "''${REGISTRY_AUTH_FILE}" "''${SOURCE_IMAGE}"' scripts/build-disk.sh
         ! rg -q 'cat .*docker_config|cp .*docker_config' scripts/build-disk.sh
         rg -Fq 'nix/pkgs/lucidity.sh | scripts/build-disk.sh)' nix/pkgs/lucidity.sh
+        ! rg -Fq 'build_path "$root#coldsnap"' nix/pkgs/lucidity.sh
         rg -Fq 'run: nix run .#ci -- timing summarize' .github/workflows/release.yml
         ! rg -Fq 'uses: ./.github/workflows/ami.yml' .github/workflows/release.yml
         ! rg -Fq 'uses: ./.github/workflows/publish.yml' .github/workflows/release.yml

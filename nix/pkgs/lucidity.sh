@@ -452,11 +452,6 @@ disk_command() {
 ami_command() {
     [[ ${1:-} == validate ]] || die "ami requires validate"
     shift
-    if [[ -z ${COLDSNAP_COMMAND:-} ]]; then
-        root=$(repository_root)
-        coldsnap_path=$(build_path "$root#coldsnap")
-        export COLDSNAP_COMMAND="$coldsnap_path/bin/coldsnap"
-    fi
     run_repository_script validate-ami-import.sh "$@"
 }
 

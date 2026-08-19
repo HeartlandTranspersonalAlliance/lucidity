@@ -40,6 +40,7 @@ in
     name = "lucidity";
     runtimeInputs = with pkgs; [
       awscli2
+      coldsnap
       coreutils
       curl
       findutils
