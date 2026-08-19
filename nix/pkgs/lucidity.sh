@@ -30,6 +30,7 @@ Usage: lucidity COMMAND [ARGUMENTS]
   ci ami resolve|pull|validate-inputs
   ci timing summarize LABEL STARTED_AT [BASELINE_SECONDS]
   ci benchmark resolve|verify-target
+  ci workflow audit REPOSITORY [--limit COUNT] [--json PATH] [--markdown PATH]
   ci audit-ami-resources
   ci validate-deployment
   backup init|run|check
@@ -452,11 +453,6 @@ disk_command() {
 ami_command() {
     [[ ${1:-} == validate ]] || die "ami requires validate"
     shift
-    if [[ -z ${COLDSNAP_COMMAND:-} ]]; then
-        root=$(repository_root)
-        coldsnap_path=$(build_path "$root#coldsnap")
-        export COLDSNAP_COMMAND="$coldsnap_path/bin/coldsnap"
-    fi
     run_repository_script validate-ami-import.sh "$@"
 }
 
@@ -898,6 +894,130 @@ ci_benchmark_verify_target() {
     printf 'Benchmark target digest: %s\n' "$(jq -r '.images[0].imageId.imageDigest' <<<"$image")"
 }
 
+ci_workflow_audit() {
+    repository=${1:-}
+    [[ $repository =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] ||
+        die "ci workflow audit requires an owner/repository argument"
+    shift
+
+    limit=100
+    json_output=
+    markdown_output=
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --limit)
+                [[ $# -ge 2 && $2 =~ ^[1-9][0-9]*$ ]] || die "--limit requires a positive integer"
+                limit=$2
+                shift 2
+                ;;
+            --json)
+                [[ $# -ge 2 && -n $2 ]] || die "--json requires a path"
+                json_output=$2
+                shift 2
+                ;;
+            --markdown)
+                [[ $# -ge 2 && -n $2 ]] || die "--markdown requires a path"
+                markdown_output=$2
+                shift 2
+                ;;
+            *) die "unknown ci workflow audit argument: $1" ;;
+        esac
+    done
+
+    temporary_directory=$(mktemp -d)
+    trap 'rm -rf "$temporary_directory"' RETURN
+    runs_file=$temporary_directory/runs.json
+    report_file=$temporary_directory/report.json
+
+    if [[ -n ${LUCIDITY_WORKFLOW_RUNS_FILE:-} ]]; then
+        cp "$LUCIDITY_WORKFLOW_RUNS_FILE" "$runs_file"
+    else
+        gh run list --repo "$repository" --limit "$limit" \
+            --json databaseId,workflowName,event,status,conclusion,createdAt,startedAt,updatedAt,url,headSha \
+            >"$runs_file"
+    fi
+
+    jq --arg repository "$repository" --argjson limit "$limit" '
+      def epoch: fromdateiso8601;
+      def percentile($fraction):
+        sort as $values
+        | if ($values | length) == 0 then null
+          else $values[((($values | length) - 1) * $fraction | ceil)]
+          end;
+      map(
+        . + {
+          queue_seconds: ((.startedAt | epoch) - (.createdAt | epoch)),
+          duration_seconds: ((.updatedAt | epoch) - (.startedAt | epoch))
+        }
+      )
+      | sort_by(.databaseId)
+      | map({
+          id: .databaseId,
+          workflow: .workflowName,
+          event,
+          status,
+          conclusion,
+          head_sha: .headSha,
+          queue_seconds,
+          duration_seconds,
+          url
+        }) as $runs
+      | {
+          schema_version: 1,
+          repository: $repository,
+          requested_sample_limit: $limit,
+          sampled_runs: ($runs | length),
+          aggregates: (
+            $runs
+            | group_by([.workflow, .event])
+            | map({
+                workflow: .[0].workflow,
+                event: .[0].event,
+                samples: length,
+                successes: (map(select(.conclusion == "success")) | length),
+                failures: (map(select(.conclusion == "failure")) | length),
+                cancellations: (map(select(.conclusion == "cancelled")) | length),
+                skips: (map(select(.conclusion == "skipped")) | length),
+                median_queue_seconds: (map(.queue_seconds) | percentile(0.50)),
+                p95_queue_seconds: (map(.queue_seconds) | percentile(0.95)),
+                median_duration_seconds: (map(.duration_seconds) | percentile(0.50)),
+                p95_duration_seconds: (map(.duration_seconds) | percentile(0.95))
+              })
+            | sort_by(.workflow, .event)
+          ),
+          runs: $runs
+        }
+    ' "$runs_file" >"$report_file"
+
+    if [[ -n $json_output ]]; then
+        cp "$report_file" "$json_output"
+    fi
+
+    if [[ -n $markdown_output ]]; then
+        jq -r '
+          "# GitHub Actions run audit",
+          "",
+          "Repository: `\(.repository)`",
+          "",
+          "Sampled runs: \(.sampled_runs) (requested limit: \(.requested_sample_limit))",
+          "",
+          "| Workflow | Event | Samples | Success | Failure | Cancelled | Skipped | Median queue | p95 queue | Median runtime | p95 runtime |",
+          "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+          (.aggregates[] | "| \(.workflow) | `\(.event)` | \(.samples) | \(.successes) | \(.failures) | \(.cancellations) | \(.skips) | \(.median_queue_seconds)s | \(.p95_queue_seconds)s | \(.median_duration_seconds)s | \(.p95_duration_seconds)s |"),
+          "",
+          "## Sample runs",
+          "",
+          "| ID | Workflow | Event | Result | Queue | Runtime | Link |",
+          "| ---: | --- | --- | --- | ---: | ---: | --- |",
+          (.runs[] | "| \(.id) | \(.workflow) | `\(.event)` | `\(.conclusion)` | \(.queue_seconds)s | \(.duration_seconds)s | [run](\(.url)) |")
+        ' "$report_file" >"$markdown_output"
+    fi
+
+    if [[ -z $json_output && -z $markdown_output ]]; then
+        cat "$report_file"
+    fi
+}
+
 ci_command() {
     case "${1:-}" in
         cache)
@@ -972,7 +1092,16 @@ ci_command() {
                 *) die "ci timing requires summarize" ;;
             esac
             ;;
-        *) die "ci requires cache, ecr, ami, benchmark, timing, build-tools-image, audit-ami-resources, or validate-deployment" ;;
+        workflow)
+            shift
+            action=${1:-}
+            shift || true
+            case "$action" in
+                audit) ci_workflow_audit "$@" ;;
+                *) die "ci workflow requires audit" ;;
+            esac
+            ;;
+        *) die "ci requires cache, ecr, ami, benchmark, timing, workflow, build-tools-image, audit-ami-resources, or validate-deployment" ;;
     esac
 }
 

@@ -1,0 +1,38 @@
+[
+  {
+    "conclusion": "success",
+    "createdAt": "2026-08-19T00:00:00Z",
+    "databaseId": 1,
+    "event": "merge_group",
+    "headSha": "1111111111111111111111111111111111111111",
+    "startedAt": "2026-08-19T00:00:05Z",
+    "status": "completed",
+    "updatedAt": "2026-08-19T00:02:05Z",
+    "url": "https://example.invalid/actions/runs/1",
+    "workflowName": "Validate locked flake"
+  },
+  {
+    "conclusion": "failure",
+    "createdAt": "2026-08-19T01:00:00Z",
+    "databaseId": 2,
+    "event": "merge_group",
+    "headSha": "2222222222222222222222222222222222222222",
+    "startedAt": "2026-08-19T01:00:10Z",
+    "status": "completed",
+    "updatedAt": "2026-08-19T01:03:10Z",
+    "url": "https://example.invalid/actions/runs/2",
+    "workflowName": "Validate locked flake"
+  },
+  {
+    "conclusion": "success",
+    "createdAt": "2026-08-19T02:00:00Z",
+    "databaseId": 3,
+    "event": "push",
+    "headSha": "3333333333333333333333333333333333333333",
+    "startedAt": "2026-08-19T02:00:00Z",
+    "status": "completed",
+    "updatedAt": "2026-08-19T02:08:00Z",
+    "url": "https://example.invalid/actions/runs/3",
+    "workflowName": "Publish bootc images"
+  }
+]

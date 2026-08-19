@@ -45,6 +45,7 @@ in
       findutils
       gawk
       git
+      gh
       gnugrep
       gnused
       jq
@@ -59,6 +60,7 @@ in
       ripgrep
       secretspec
       shellcheck
+      coldsnap
       xorriso
     ];
     text =
