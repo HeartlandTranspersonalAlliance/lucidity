@@ -1,9 +1,9 @@
-# Production readiness roadmap
+# Production readiness
 
 Lucidity is designed as a controlled singleton: one controller and one worker.
-High availability is intentionally deferred. Production approval therefore
-depends on tested recovery, strict change control, and observable failure
-rather than automatic failover.
+High availability and an availability percentile objective are out of scope.
+Production approval depends on tested recovery, strict change control, and
+observable failure rather than automatic failover.
 
 ## Release gate
 
@@ -66,7 +66,5 @@ The deployment validator must prove:
 ## Deferred work
 
 After singleton production is stable, prioritize automated release-identity
-attestation in deployment validation, application-level capacity metrics,
-scheduled restore testing, and then an explicit high-availability design. HA
-must not be represented as complete until Coolify state, OpenBao quorum,
-workload storage, routing, and failure-domain behavior are all tested together.
+attestation in deployment validation, application-level capacity metrics, and
+scheduled restore testing. High availability is not a roadmap commitment.
