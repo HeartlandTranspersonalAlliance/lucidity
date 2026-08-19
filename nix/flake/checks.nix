@@ -345,6 +345,8 @@
         touch "$out"
       '';
     runtimeToolsCheck = pkgs.runCommand "lucidity-runtime-tools-check" {} ''
+      grep -Fq ${lib.escapeShellArg "${pkgs.coldsnap}/bin"} ${lib.getExe lucidity}
+      ! grep -Fq 'root#coldsnap' ${lib.getExe lucidity}
       grep -Fq ${lib.escapeShellArg "${pkgs.qemu-utils}/bin"} ${lib.getExe lucidity}
       grep -Fq ${lib.escapeShellArg "${pkgs.xorriso}/bin"} ${lib.getExe lucidity}
       grep -Fq 'base_image=''${VM_BASE_IMAGE:-localhost/coolify-bootc-$role:lifecycle-v1}' ${lib.getExe lucidity}
@@ -707,6 +709,29 @@
       ];
       nativeBuildInputs = [pkgs.gitMinimal];
     };
+    workflowAuditUnitCheck =
+      pkgs.runCommand "lucidity-workflow-audit-unit" {
+        nativeBuildInputs = [pkgs.jq];
+      } ''
+        export LUCIDITY_WORKFLOW_RUNS_FILE=${../../tests/fixtures/workflow-runs.json}
+        ${lib.getExe lucidity} ci workflow audit example/lucidity --limit 3 \
+          --json "$TMPDIR/audit.json" --markdown "$TMPDIR/audit.md"
+        jq -e '
+          .schema_version == 1 and
+          .repository == "example/lucidity" and
+          .requested_sample_limit == 3 and
+          .sampled_runs == 3 and
+          (.aggregates | length) == 2 and
+          .aggregates[0].workflow == "Publish bootc images" and
+          .aggregates[0].median_duration_seconds == 480 and
+          .aggregates[1].workflow == "Validate locked flake" and
+          .aggregates[1].median_duration_seconds == 180 and
+          .aggregates[1].p95_duration_seconds == 180
+        ' "$TMPDIR/audit.json" >/dev/null
+        grep -Fq '| Validate locked flake | `merge_group` | 2 |' "$TMPDIR/audit.md"
+        grep -Fq '[run](https://example.invalid/actions/runs/3)' "$TMPDIR/audit.md"
+        touch "$out"
+      '';
     staticChecks = [
       manifestsCheck
       cloudInitCheck
@@ -726,6 +751,7 @@
       deploymentUnitCheck
       backupUnitCheck
       textStyleUnitCheck
+      workflowAuditUnitCheck
       yamlPolicyCheck
     ];
     staticCheck = pkgs.runCommand "lucidity-static-checks" {} ''
@@ -756,6 +782,7 @@
       static = staticCheck;
       text-style-unit = textStyleUnitCheck;
       worker-unit = workerUnitCheck;
+      workflow-audit-unit = workflowAuditUnitCheck;
       yaml-policy = yamlPolicyCheck;
     };
   };

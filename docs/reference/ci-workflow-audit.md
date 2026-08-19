@@ -1,0 +1,110 @@
+# GitHub Actions audit for v0.2.1
+
+This document is the responsibility map and pre-optimization baseline for issue
+#50. Workflows remain thin runner adapters. Policy and executable behavior belong
+to flake-owned `lucidity` commands and `nix flake check` remains authoritative.
+
+## Reproducing the run baseline
+
+Run the audit from the locked development environment:
+
+```console
+nix develop -c nix run .#ci -- workflow audit \
+  HeartlandTranspersonalAlliance/lucidity --limit 100 \
+  --json ci-baseline.json --markdown ci-baseline.md
+```
+
+The command does not include a generation timestamp, sorts runs and aggregates,
+and emits the same JSON and Markdown for the same GitHub response. It reads only
+Actions metadata and never reads repository or runtime secret values.
+
+The baseline below sampled 100 runs ending at run
+[32216354157](https://github.com/HeartlandTranspersonalAlliance/lucidity/actions/runs/32216354157)
+on 2026-08-19. GitHub reported zero queue seconds for almost all runs in this
+window. The one material queue was a manually dispatched release that waited
+3,223 seconds. Runtime values are workflow elapsed time, so parallel job runner
+minutes are called out separately where they matter.
+
+| Workflow and event | Samples | Success / failure / cancelled / skipped | Median runtime | p95 runtime |
+| --- | ---: | --- | ---: | ---: |
+| Audit disposable AMI resources, schedule | 1 | 0 / 0 / 0 / 1 | 1s | 1s |
+| Plan and apply production infrastructure, pull request | 12 | 0 / 0 / 0 / 12 | 1s | 11s |
+| Publish bootc images, push | 7 | 7 / 0 / 0 / 0 | 466s | 527s |
+| Release bootc appliance, dispatch | 7 | 0 / 5 / 2 / 0 | 1,122s | 7,243s |
+| Validate AMI compatibility, pull request | 9 | 7 / 1 / 1 / 0 | 643s | 800s |
+| Validate local Coolify integration, pull request | 18 | 11 / 1 / 6 / 0 | 1,574s | 1,796s |
+| Validate locked flake, merge group | 16 | 8 / 5 / 3 / 0 | 1,696s | 3,014s |
+| Validate locked flake, pull request | 22 | 21 / 0 / 1 / 0 | 109s | 126s |
+| Validate locked flake, main push | 8 | 8 / 0 / 0 / 0 | 1,689s | 1,797s |
+
+A representative successful merge group is run
+[32212513671](https://github.com/HeartlandTranspersonalAlliance/lucidity/actions/runs/32212513671).
+Its hermetic job used 95 seconds, the worker lifecycle used 1,435 seconds, and
+the controller lifecycle used 1,720 seconds. The two lifecycle jobs therefore
+consumed about 52.6 runner minutes even though they ran in parallel. The same
+full lifecycle is repeated after the merge on `main`. Removing that duplicate
+main lifecycle and selecting only affected roles in the merge queue are the
+largest safe opportunities.
+
+Cache hit rate is not exposed in run-list metadata. The Nix and OCI cache setup
+steps and existing job summaries remain the evidence source for cold and warm
+comparisons. No raw disk artifact is transferred between jobs. Release role
+jobs intentionally build and validate the image and AMI on one runner.
+
+## Responsibility map and decisions
+
+| Workflow | Triggers | Jobs | Evidence owned | Expensive work | v0.2.1 decision |
+| --- | --- | --- | --- | --- | --- |
+| `ami-switch-benchmark.yml` | manual | `benchmark` | A retained worker AMI can switch from CentOS bootc to the immutable worker image and roll back | AMI import, EC2 launch, bootc switch, rollback | Keep advisory and manual. It validates a distinct migration path. |
+| `ami.yml` | selected pull-request paths, manual, unused reusable interface | `ami` | Raw disk construction, AMI compatibility, optional AWS metadata and boot validation | bootc image and raw disk build; optional EBS Direct upload and EC2 launch | Keep. Remove the unused reusable interface. Release owns retained AMIs itself. |
+| `audit-ami-resources.yml` | daily schedule, manual | `audit` | Disposable AMI validation resources do not leak | AWS metadata inventory and cleanup audit | Keep. A missing `AWS_AMI_AUDIT_ROLE_ARN` intentionally skips the job and must remain visible as configuration debt. |
+| `infra.yml` | selected pull-request paths, manual | `plan`, `apply` | OpenTofu formatting, validation, plan review, and protected apply | Provider initialization and remote plan | Keep path-scoped and advisory. A missing plan role or state bucket intentionally skips remote planning. |
+| `integration.yml` | selected pull-request paths, manual | `controller-worker` | Controller and worker boot together and complete the Coolify integration contract | Two bootc builds and two concurrent VMs | Keep as distinct pull-request evidence. Do not shard because setup is already consolidated on one runner. |
+| `publish.yml` | selected main pushes, manual, unused reusable interface | `publish` | Immutable controller and worker candidates exist in ECR at the source SHA | Two bootc image builds and registry pushes | Keep. Remove the unused reusable interface. Publication remains separate from release retention. |
+| `release.yml` | manual | `prepare`, `roles`, `inventory`, `release` | Exact release identity, verified images, SBOMs, retained AMIs, manifest, tag, and GitHub release | Two parallel full image/SBOM/AMI jobs | Keep and replace the ambiguous bump input with an exact version. Do not split same-runner role work. |
+| `update-flake-lock.yml` | weekly schedule, manual | `update` | Dependency updates arrive as reviewable pull requests | Flake update and check | Keep advisory. Its pull request is the audit and rollback boundary. |
+| `validate-deployment.yml` | manual | `validate` | A deployed controller and worker match expected runtime, network, and backup contracts | AWS and HTTPS read-only validation | Keep manual until the production milestone provides stable endpoints and role configuration. |
+| `validate.yml` | pull request, merge group, main push, release publication, weekly schedule, manual | `hermetic`, `lifecycle`, `required` | Authoritative flake graph plus controller and worker switch/rollback lifecycle | Two full bootc lifecycle jobs | Keep `required` stable. Classify paths inside the always-triggered workflow, run affected lifecycle roles only on merge groups, run both for scheduled/manual validation, and remove duplicate main/release lifecycle triggers. |
+
+## Required and advisory gates
+
+The branch ruleset requires only the check named `required`. The `required` job
+must always start and must fail unless the hermetic graph succeeds and every
+applicable lifecycle job succeeds. Individual lifecycle, integration, AMI,
+infrastructure, publishing, audit, deployment, dependency-update, benchmark,
+and release jobs are advisory or event-specific. They must not be added as
+branch requirements because path filtering can leave a required workflow in a
+permanently pending state.
+
+Pull requests run the hermetic graph and any separately path-selected advisory
+AMI or integration evidence. Merge groups run the hermetic graph and trusted
+lifecycle evidence. Main pushes publish immutable candidates and run the
+hermetic graph only after path-aware gating is enabled. Scheduled and manual
+validation run both lifecycle roles. Release publication consumes previously
+verified immutable inputs and performs release-specific SBOM, AMI, manifest,
+and boot validation.
+
+## Optimization decisions
+
+Accepted for v0.2.1:
+
+- remove unused reusable-workflow interfaces
+- add a fail-safe path classifier and shadow it before enforcing it
+- eliminate the duplicate main and release-publication lifecycle runs
+- retain a single stable aggregate branch gate
+- use explicit controller and worker jobs so failures remain attributable
+
+Rejected for this milestone:
+
+- the #47 shard proposal, because integration already shares setup on one runner
+  and sharding would duplicate expensive initialization
+- a composite action or reusable setup workflow, because the repeated YAML is
+  small, visible, and more debuggable than a new abstraction layer
+- larger or self-hosted runners, because the baseline does not show queue,
+  CPU, memory, disk, or I/O evidence sufficient to justify cost or maintenance
+- cross-event raw image artifacts, because same-runner digest-verified builds
+  preserve a simpler trust boundary and avoid large transfers
+
+The rollback for gating changes is to select both roles for every merge group.
+The classifier itself also fails safe to both roles for unknown paths, invalid
+SHAs, rename ambiguity, mixed role changes, or diff errors.
