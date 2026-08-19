@@ -687,8 +687,26 @@ ci_ecr_resolve() {
 
 ci_ecr_push() {
     image_ref=${1:-}
-    [[ -n $image_ref && $# -eq 1 ]] || die "ci ecr push requires IMAGE_REF"
-    docker push "$image_ref"
+    [[ $image_ref =~ ^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[a-z0-9]+([._/-][a-z0-9]+)*:sha-[0-9a-f]{40}$ && $# -eq 1 ]] ||
+        die "ci ecr push requires an immutable ECR IMAGE_REF"
+    repository_url=${image_ref%:*}
+    image_tag=${image_ref##*:}
+    registry=${repository_url%%/*}
+    repository_name=${repository_url#*/}
+    region=${registry#*.dkr.ecr.}
+    region=${region%.amazonaws.com}
+
+    if docker push "$image_ref"; then
+        return 0
+    else
+        push_status=$?
+    fi
+
+    existing_digest=$(aws ecr batch-get-image --region "$region" --repository-name "$repository_name" \
+        --image-ids "imageTag=$image_tag" --query 'images[0].imageId.imageDigest' --output text) ||
+        return "$push_status"
+    [[ $existing_digest =~ ^sha256:[0-9a-f]{64}$ ]] || return "$push_status"
+    echo "$image_ref appeared as $existing_digest during the push; retaining the immutable image"
 }
 
 ci_ecr_verify() {

@@ -467,9 +467,19 @@
     ecrPinDocker = pkgs.writeShellScriptBin "docker" ''
       set -Eeuo pipefail
       printf '%s\n' "$*" >>"$MOCK_DOCKER_LOG"
+      if [[ $1 == push ]]; then
+        [[ ''${MOCK_DOCKER_PUSH_SUCCESS:-true} == true ]]
+        exit
+      fi
       if [[ $1 == image && $2 == inspect ]]; then
         printf 'linux/amd64\n'
       fi
+    '';
+    ecrPushAws = pkgs.writeShellScriptBin "aws" ''
+      set -Eeuo pipefail
+      printf '%s\n' "$*" >>"$MOCK_AWS_LOG"
+      [[ $1 == ecr && $2 == batch-get-image ]]
+      printf '%s\n' "''${MOCK_ECR_DIGEST:-None}"
     '';
     lifecycleNix = pkgs.writeShellScriptBin "nix" ''
       set -Eeuo pipefail
@@ -552,7 +562,7 @@
       '';
     ciWorkflowUnitCheck =
       pkgs.runCommand "lucidity-ci-workflow-unit-check" {
-        nativeBuildInputs = [ecrPinDocker pkgs.gnugrep];
+        nativeBuildInputs = [ecrPinDocker ecrPushAws pkgs.gnugrep];
       } ''
         touch github.env
         AMI_ROLE=worker \
@@ -594,6 +604,26 @@
         immutable_ref=123456789012.dkr.ecr.us-east-2.amazonaws.com/lucidity/worker@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
         grep -Fxq "pull $immutable_ref" docker.log
         grep -Fxq "VERIFIED_IMAGE_REF=$immutable_ref" github.env
+
+        image_ref=123456789012.dkr.ecr.us-east-2.amazonaws.com/lucidity/worker:sha-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        export MOCK_AWS_LOG=$PWD/aws.log
+        : >"$MOCK_AWS_LOG"
+        MOCK_DOCKER_PUSH_SUCCESS=false \
+          MOCK_ECR_DIGEST=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+          bash ${lifecycleCommandSource}/nix/pkgs/lucidity.sh ci ecr push "$image_ref" >push-race.log
+        grep -Fq 'appeared as sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb during the push' push-race.log
+        grep -Fxq 'ecr batch-get-image --region us-east-2 --repository-name lucidity/worker --image-ids imageTag=sha-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --query images[0].imageId.imageDigest --output text' "$MOCK_AWS_LOG"
+
+        if MOCK_DOCKER_PUSH_SUCCESS=false MOCK_ECR_DIGEST=None \
+          bash ${lifecycleCommandSource}/nix/pkgs/lucidity.sh ci ecr push "$image_ref" 2>/dev/null; then
+          echo 'ECR push accepted a failure without a concurrent immutable image' >&2
+          exit 1
+        fi
+
+        : >"$MOCK_AWS_LOG"
+        MOCK_DOCKER_PUSH_SUCCESS=true \
+          bash ${lifecycleCommandSource}/nix/pkgs/lucidity.sh ci ecr push "$image_ref"
+        test ! -s "$MOCK_AWS_LOG"
 
         GITHUB_STEP_SUMMARY=$PWD/summary \
           ${lucidity}/bin/lucidity ci timing summarize 'release path' "$(date +%s)" 611
