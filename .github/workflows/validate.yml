@@ -30,17 +30,18 @@ env:
   NIX_CACHE_WRITE: ${{ github.event_name == 'merge_group' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
 
 jobs:
-  hermetic:
+  prepare:
+    name: Nix prepare
     outputs:
-      lifecycle_controller: ${{ steps.lifecycle-impact.outputs.controller }}
-      lifecycle_worker: ${{ steps.lifecycle-impact.outputs.worker }}
-      lifecycle_fallback: ${{ steps.lifecycle-impact.outputs.fallback }}
-      lifecycle_reason: ${{ steps.lifecycle-impact.outputs.reason }}
+      plan: ${{ steps.workflow-plan.outputs.plan }}
+      lifecycle_controller: ${{ steps.workflow-plan.outputs.controller }}
+      lifecycle_worker: ${{ steps.workflow-plan.outputs.worker }}
+      lifecycle_fallback: ${{ steps.workflow-plan.outputs.fallback }}
+      lifecycle_reason: ${{ steps.workflow-plan.outputs.reason }}
+      lifecycle_cache: ${{ steps.workflow-plan.outputs.cache_mode }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - name: Initialize hermetic cache report
-        run: echo "HERMETIC_STARTED_AT=$(date +%s)" >>"${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
@@ -53,7 +54,7 @@ jobs:
         if: env.NIX_CACHE_WRITE == 'true'
         env:
           CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
-        run: test -n "${CACHIX_AUTH_TOKEN}" || { echo '::error::CACHIX_AUTH_TOKEN is required for trusted cache-writing events'; exit 1; }
+        run: nix run .#ci-require-env -- CACHIX_AUTH_TOKEN
       - name: Configure the public Lucidity Nix cache
         uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71
         with:
@@ -61,57 +62,19 @@ jobs:
           authToken: ${{ env.NIX_CACHE_WRITE == 'true' && secrets.CACHIX_AUTH_TOKEN || '' }}
           skipPush: ${{ env.NIX_CACHE_WRITE != 'true' }}
           pushFilter: lucidity-(controller|worker)-bootc-context
-      - name: Classify merge-group lifecycle impact
-        id: lifecycle-impact
-        if: github.event_name == 'merge_group'
+      - name: Prepare the authoritative CI plan
+        id: workflow-plan
         env:
-          BASE_SHA: ${{ github.event.merge_group.base_sha }}
-          HEAD_SHA: ${{ github.event.merge_group.head_sha }}
-        run: nix run .#ci -- workflow classify "${BASE_SHA}" "${HEAD_SHA}"
-      - name: Summarize lifecycle classification
-        if: github.event_name == 'merge_group'
-        env:
-          CLASSIFICATION: ${{ steps.lifecycle-impact.outputs.json }}
-        run: |
-          {
-            echo '### Lifecycle path classification'
-            echo
-            echo "\`${CLASSIFICATION}\`"
-          } >>"${GITHUB_STEP_SUMMARY}"
+          BASE_SHA: ${{ github.event.merge_group.base_sha || '' }}
+          HEAD_SHA: ${{ github.event.merge_group.head_sha || '' }}
+          LIFECYCLE_CACHE: ${{ inputs.lifecycle_cache || 'warm' }}
+        run: nix run .#ci-workflow-prepare -- "${{ github.event_name }}"
       - name: Evaluate and build the authoritative hermetic check graph
-        id: hermetic-check
-        run: nix flake check --show-trace --print-build-logs
-      - name: Summarize hermetic cache performance
-        if: always()
-        env:
-          CHECK_OUTCOME: ${{ steps.hermetic-check.outcome }}
-        run: |
-          finished_at=$(date +%s)
-          started_at=${HERMETIC_STARTED_AT:-${finished_at}}
-          [[ ${started_at} =~ ^[0-9]+$ ]] || started_at=${finished_at}
-          elapsed=$((finished_at - started_at))
-          baseline=510
-          difference=$((baseline - elapsed))
-          if (( difference >= 0 )); then
-            comparison="${difference}s faster"
-          else
-            comparison="$((-difference))s slower"
-          fi
-          {
-            echo '### Hermetic Nix graph cache performance'
-            echo
-            echo "- Outcome: \`${CHECK_OUTCOME:-skipped}\`"
-            echo "- Observed: ${elapsed}s"
-            echo "- Pre-cache baseline: ${baseline}s (8m30s)"
-            echo "- Difference: ${comparison}"
-          } >>"${GITHUB_STEP_SUMMARY}"
+        run: nix run .#ci-hermetic-check
 
   lifecycle-controller:
-    needs: hermetic
-    if: >-
-      github.event_name == 'schedule' ||
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'merge_group' && needs.hermetic.outputs.lifecycle_controller == 'true')
+    needs: prepare
+    if: needs.prepare.outputs.lifecycle_controller == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     permissions:
@@ -126,12 +89,12 @@ jobs:
         with:
           kvm: true
       - name: Require the Cachix write token for trusted events
-        if: env.NIX_CACHE_WRITE == 'true' && (github.event_name != 'workflow_dispatch' || inputs.lifecycle_cache != 'isolated')
+        if: env.NIX_CACHE_WRITE == 'true' && needs.prepare.outputs.lifecycle_cache != 'isolated'
         env:
           CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
-        run: test -n "${CACHIX_AUTH_TOKEN}" || { echo '::error::CACHIX_AUTH_TOKEN is required for trusted cache-writing events'; exit 1; }
+        run: nix run .#ci-require-env -- CACHIX_AUTH_TOKEN
       - name: Configure the public Lucidity Nix cache
-        if: github.event_name != 'workflow_dispatch' || inputs.lifecycle_cache != 'isolated'
+        if: needs.prepare.outputs.lifecycle_cache != 'isolated'
         uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71
         with:
           name: lucidity
@@ -139,19 +102,19 @@ jobs:
           skipPush: ${{ env.NIX_CACHE_WRITE != 'true' }}
           pushFilter: lucidity-(controller|worker)-bootc-context
       - name: Restore the role-scoped OCI cache
-        if: github.event_name != 'workflow_dispatch' || inputs.lifecycle_cache != 'isolated'
+        if: needs.prepare.outputs.lifecycle_cache != 'isolated'
         env:
           GHCR_CACHE_WRITE: true
           GITHUB_TOKEN: ${{ github.token }}
         run: nix run .#ci -- cache configure controller
       - name: Run the flake-owned bootc switch and rollback lifecycle
-        if: github.event_name != 'workflow_dispatch' || inputs.lifecycle_cache != 'isolated'
+        if: needs.prepare.outputs.lifecycle_cache != 'isolated'
         env:
           CONTAINER_ENGINE: docker
           LUCIDITY_FULL_GUEST_TEST: "1"
         run: nix run .#test-controller
       - name: Run the isolated-cache bootc switch and rollback lifecycle
-        if: github.event_name == 'workflow_dispatch' && inputs.lifecycle_cache == 'isolated'
+        if: needs.prepare.outputs.lifecycle_cache == 'isolated'
         env:
           CONTAINER_ENGINE: docker
           LUCIDITY_FULL_GUEST_TEST: "1"
@@ -161,11 +124,8 @@ jobs:
         run: nix run .#ci -- cache cleanup
 
   lifecycle-worker:
-    needs: hermetic
-    if: >-
-      github.event_name == 'schedule' ||
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'merge_group' && needs.hermetic.outputs.lifecycle_worker == 'true')
+    needs: prepare
+    if: needs.prepare.outputs.lifecycle_worker == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     permissions:
@@ -180,12 +140,12 @@ jobs:
         with:
           kvm: true
       - name: Require the Cachix write token for trusted events
-        if: env.NIX_CACHE_WRITE == 'true' && (github.event_name != 'workflow_dispatch' || inputs.lifecycle_cache != 'isolated')
+        if: env.NIX_CACHE_WRITE == 'true' && needs.prepare.outputs.lifecycle_cache != 'isolated'
         env:
           CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
-        run: test -n "${CACHIX_AUTH_TOKEN}" || { echo '::error::CACHIX_AUTH_TOKEN is required for trusted cache-writing events'; exit 1; }
+        run: nix run .#ci-require-env -- CACHIX_AUTH_TOKEN
       - name: Configure the public Lucidity Nix cache
-        if: github.event_name != 'workflow_dispatch' || inputs.lifecycle_cache != 'isolated'
+        if: needs.prepare.outputs.lifecycle_cache != 'isolated'
         uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71
         with:
           name: lucidity
@@ -193,19 +153,19 @@ jobs:
           skipPush: ${{ env.NIX_CACHE_WRITE != 'true' }}
           pushFilter: lucidity-(controller|worker)-bootc-context
       - name: Restore the role-scoped OCI cache
-        if: github.event_name != 'workflow_dispatch' || inputs.lifecycle_cache != 'isolated'
+        if: needs.prepare.outputs.lifecycle_cache != 'isolated'
         env:
           GHCR_CACHE_WRITE: true
           GITHUB_TOKEN: ${{ github.token }}
         run: nix run .#ci -- cache configure worker
       - name: Run the flake-owned bootc switch and rollback lifecycle
-        if: github.event_name != 'workflow_dispatch' || inputs.lifecycle_cache != 'isolated'
+        if: needs.prepare.outputs.lifecycle_cache != 'isolated'
         env:
           CONTAINER_ENGINE: docker
           LUCIDITY_FULL_GUEST_TEST: "1"
         run: nix run .#test-worker
       - name: Run the isolated-cache bootc switch and rollback lifecycle
-        if: github.event_name == 'workflow_dispatch' && inputs.lifecycle_cache == 'isolated'
+        if: needs.prepare.outputs.lifecycle_cache == 'isolated'
         env:
           CONTAINER_ENGINE: docker
           LUCIDITY_FULL_GUEST_TEST: "1"
@@ -217,16 +177,31 @@ jobs:
   required:
     name: required
     if: always()
-    needs: [hermetic, lifecycle-controller, lifecycle-worker]
+    needs: [prepare, lifecycle-controller, lifecycle-worker]
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
-      - name: Require the hermetic graph and applicable lifecycle
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install locked Nix
+        uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
+      - name: Require the Cachix write token for trusted events
+        if: env.NIX_CACHE_WRITE == 'true'
         env:
-          HERMETIC_RESULT: ${{ needs.hermetic.result }}
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        run: nix run .#ci-require-env -- CACHIX_AUTH_TOKEN
+      - name: Configure the public Lucidity Nix cache
+        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71
+        with:
+          name: lucidity
+          authToken: ${{ env.NIX_CACHE_WRITE == 'true' && secrets.CACHIX_AUTH_TOKEN || '' }}
+          skipPush: true
+          pushFilter: lucidity-(controller|worker)-bootc-context
+      - name: Enforce the authoritative CI plan
+        env:
+          WORKFLOW_PLAN: ${{ needs.prepare.outputs.plan }}
+          PREPARE_RESULT: ${{ needs.prepare.result }}
           CONTROLLER_RESULT: ${{ needs.lifecycle-controller.result }}
           WORKER_RESULT: ${{ needs.lifecycle-worker.result }}
-        run: |
-          [[ ${HERMETIC_RESULT} == success ]]
-          [[ ${CONTROLLER_RESULT} == success || ${CONTROLLER_RESULT} == skipped ]]
-          [[ ${WORKER_RESULT} == success || ${WORKER_RESULT} == skipped ]]
+        run: nix run .#ci-workflow-gate

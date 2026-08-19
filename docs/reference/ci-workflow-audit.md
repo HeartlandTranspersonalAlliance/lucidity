@@ -2,7 +2,8 @@
 
 This document is the responsibility map and pre-optimization baseline for issue
 #50. Workflows remain thin runner adapters. Policy and executable behavior belong
-to flake-owned `lucidity` commands and `nix flake check` remains authoritative.
+to flake-owned programs, and the packaged `ci-hermetic-check` app evaluates the
+authoritative `nix flake check` graph.
 
 ## Reproducing the run baseline
 
@@ -64,13 +65,14 @@ jobs intentionally build and validate the image and AMI on one runner.
 | `release.yml` | manual | `prepare`, `roles`, `inventory`, `release` | Exact release identity, verified images, SBOMs, retained AMIs, manifest, tag, and GitHub release | Two parallel full image/SBOM/AMI jobs | Keep and replace the ambiguous bump input with an exact version. Do not split same-runner role work. |
 | `update-flake-lock.yml` | weekly schedule, manual | `update` | Dependency updates arrive as reviewable pull requests | Flake update and check | Keep advisory. Its pull request is the audit and rollback boundary. |
 | `validate-deployment.yml` | manual | `validate` | A deployed controller and worker match expected runtime, network, and backup contracts | AWS and HTTPS read-only validation | Keep manual until the production milestone provides stable endpoints and role configuration. |
-| `validate.yml` | pull request, merge group, main push, weekly schedule, manual | `hermetic`, `lifecycle-controller`, `lifecycle-worker`, `required` | Authoritative flake graph plus applicable controller and worker switch/rollback lifecycle | Up to two full bootc lifecycle jobs | `required` remains stable. Merge groups run only classifier-selected roles, scheduled/manual validation runs both, and main pushes run only the hermetic graph. |
+| `validate.yml` | pull request, merge group, main push, weekly schedule, manual | `prepare`, `lifecycle-controller`, `lifecycle-worker`, `required` | Versioned Nix-owned CI plan, authoritative flake graph, and applicable controller and worker switch/rollback lifecycle | Up to two full bootc lifecycle jobs | `required` remains stable. The prepare plan is the single source for role selection, cache mode, summaries, and final gating. |
 
 ## Required and advisory gates
 
 The branch ruleset requires only the check named `required`. The `required` job
-must always start and must fail unless the hermetic graph succeeds and every
-applicable lifecycle job succeeds. Individual lifecycle, integration, AMI,
+must always start and must fail unless the Nix prepare job succeeds, every
+planned lifecycle job succeeds, and every unplanned lifecycle job is skipped.
+Individual lifecycle, integration, AMI,
 infrastructure, publishing, audit, deployment, dependency-update, benchmark,
 and release jobs are advisory or event-specific. They must not be added as
 branch requirements because path filtering can leave a required workflow in a
@@ -108,6 +110,37 @@ Rejected for this milestone:
 The rollback for gating changes is to select both roles for every merge group.
 The classifier itself also fails safe to both roles for unknown paths, invalid
 SHAs, rename ambiguity, mixed role changes, or diff errors.
+
+## Authoritative planner contract
+
+`ci-workflow-prepare` is the sole producer of the workflow plan. Schema version
+1 publishes `schema_version`, `event`, `cache_mode`, the controller and worker
+booleans under `lifecycle`, `fallback`, `reason`, and the sorted unique
+`changed_paths`. It also emits compatibility outputs for GitHub job conditions,
+but those outputs are projections of the same plan rather than a second policy
+implementation.
+
+Pull requests and main pushes are hermetic-only. Merge groups use path
+classification. Scheduled and manual runs select both roles, and unknown events
+fail safe to both roles. Unknown paths, invalid commit SHAs, malformed diffs,
+and diff errors also set `fallback` and select both roles. The manual
+`lifecycle_cache=isolated` plan bypasses both Cachix and the role-scoped OCI
+caches. Lifecycle conditions, cache mode, the prepare summary, and `required`
+all consume the published plan. The gate requires prepare to succeed, each
+planned lifecycle to succeed, and each unplanned lifecycle to be skipped.
+
+## Shell ownership audit
+
+Tracked shell files are source assets, not ambient repository executables. Their
+source mode is `0644`; Nix installs executable programs with `0755` inside store
+outputs or invokes test fixtures explicitly with Bash.
+
+| Ownership | Source files | Caller and installed behavior |
+| --- | --- | --- |
+| Image payload | `nix/den/aspects/common/files/backup.sh`, controller and worker `files/bootstrap-*.sh` | Image construction reads their contents and installs the payload commands in the bootc image. |
+| Derivation test fixture | Controller and worker `tests/bootstrap.sh`; every `tests/*.sh` | Flake checks copy, patch, and invoke these fixtures explicitly; they are not public commands. |
+| General Lucidity command | `nix/pkgs/lucidity.sh`; non-CI helpers under `scripts/` for disk, VM, validation, AWS audit, and text-style behavior | `nix/pkgs/lucidity.nix` packages the public `lucidity` interface and installs helper commands under its store-owned `libexec` tree. |
+| Dedicated CI app | `scripts/ci-workflow-prepare.sh`, `ci-workflow-gate.sh`, `ci-hermetic-check.sh`, and `ci-require-env.sh` | `nix/pkgs/ci-workflow.nix` creates four pinned-runtime shell applications. GitHub Actions invokes only their public flake apps. |
 
 ## Enforced runner-minute model
 

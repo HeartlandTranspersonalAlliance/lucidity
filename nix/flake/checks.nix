@@ -9,6 +9,7 @@
       (lucidityProject)
       awsConfig
       awsProductionVars
+      ciWorkflow
       lucidity
       lucidityRelease
       mkPatchedSource
@@ -254,6 +255,9 @@
           echo "copied test executables must use patchShebangs-resolved Nix-store interpreters" >&2
           exit 1
         fi
+        while IFS= read -r source_script; do
+          test ! -x "$source_script"
+        done < <(find nix scripts tests -type f -name '*.sh' -print)
 
         rg -q '^\[profiles\.coolify\]$' secretspec.toml
         rg -q '^aws-production = "awssm://us-east-2?' secretspec.toml
@@ -265,7 +269,7 @@
         rg -q 'Environment=COOLIFY_CURL_BIN=/usr/bin/curl' nix/den/classes/bootc/image.nix
         rg -q 'lucidity-admin-authorized-key.service' nix/den/classes/bootc/image.nix
         rg -Fq 'secretspec run' nix/pkgs/cloud-init-fixture.nix
-        rg -Fq 'nix flake check --show-trace --print-build-logs' .github/workflows/validate.yml
+        rg -Fq 'run: nix run .#ci-hermetic-check' .github/workflows/validate.yml
         ! rg -q 'checks\.x86_64-linux|make |\./scripts/' .github/workflows/validate.yml
         rg -Fq 'run: nix run .#audit-ami-resources' .github/workflows/audit-ami-resources.yml
         ! rg -q 'run: \./scripts/' .github/workflows/audit-ami-resources.yml
@@ -307,15 +311,19 @@
         rg -Fq 'run: nix run .#ci -- benchmark verify-target' .github/workflows/ami-switch-benchmark.yml
         ! rg -q '^  workflow_call:' .github/workflows
         ! rg -Fq 'inputs.source_sha' .github/workflows/publish.yml
-        rg -Fq 'workflow classify "''${BASE_SHA}" "''${HEAD_SHA}"' .github/workflows/validate.yml
-        rg -Fq 'Lifecycle path classification' .github/workflows/validate.yml
+        rg -Fq 'run: nix run .#ci-workflow-prepare' .github/workflows/validate.yml
+        rg -Fq 'run: nix run .#ci-hermetic-check' .github/workflows/validate.yml
+        rg -Fq 'run: nix run .#ci-workflow-gate' .github/workflows/validate.yml
+        ! rg -Fq 'ci workflow classify' nix/pkgs/lucidity.sh .github/workflows/validate.yml
+        ! rg -q '^        run: \|' .github/workflows/validate.yml
         ! rg -q '^  release:' .github/workflows/validate.yml
         rg -q '^  lifecycle-controller:' .github/workflows/validate.yml
         rg -q '^  lifecycle-worker:' .github/workflows/validate.yml
-        rg -Fq "needs.hermetic.outputs.lifecycle_controller == 'true'" .github/workflows/validate.yml
-        rg -Fq "needs.hermetic.outputs.lifecycle_worker == 'true'" .github/workflows/validate.yml
-        rg -Fq 'needs: [hermetic, lifecycle-controller, lifecycle-worker]' .github/workflows/validate.yml
-        rg -Fq "inputs.lifecycle_cache != 'isolated'" .github/workflows/validate.yml
+        rg -Fq "needs.prepare.outputs.lifecycle_controller == 'true'" .github/workflows/validate.yml
+        rg -Fq "needs.prepare.outputs.lifecycle_worker == 'true'" .github/workflows/validate.yml
+        rg -Fq "needs.prepare.outputs.lifecycle_cache != 'isolated'" .github/workflows/validate.yml
+        rg -Fq 'needs: [prepare, lifecycle-controller, lifecycle-worker]' .github/workflows/validate.yml
+        rg -Fq 'WORKFLOW_PLAN: ''${{ needs.prepare.outputs.plan }}' .github/workflows/validate.yml
         if rg -n '^\s+(aws (ecr|ec2|ssm|secretsmanager)|podman pull)' .github/workflows; then
           echo "AWS and image policy must live behind flake-owned CI commands" >&2
           exit 1
@@ -333,7 +341,8 @@
           rg -Fq "env.NIX_CACHE_WRITE == 'true' && secrets.CACHIX_AUTH_TOKEN" "$workflow"
           rg -Fq "env.NIX_CACHE_WRITE != 'true'" "$workflow"
           rg -Fq 'pushFilter: lucidity-(controller|worker)-bootc-context' "$workflow"
-          rg -Fq 'CACHIX_AUTH_TOKEN is required for trusted cache-writing events' "$workflow"
+          rg -Fq 'CACHIX_AUTH_TOKEN is required for trusted cache-writing events' "$workflow" ||
+            rg -Fq 'nix run .#ci-require-env -- CACHIX_AUTH_TOKEN' "$workflow"
 
           mapfile -t installers < <(rg -n -F 'DeterminateSystems/determinate-nix-action@' "$workflow" | cut -d: -f1)
           mapfile -t caches < <(rg -n -F "$cache_action" "$workflow" | cut -d: -f1)
@@ -342,8 +351,8 @@
             test "''${caches[$index]}" -gt "''${installers[$index]}"
           done
         done
-        test "$(rg -F "$cache_action" .github/workflows | wc -l)" -eq 15
-        test "$(rg -F 'pushFilter: lucidity-(controller|worker)-bootc-context' .github/workflows | wc -l)" -eq 15
+        test "$(rg -F "$cache_action" .github/workflows | wc -l)" -eq 16
+        test "$(rg -F 'pushFilter: lucidity-(controller|worker)-bootc-context' .github/workflows | wc -l)" -eq 16
         test "$(rg -F 'kvm: true' .github/workflows | wc -l)" -eq 16
         ! rg -q '99-kvm4all|udevadm.*kvm' .github/workflows
         ! rg -q 'pathsToPush:.*(qcow2|raw|ami|bootc-context)' .github/workflows
@@ -396,11 +405,20 @@
           grep -Fq '/nix/store/'
       done
       source_count=$(find ${runtimeToolsSource}/scripts -maxdepth 1 -type f -name '*.sh' | wc -l)
+      general_source_count=$(find ${runtimeToolsSource}/scripts -maxdepth 1 -type f -name '*.sh' ! -name 'ci-*.sh' | wc -l)
       packaged_count=$(find ${lucidity.runtimeScripts}/libexec/lucidity -maxdepth 1 -type f -name '*.sh' | wc -l)
-      test "$source_count" -eq "$packaged_count"
+      test "$general_source_count" -eq "$packaged_count"
+      test "$source_count" -eq "$((general_source_count + 4))"
       while IFS= read -r source_script; do
         test -x "${lucidity.runtimeScripts}/libexec/lucidity/$(basename "$source_script")"
-      done < <(find ${runtimeToolsSource}/scripts -maxdepth 1 -type f -name '*.sh' -print)
+      done < <(find ${runtimeToolsSource}/scripts -maxdepth 1 -type f -name '*.sh' ! -name 'ci-*.sh' -print)
+      for ci_program in \
+        ${lib.getExe ciWorkflow.prepare} \
+        ${lib.getExe ciWorkflow.gate} \
+        ${lib.getExe ciWorkflow.hermeticCheck} \
+        ${lib.getExe ciWorkflow.requireEnv}; do
+        test -x "$ci_program"
+      done
       ! grep -Fq '$root/scripts/' ${lib.getExe lucidity}
       grep -Fq 'syft.yaml' ${lib.getExe lucidity}
       touch "$out"
@@ -760,72 +778,17 @@
         grep -Fq '[run](https://example.invalid/actions/runs/3)' "$TMPDIR/audit.md"
         touch "$out"
       '';
-    workflowClassifierUnitCheck =
-      pkgs.runCommand "lucidity-workflow-classifier-unit" {
-        nativeBuildInputs = [pkgs.gitMinimal pkgs.jq];
-      } ''
-        export HOME="$TMPDIR/home"
-        mkdir -p "$HOME" "$TMPDIR/repository"
-        cd "$TMPDIR/repository"
-        git init -q
-        git config user.email ci@example.invalid
-        git config user.name "CI Test"
-
-        mkdir -p docs nix/den/aspects/controller nix/den/aspects/worker
-        printf 'initial\n' >nix/den/aspects/controller/default.nix
-        printf 'initial\n' >nix/den/aspects/worker/default.nix
-        printf 'initial\n' >docs/README.md
-        printf 'initial\n' >flake.nix
-        git add .
-        git commit -qm initial
-
-        base=$(git rev-parse HEAD)
-        printf 'controller\n' >>nix/den/aspects/controller/default.nix
-        git commit -qam controller
-        head=$(git rev-parse HEAD)
-        ${lib.getExe lucidity} ci workflow classify "$base" "$head" |
-          jq -e '.controller and (.worker | not) and (.fallback | not) and .reason == "controller-only"' >/dev/null
-
-        base=$head
-        printf 'docs\n' >>docs/README.md
-        git commit -qam docs
-        head=$(git rev-parse HEAD)
-        ${lib.getExe lucidity} ci workflow classify "$base" "$head" |
-          jq -e '(.controller | not) and (.worker | not) and (.fallback | not) and .reason == "non-lifecycle"' >/dev/null
-
-        base=$head
-        git mv nix/den/aspects/controller/default.nix nix/den/aspects/worker/controller-renamed.nix
-        git commit -qm rename
-        head=$(git rev-parse HEAD)
-        ${lib.getExe lucidity} ci workflow classify "$base" "$head" |
-          jq -e '.controller and .worker and (.fallback | not) and .reason == "mixed-role-change"' >/dev/null
-
-        base=$head
-        printf 'shared\n' >>flake.nix
-        git commit -qam shared
-        head=$(git rev-parse HEAD)
-        ${lib.getExe lucidity} ci workflow classify "$base" "$head" |
-          jq -e '.controller and .worker and (.fallback | not) and .reason == "shared-change"' >/dev/null
-
-        base=$head
-        printf 'unknown\n' >unmapped.file
-        git add unmapped.file
-        git commit -qm unknown
-        head=$(git rev-parse HEAD)
-        export GITHUB_OUTPUT="$TMPDIR/github-output"
-        ${lib.getExe lucidity} ci workflow classify "$base" "$head" |
-          jq -e '.controller and .worker and .fallback and .reason == "unknown-path"' >/dev/null
-        grep -Fxq 'controller=true' "$GITHUB_OUTPUT"
-        grep -Fxq 'worker=true' "$GITHUB_OUTPUT"
-        grep -Fxq 'fallback=true' "$GITHUB_OUTPUT"
-        grep -Fxq 'reason=unknown-path' "$GITHUB_OUTPUT"
-
-        ${lib.getExe lucidity} ci workflow classify invalid "$head" |
-          jq -e '.controller and .worker and .fallback and .reason == "invalid-sha"' >/dev/null
-        ${lib.getExe lucidity} ci workflow classify "$head" "$head" |
-          jq -e '(.controller | not) and (.worker | not) and (.fallback | not) and .reason == "no-changes"' >/dev/null
-        touch "$out"
-      '';
+    workflowPlannerUnitCheck = mkShellTest {
+      name = "workflow-planner";
+      script = "tests/ci-workflow.sh";
+      files = [../../tests/ci-workflow.sh];
+      nativeBuildInputs = [
+        pkgs.gitMinimal
+        pkgs.jq
+        ciWorkflow.gate
+        ciWorkflow.prepare
+      ];
+    };
     staticChecks = [
       manifestsCheck
       cloudInitCheck
@@ -846,7 +809,7 @@
       backupUnitCheck
       textStyleUnitCheck
       workflowAuditUnitCheck
-      workflowClassifierUnitCheck
+      workflowPlannerUnitCheck
       yamlPolicyCheck
     ];
     staticCheck = pkgs.runCommand "lucidity-static-checks" {} ''
@@ -878,7 +841,7 @@
       text-style-unit = textStyleUnitCheck;
       worker-unit = workerUnitCheck;
       workflow-audit-unit = workflowAuditUnitCheck;
-      workflow-classifier-unit = workflowClassifierUnitCheck;
+      workflow-planner-unit = workflowPlannerUnitCheck;
       yaml-policy = yamlPolicyCheck;
     };
   };

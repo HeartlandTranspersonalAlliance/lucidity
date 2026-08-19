@@ -26,6 +26,7 @@ in {
     ...
   }: let
     lucidity = import ../pkgs/lucidity.nix {inherit pkgs;};
+    ciWorkflow = import ../pkgs/ci-workflow.nix {inherit pkgs;};
     lucidityRelease = pkgs.symlinkJoin {
       name = "lucidity-release-tools";
       paths = [lucidity];
@@ -188,6 +189,7 @@ in {
         awsConfig
         awsProductionVars
         awsWorkloadCredentialsProvider
+        ciWorkflow
         lucidity
         lucidityRelease
         mkLucidityApp
