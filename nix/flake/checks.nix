@@ -222,7 +222,7 @@
     '';
     repositoryCheck =
       pkgs.runCommand "lucidity-repository-policy-check" {
-        nativeBuildInputs = [pkgs.ripgrep];
+        nativeBuildInputs = [pkgs.jq pkgs.ripgrep];
       } ''
         cd ${source}
 
@@ -319,8 +319,8 @@
         ! rg -q '^  release:' .github/workflows/validate.yml
         rg -q '^  lifecycle-controller:' .github/workflows/validate.yml
         rg -q '^  lifecycle-worker:' .github/workflows/validate.yml
-        rg -Fq 'if: fromJSON(needs.prepare.outputs.plan).lifecycle.controller' .github/workflows/validate.yml
-        rg -Fq 'if: fromJSON(needs.prepare.outputs.plan).lifecycle.worker' .github/workflows/validate.yml
+        rg -Fq 'if: fromJSON(needs.prepare.outputs.plan).targets.controller.run' .github/workflows/validate.yml
+        rg -Fq 'if: fromJSON(needs.prepare.outputs.plan).targets.worker.run' .github/workflows/validate.yml
         test "$(rg -F 'fromJSON(needs.prepare.outputs.plan).cache_mode' .github/workflows/validate.yml | wc -l)" -eq 12
         ! rg -Fq 'needs.prepare.outputs.lifecycle_' .github/workflows/validate.yml
         rg -Fq 'fetch-depth: ''${{ github.event_name == ' .github/workflows/validate.yml
@@ -330,6 +330,15 @@
         rg -Fq 'WORKFLOW_PLAN: ''${{ needs.prepare.outputs.plan }}' .github/workflows/validate.yml
         rg -Fq 'git merge-base --is-ancestor "''${base_sha}" "''${head_sha}"' scripts/ci-workflow-prepare.sh
         rg -Fq 'git diff --no-ext-diff --name-status --find-renames -z' scripts/ci-workflow-prepare.sh
+        jq -e '
+          .schema_version == 1 and
+          .match_order == ["controller", "worker", "common"] and
+          .nodes.controller.ancestors == ["common"] and
+          .nodes.worker.ancestors == ["common"] and
+          (.nodes.common.lifecycle | not) and
+          .nodes.controller.lifecycle and
+          .nodes.worker.lifecycle
+        ' ci/lifecycle-targets.json >/dev/null
         rg -Fq 'group: lucidity-image-publication-''${{ github.sha }}' .github/workflows/publish.yml
         rg -Fq 'group: lucidity-image-publication-''${{ inputs.source_sha || github.sha }}' .github/workflows/release.yml
         if rg -n '^\s+(aws (ecr|ec2|ssm|secretsmanager)|podman pull)' .github/workflows; then
@@ -819,7 +828,10 @@
     workflowPlannerUnitCheck = mkShellTest {
       name = "workflow-planner";
       script = "tests/ci-workflow.sh";
-      files = [../../tests/ci-workflow.sh];
+      files = [
+        ../../tests/ci-workflow.sh
+        ../../ci/lifecycle-targets.json
+      ];
       nativeBuildInputs = [
         pkgs.gitMinimal
         pkgs.jq

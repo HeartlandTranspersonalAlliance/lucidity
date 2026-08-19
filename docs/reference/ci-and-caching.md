@@ -41,8 +41,11 @@ the same time without blocking publication of an unrelated revision.
 Pull requests and main pushes run the hermetic graph. Path-selected pull requests
 also run the advisory AMI compatibility and integration workflows. The
 `Nix prepare` job publishes one versioned JSON plan before evaluating the
-hermetic graph. On a merge group, its fail-safe path classifier selects the
-controller lifecycle, worker lifecycle, both, or neither. Unknown paths and
+hermetic graph. Its checked-in `ci/lifecycle-targets.json` graph assigns ordered
+path deltas to the controller, worker, and their common ancestor. On a merge
+group, the fail-safe classifier records the exact ancestor comparison and
+selects the controller lifecycle, worker lifecycle, both, or neither. A
+common-node change propagates to both descendants. Unknown paths and
 classification errors select both. Scheduled and manual validation always plan
 both roles.
 Downstream job conditions, cache selection, the human-readable job summary, and

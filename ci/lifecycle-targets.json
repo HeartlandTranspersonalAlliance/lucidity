@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "match_order": [
+    "controller",
+    "worker",
+    "common"
+  ],
+  "nodes": {
+    "common": {
+      "lifecycle": false,
+      "ancestors": [],
+      "delta": [
+        "flake.nix",
+        "flake.lock",
+        "image/*",
+        "ci/*",
+        "secretspec.toml",
+        "nix/*",
+        "scripts/*",
+        "tests/*",
+        ".github/workflows/*"
+      ]
+    },
+    "controller": {
+      "lifecycle": true,
+      "ancestors": [
+        "common"
+      ],
+      "delta": [
+        "nix/den/aspects/controller/*"
+      ]
+    },
+    "worker": {
+      "lifecycle": true,
+      "ancestors": [
+        "common"
+      ],
+      "delta": [
+        "nix/den/aspects/worker/*"
+      ]
+    }
+  },
+  "ignored": [
+    "docs/*",
+    "*.md",
+    "LICENSE",
+    "VERSION",
+    ".editorconfig",
+    ".gitignore",
+    ".github/dependabot.yml",
+    "tofu/*",
+    "nix/infra/*",
+    ".github/workflows/infra.yml",
+    ".github/workflows/audit-ami-resources.yml",
+    ".github/workflows/validate-deployment.yml",
+    ".github/workflows/update-flake-lock.yml"
+  ]
+}
