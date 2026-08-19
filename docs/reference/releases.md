@@ -9,11 +9,14 @@ Git tags and image release identifiers use `vMAJOR.MINOR.PATCH`.
 2. Move user-visible entries from `Unreleased` into the dated version section in
    `CHANGELOG.md`.
 3. Run the full flake check and merge through the queue.
-4. Start the release workflow from `main` with the intended bump.
+4. Start the release workflow from `main` with the exact unprefixed target
+   version.
 
-The `.#release` app selects the version from conventional commits unless an
-explicit bump is provided. It refuses releases outside `main`, non-SemVer input,
-conflicting tags, and non-resumable existing releases.
+The `.#release` app requires an exact canonical `X.Y.Z` target. It must match
+`VERSION` and the dated changelog section at the selected source commit, be
+newer than the latest reachable release tag, and not conflict with an existing
+tag or published release. This permits deliberate clean jumps such as v0.1.0
+directly to v0.2.1 without synthesizing an unwanted v0.2.0 release.
 
 If a release-tool-only failure occurs after immutable image promotion, rerun the
 workflow from the corrected `main` with the original full source SHA. Resume is
@@ -41,10 +44,11 @@ Release automation uses short-lived GitHub OIDC credentials for AWS operations.
 
 ## Version policy
 
-- Patch: backward-compatible fixes.
-- Minor: backward-compatible operator, image, infrastructure, or workflow
-  capabilities.
-- Major: incompatible changes to supported interfaces or deployment contracts.
+- Before v1.0.0, minor releases may make intentional clean breaks when the
+  changelog and migration guidance make them explicit.
+- After v1.0.0, patch releases contain backward-compatible fixes, minor releases
+  add backward-compatible capabilities, and major releases may break supported
+  interfaces or deployment contracts.
 
 The repository policy check verifies that `VERSION` is valid SemVer and that the
 same version has a dated changelog section.

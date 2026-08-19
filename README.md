@@ -4,7 +4,7 @@ Lucidity deploys a secure two-node Coolify environment on AWS. A locked Nix
 flake defines the controller, worker, bootc images, OpenTofu infrastructure,
 tests, and operator commands.
 
-Current version: **0.2.0**
+Current version: **0.2.1**
 
 ## Prerequisites
 
