@@ -10,6 +10,7 @@
       awsConfig
       awsProductionVars
       awsWorkloadCredentialsProvider
+      ciWorkflow
       lucidity
       lucidityRelease
       mkLucidityApp
@@ -30,6 +31,10 @@
           lucidityRelease
           openbaoKmsPlugin
           ;
+        ci-hermetic-check = ciWorkflow.hermeticCheck;
+        ci-require-env = ciWorkflow.requireEnv;
+        ci-workflow-gate = ciWorkflow.gate;
+        ci-workflow-prepare = ciWorkflow.prepare;
         default = lucidity;
       };
     apps = {
@@ -48,6 +53,10 @@
         "audit-ami-resources"
       ];
       check = mkLucidityApp "check" ["check"];
+      ci-hermetic-check.program = lib.getExe ciWorkflow.hermeticCheck;
+      ci-require-env.program = lib.getExe ciWorkflow.requireEnv;
+      ci-workflow-gate.program = lib.getExe ciWorkflow.gate;
+      ci-workflow-prepare.program = lib.getExe ciWorkflow.prepare;
       ami = mkLucidityApp "ami" ["ami"];
       ci = mkLucidityAppWith lucidityRelease "ci" ["ci"];
       disk = mkLucidityApp "disk" ["disk"];

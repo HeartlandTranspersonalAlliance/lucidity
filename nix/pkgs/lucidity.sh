@@ -31,7 +31,6 @@ Usage: lucidity COMMAND [ARGUMENTS]
   ci timing summarize LABEL STARTED_AT [BASELINE_SECONDS]
   ci benchmark resolve|verify-target
   ci workflow audit REPOSITORY [--limit COUNT] [--json PATH] [--markdown PATH]
-  ci workflow classify BASE_SHA HEAD_SHA
   ci audit-ami-resources
   ci validate-deployment
   backup init|run|check
@@ -1019,132 +1018,6 @@ ci_workflow_audit() {
     fi
 }
 
-ci_workflow_classification() {
-    local controller=$1 worker=$2 fallback=$3 reason=$4 paths_json=$5
-    local report
-
-    report=$(jq -cn \
-        --argjson controller "$controller" \
-        --argjson worker "$worker" \
-        --argjson fallback "$fallback" \
-        --arg reason "$reason" \
-        --argjson changed_paths "$paths_json" \
-        '{controller: $controller, worker: $worker, fallback: $fallback, reason: $reason, changed_paths: $changed_paths}')
-
-    if [[ -n ${GITHUB_OUTPUT:-} ]]; then
-        {
-            printf 'controller=%s\n' "$controller"
-            printf 'worker=%s\n' "$worker"
-            printf 'fallback=%s\n' "$fallback"
-            printf 'reason=%s\n' "$reason"
-            printf 'json=%s\n' "$report"
-        } >>"$GITHUB_OUTPUT"
-    fi
-    printf '%s\n' "$report"
-}
-
-ci_workflow_path_class() {
-    case "$1" in
-        nix/den/aspects/controller/*) printf 'controller\n' ;;
-        nix/den/aspects/worker/*) printf 'worker\n' ;;
-        docs/* | *.md | LICENSE | VERSION | .editorconfig | .gitignore | .github/dependabot.yml)
-            printf 'none\n'
-            ;;
-        tofu/* | nix/infra/* | .github/workflows/infra.yml | .github/workflows/audit-ami-resources.yml | \
-            .github/workflows/validate-deployment.yml | .github/workflows/update-flake-lock.yml)
-            printf 'none\n'
-            ;;
-        flake.nix | flake.lock | image/* | ci/* | secretspec.toml | nix/* | scripts/* | tests/* | \
-            .github/workflows/*)
-            printf 'shared\n'
-            ;;
-        *) printf 'unknown\n' ;;
-    esac
-}
-
-ci_workflow_classify() {
-    [[ $# -eq 2 ]] || die "ci workflow classify requires BASE_SHA HEAD_SHA"
-    base_sha=$1
-    head_sha=$2
-    empty_paths='[]'
-
-    if [[ ! $base_sha =~ ^[0-9a-f]{40}$ || ! $head_sha =~ ^[0-9a-f]{40}$ ]] ||
-        ! git cat-file -e "$base_sha^{commit}" 2>/dev/null ||
-        ! git cat-file -e "$head_sha^{commit}" 2>/dev/null; then
-        ci_workflow_classification true true true invalid-sha "$empty_paths"
-        return
-    fi
-
-    temporary_directory=$(mktemp -d)
-    trap 'rm -rf "$temporary_directory"; trap - RETURN' RETURN
-    diff_file=$temporary_directory/diff
-    if ! git diff --name-status --find-renames -z "$base_sha" "$head_sha" >"$diff_file"; then
-        ci_workflow_classification true true true diff-error "$empty_paths"
-        return
-    fi
-
-    controller=false
-    worker=false
-    fallback=false
-    saw_shared=false
-    saw_none=false
-    saw_path=false
-    paths_file=$temporary_directory/paths
-    : >"$paths_file"
-
-    while IFS= read -r -d '' status; do
-        paths=()
-        if [[ $status == R* || $status == C* ]]; then
-            IFS= read -r -d '' old_path || {
-                ci_workflow_classification true true true malformed-diff "$empty_paths"
-                return
-            }
-            IFS= read -r -d '' new_path || {
-                ci_workflow_classification true true true malformed-diff "$empty_paths"
-                return
-            }
-            paths=("$old_path" "$new_path")
-        else
-            IFS= read -r -d '' path || {
-                ci_workflow_classification true true true malformed-diff "$empty_paths"
-                return
-            }
-            paths=("$path")
-        fi
-
-        for path in "${paths[@]}"; do
-            saw_path=true
-            printf '%s\0' "$path" >>"$paths_file"
-            case "$(ci_workflow_path_class "$path")" in
-                controller) controller=true ;;
-                worker) worker=true ;;
-                shared) saw_shared=true ;;
-                none) saw_none=true ;;
-                unknown) fallback=true ;;
-            esac
-        done
-    done <"$diff_file"
-
-    paths_json=$(jq -Rsc 'split("\u0000") | map(select(length > 0)) | unique' "$paths_file")
-    if [[ $fallback == true ]]; then
-        ci_workflow_classification true true true unknown-path "$paths_json"
-    elif [[ $saw_shared == true ]]; then
-        ci_workflow_classification true true false shared-change "$paths_json"
-    elif [[ $controller == true && $worker == true ]]; then
-        ci_workflow_classification true true false mixed-role-change "$paths_json"
-    elif [[ $controller == true ]]; then
-        ci_workflow_classification true false false controller-only "$paths_json"
-    elif [[ $worker == true ]]; then
-        ci_workflow_classification false true false worker-only "$paths_json"
-    elif [[ $saw_none == true ]]; then
-        ci_workflow_classification false false false non-lifecycle "$paths_json"
-    elif [[ $saw_path == false ]]; then
-        ci_workflow_classification false false false no-changes "$paths_json"
-    else
-        ci_workflow_classification true true true unclassified "$paths_json"
-    fi
-}
-
 ci_command() {
     case "${1:-}" in
         cache)
@@ -1225,8 +1098,7 @@ ci_command() {
             shift || true
             case "$action" in
                 audit) ci_workflow_audit "$@" ;;
-                classify) ci_workflow_classify "$@" ;;
-                *) die "ci workflow requires audit or classify" ;;
+                *) die "ci workflow requires audit" ;;
             esac
             ;;
         *) die "ci requires cache, ecr, ami, benchmark, timing, workflow, build-tools-image, audit-ami-resources, or validate-deployment" ;;
