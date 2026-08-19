@@ -305,7 +305,14 @@
         ! rg -q '^  workflow_call:' .github/workflows
         ! rg -Fq 'inputs.source_sha' .github/workflows/publish.yml
         rg -Fq 'workflow classify "''${BASE_SHA}" "''${HEAD_SHA}"' .github/workflows/validate.yml
-        rg -Fq 'Lifecycle path classification (shadow mode)' .github/workflows/validate.yml
+        rg -Fq 'Lifecycle path classification' .github/workflows/validate.yml
+        ! rg -q '^  release:' .github/workflows/validate.yml
+        rg -q '^  lifecycle-controller:' .github/workflows/validate.yml
+        rg -q '^  lifecycle-worker:' .github/workflows/validate.yml
+        rg -Fq "needs.hermetic.outputs.lifecycle_controller == 'true'" .github/workflows/validate.yml
+        rg -Fq "needs.hermetic.outputs.lifecycle_worker == 'true'" .github/workflows/validate.yml
+        rg -Fq 'needs: [hermetic, lifecycle-controller, lifecycle-worker]' .github/workflows/validate.yml
+        rg -Fq "inputs.lifecycle_cache != 'isolated'" .github/workflows/validate.yml
         if rg -n '^\s+(aws (ecr|ec2|ssm|secretsmanager)|podman pull)' .github/workflows; then
           echo "AWS and image policy must live behind flake-owned CI commands" >&2
           exit 1
@@ -314,7 +321,7 @@
         rg -Fq 'extra-substituters = ["https://lucidity.cachix.org"]' flake.nix
         rg -Fq 'lucidity.cachix.org-1:EiVuaCjci+zOjSGxHE3nOXVNPVCfXfwfCFzba1vnirA=' flake.nix
         cache_action='cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71'
-        trusted_events="github.event_name == 'merge_group' || github.event_name == 'release' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')"
+        trusted_events="github.event_name == 'merge_group' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')"
         mapfile -t cache_workflows < <(rg -l -F 'run: nix ' .github/workflows | sort)
         test "''${#cache_workflows[@]}" -eq 9
         for workflow in "''${cache_workflows[@]}"; do
@@ -332,9 +339,9 @@
             test "''${caches[$index]}" -gt "''${installers[$index]}"
           done
         done
-        test "$(rg -F "$cache_action" .github/workflows | wc -l)" -eq 14
-        test "$(rg -F 'pushFilter: lucidity-(controller|worker)-bootc-context' .github/workflows | wc -l)" -eq 14
-        test "$(rg -F 'kvm: true' .github/workflows | wc -l)" -eq 15
+        test "$(rg -F "$cache_action" .github/workflows | wc -l)" -eq 15
+        test "$(rg -F 'pushFilter: lucidity-(controller|worker)-bootc-context' .github/workflows | wc -l)" -eq 15
+        test "$(rg -F 'kvm: true' .github/workflows | wc -l)" -eq 16
         ! rg -q '99-kvm4all|udevadm.*kvm' .github/workflows
         ! rg -q 'pathsToPush:.*(qcow2|raw|ami|bootc-context)' .github/workflows
         test "$(rg -F 'cache configure ci-tools' .github/workflows | wc -l)" -eq 4

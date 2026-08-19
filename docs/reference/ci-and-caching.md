@@ -12,9 +12,9 @@ run metadata with `lucidity ci workflow audit` from the locked Nix environment.
 The flake declares `https://lucidity.cachix.org` and its pinned public key. Every
 workflow that evaluates or runs flake outputs can substitute from it.
 
-Pull requests are read-only. Merge-group, main, release, scheduled, reusable,
-and trusted manual runs require `CACHIX_AUTH_TOKEN` before upload. The token is
-provided only to the Cachix action and never to a Nix derivation.
+Pull requests are read-only. Merge-group, main, scheduled, and trusted manual
+runs require `CACHIX_AUTH_TOKEN` before upload. The token is provided only to
+the Cachix action and never to a Nix derivation.
 
 The large controller and worker bootc contexts are excluded from direct upload.
 Their reusable dependencies and small check results remain cacheable. Raw AMI
@@ -33,10 +33,18 @@ uploaded or transferred between jobs.
 
 ## Trusted lifecycle checks
 
-Pull requests run the hermetic graph, AMI compatibility, and integration tests.
-Controller and worker bootc switch/rollback jobs run on the trusted merge-group
-event, where cache-writing credentials are permitted. The required gate combines
-the hermetic result with every lifecycle result applicable to the event.
+Pull requests and main pushes run the hermetic graph. Path-selected pull requests
+also run the advisory AMI compatibility and integration workflows. On a merge
+group, the fail-safe classifier selects the controller lifecycle, worker
+lifecycle, both, or neither. Unknown paths and classification errors select both.
+Scheduled and manual validation always run both roles. The stable `required` gate
+fails unless the hermetic graph and every selected lifecycle job succeed; an
+unselected role must report `skipped`.
+
+Manual validation accepts `lifecycle_cache=isolated`. That mode bypasses the
+Lucidity Cachix and role-scoped GHCR caches for both lifecycle jobs, providing a
+cold-cache release check. The default `warm` mode restores both caches and is
+used for the same-SHA warm comparison.
 
 ## Performance reporting
 

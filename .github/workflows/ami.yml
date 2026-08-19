@@ -64,7 +64,7 @@ env:
   AWS_REGION: us-east-2
   CI_TOOLS_IMAGE: localhost/coolify-aws-ci-tools:ami
   IMAGE: localhost/coolify-bootc-${{ inputs.ami_role || 'worker' }}:ami-validation
-  NIX_CACHE_WRITE: ${{ github.event_name == 'merge_group' || github.event_name == 'release' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+  NIX_CACHE_WRITE: ${{ github.event_name == 'merge_group' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
 
 jobs:
   ami:
