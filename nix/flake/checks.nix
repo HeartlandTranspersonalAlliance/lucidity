@@ -284,7 +284,8 @@
         rg -Fq 'run: nix run .#release -- manifest' .github/workflows/release.yml
         rg -Fq 'run: nix run .#ci -- ecr pin-local' .github/workflows/release.yml
         rg -Fq 'IMAGE_NAME: ''${{ env.VERIFIED_IMAGE_REF }}' .github/workflows/release.yml
-        rg -Fq 'docker_run_args+=(--volume "''${docker_config}:/root/.docker/config.json:ro")' scripts/build-disk.sh
+        rg -Fq -- '--volume "''${docker_config}:/root/.docker/config.json:ro"' scripts/build-disk.sh
+        rg -Fq -- '--env "REGISTRY_AUTH_FILE=/root/.docker/config.json"' scripts/build-disk.sh
         ! rg -q 'cat .*docker_config|cp .*docker_config' scripts/build-disk.sh
         rg -Fq 'nix/pkgs/lucidity.sh | scripts/build-disk.sh)' nix/pkgs/lucidity.sh
         rg -Fq 'run: nix run .#ci -- timing summarize' .github/workflows/release.yml

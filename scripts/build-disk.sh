@@ -60,8 +60,12 @@ if [[ ${container_engine} == docker ]]; then
     )
     if [[ -f ${docker_config} ]]; then
         # The pinned builder may need to resolve a private digest after loading it.
-        # Mount Docker's short-lived auth file read-only; never copy or print it.
-        docker_run_args+=(--volume "${docker_config}:/root/.docker/config.json:ro")
+        # Select Docker's short-lived auth file explicitly for the nested Podman
+        # process. Mount it read-only and never copy or print it.
+        docker_run_args+=(
+            --volume "${docker_config}:/root/.docker/config.json:ro"
+            --env "REGISTRY_AUTH_FILE=/root/.docker/config.json"
+        )
     fi
     # The quoted script expands the explicitly passed environment inside the tooling container.
     # shellcheck disable=SC2016
