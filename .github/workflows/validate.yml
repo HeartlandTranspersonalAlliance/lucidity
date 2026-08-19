@@ -20,10 +20,15 @@ permissions:
   contents: read
 
 env:
-  NIX_CACHE_WRITE: ${{ github.event_name == 'merge_group' || github.event_name == 'release' || github.event_name == 'schedule' || github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+  NIX_CACHE_WRITE: ${{ github.event_name == 'merge_group' || github.event_name == 'release' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
 
 jobs:
   hermetic:
+    outputs:
+      lifecycle_controller: ${{ steps.lifecycle-impact.outputs.controller }}
+      lifecycle_worker: ${{ steps.lifecycle-impact.outputs.worker }}
+      lifecycle_fallback: ${{ steps.lifecycle-impact.outputs.fallback }}
+      lifecycle_reason: ${{ steps.lifecycle-impact.outputs.reason }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -31,6 +36,7 @@ jobs:
         run: echo "HERMETIC_STARTED_AT=$(date +%s)" >>"${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          fetch-depth: 0
           persist-credentials: false
       - name: Install locked Nix
         uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
@@ -48,6 +54,25 @@ jobs:
           authToken: ${{ env.NIX_CACHE_WRITE == 'true' && secrets.CACHIX_AUTH_TOKEN || '' }}
           skipPush: ${{ env.NIX_CACHE_WRITE != 'true' }}
           pushFilter: lucidity-(controller|worker)-bootc-context
+      - name: Classify merge-group lifecycle impact in shadow mode
+        id: lifecycle-impact
+        if: github.event_name == 'merge_group'
+        env:
+          BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+        run: nix run .#ci -- workflow classify "${BASE_SHA}" "${HEAD_SHA}"
+      - name: Summarize shadow lifecycle classification
+        if: github.event_name == 'merge_group'
+        env:
+          CLASSIFICATION: ${{ steps.lifecycle-impact.outputs.json }}
+        run: |
+          {
+            echo '### Lifecycle path classification (shadow mode)'
+            echo
+            echo 'All lifecycle roles still run while this evidence is collected.'
+            echo
+            echo "\`${CLASSIFICATION}\`"
+          } >>"${GITHUB_STEP_SUMMARY}"
       - name: Evaluate and build the authoritative hermetic check graph
         id: hermetic-check
         run: nix flake check --show-trace --print-build-logs

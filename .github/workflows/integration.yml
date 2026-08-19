@@ -30,7 +30,7 @@ env:
   CONTROLLER_IMAGE: localhost/coolify-bootc-controller:integration
   CI_TOOLS_IMAGE: localhost/coolify-aws-ci-tools:integration
   BUILDX_BUILDER_NAME: lucidity-integration
-  NIX_CACHE_WRITE: ${{ github.event_name == 'merge_group' || github.event_name == 'release' || github.event_name == 'schedule' || github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+  NIX_CACHE_WRITE: ${{ github.event_name == 'merge_group' || github.event_name == 'release' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
 
 jobs:
   controller-worker:
