@@ -3,16 +3,10 @@ name: Release bootc appliance
 on:
   workflow_dispatch:
     inputs:
-      bump:
-        description: Automatic uses conventional commits; override only when release impact differs
+      target_version:
+        description: Exact unprefixed SemVer to release, for example 0.2.1
         required: true
-        type: choice
-        options:
-          - auto
-          - patch
-          - minor
-          - major
-        default: auto
+        type: string
       source_sha:
         description: Optional exact ancestor to resume after a release-tool-only main hotfix
         required: false
@@ -74,8 +68,8 @@ jobs:
         id: version
         env:
           RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}
-          REQUESTED_BUMP: ${{ inputs.bump }}
-        run: nix run .#release -- prepare "${REQUESTED_BUMP}" "${RELEASE_SOURCE_SHA}"
+          RELEASE_TARGET_VERSION: ${{ inputs.target_version }}
+        run: nix run .#release -- prepare "${RELEASE_TARGET_VERSION}" "${RELEASE_SOURCE_SHA}"
 
   roles:
     name: Build, promote, and retain ${{ matrix.role }}

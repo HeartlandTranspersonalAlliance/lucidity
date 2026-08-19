@@ -7,7 +7,7 @@ rather than automatic failover.
 
 ## Release gate
 
-Version 0.2.0 is the first production-candidate release. Before publishing it:
+Version 0.2.1 is the first production-candidate release. Before publishing it:
 
 1. Merge the complete `nix flake check` graph through the merge queue.
 2. Publish the immutable controller and worker images, SBOMs, checksums, and

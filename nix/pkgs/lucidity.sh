@@ -57,7 +57,7 @@ Usage: lucidity COMMAND [ARGUMENTS]
   mesh revoke FINGERPRINT
   mesh rotate
   release local
-  release prepare auto|patch|minor|major [SOURCE_SHA]
+  release prepare TARGET_VERSION [SOURCE_SHA]
   release image controller|worker REPOSITORY_URL RELEASE_TAG SOURCE_SHA
   release inventory RELEASE_TAG
   release manifest RELEASE_TAG VERSION SOURCE_SHA
@@ -1523,10 +1523,10 @@ release_local() {
 }
 
 release_prepare() {
-    requested_bump=${1:-}
+    target_version=${1:-}
     requested_source_sha=${2:-}
-    [[ $requested_bump =~ ^(auto|patch|minor|major)$ && ($# -eq 1 || $# -eq 2) ]] ||
-        die "release prepare requires auto, patch, minor, or major and an optional source SHA"
+    [[ $target_version =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ && ($# -eq 1 || $# -eq 2) ]] ||
+        die "release prepare requires an exact X.Y.Z target and an optional source SHA"
     root=$(repository_root)
     [[ ${GITHUB_REF:-refs/heads/main} == refs/heads/main ]] || die "releases may run only from main"
     tooling_sha=$(git -C "$root" rev-parse HEAD)
@@ -1549,7 +1549,10 @@ release_prepare() {
         done
     fi
     seed_version=$(git -C "$root" show "$source_sha:VERSION")
-    [[ $seed_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "VERSION must contain X.Y.Z"
+    [[ $seed_version =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] ||
+        die "VERSION must contain canonical X.Y.Z"
+    [[ $seed_version == "$target_version" ]] ||
+        die "release target $target_version does not match source VERSION $seed_version"
     git -C "$root" show "$source_sha:README.md" | grep -Fq "Current version: **$seed_version**" ||
         die "release source README does not match VERSION"
     git -C "$root" show "$source_sha:CHANGELOG.md" | grep -Fq "## [$seed_version] - " ||
@@ -1557,34 +1560,21 @@ release_prepare() {
 
     last_tag=$(git -C "$root" tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname |
         grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)
-    if [[ -z $last_tag ]]; then
-        version=$seed_version
-        selected_bump=initial
-    else
+    if [[ -n $last_tag ]]; then
         [[ $(git -C "$root" rev-list --count "$last_tag..$source_sha") -gt 0 ]] ||
             die "no commits exist after $last_tag"
         git -C "$root" merge-base --is-ancestor "$last_tag" "$source_sha" ||
             die "latest release tag $last_tag is not an ancestor of the release source"
         base_version=${last_tag#v}
-        IFS=. read -r major minor patch <<<"$base_version"
-        selected_bump=$requested_bump
-        if [[ $selected_bump == auto ]]; then
-            release_log=$(git -C "$root" log "$last_tag..$source_sha" --format='%s%n%b')
-            if grep -Eq '(^[[:alnum:]-]+(\([^)]*\))?!:)|(^BREAKING[ -]CHANGE:)' <<<"$release_log"; then
-                selected_bump="major"
-            elif grep -Eq '^feat(\([^)]*\))?:' <<<"$release_log"; then
-                selected_bump="minor"
-            else
-                selected_bump="patch"
-            fi
+        IFS=. read -r base_major base_minor base_patch <<<"$base_version"
+        IFS=. read -r target_major target_minor target_patch <<<"$target_version"
+        if ((target_major < base_major ||
+            (target_major == base_major && target_minor < base_minor) ||
+            (target_major == base_major && target_minor == base_minor && target_patch <= base_patch))); then
+            die "release target $target_version must be newer than $base_version"
         fi
-        case "$selected_bump" in
-            major) version="$((major + 1)).0.0" ;;
-            minor) version="${major}.$((minor + 1)).0" ;;
-            patch) version="${major}.${minor}.$((patch + 1))" ;;
-            *) die "unsupported release bump: $selected_bump" ;;
-        esac
     fi
+    version=$target_version
     tag=v$version
     tag_commit=$(git -C "$root" rev-parse --verify --quiet "refs/tags/$tag^{commit}" || true)
     if release_state=$(gh release view "$tag" --json isDraft,targetCommitish 2>/dev/null); then
@@ -1598,7 +1588,7 @@ release_prepare() {
         printf 'source_sha=%s\ntag=%s\ntooling_sha=%s\nversion=%s\n' \
             "$source_sha" "$tag" "$tooling_sha" "$version" >>"$GITHUB_OUTPUT"
     fi
-    printf 'Selected %s with a %s bump from %s\n' "$tag" "$selected_bump" "${last_tag:-VERSION seed}"
+    printf 'Selected exact target %s after %s\n' "$tag" "${last_tag:-the VERSION seed}"
 }
 
 release_image() {

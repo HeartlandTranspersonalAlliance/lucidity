@@ -276,6 +276,9 @@
           exit 1
         fi
         rg -Fq 'run: nix run .#release -- prepare' .github/workflows/release.yml
+        rg -Fq 'target_version:' .github/workflows/release.yml
+        rg -Fq 'RELEASE_TARGET_VERSION: ''${{ inputs.target_version }}' .github/workflows/release.yml
+        ! rg -q 'inputs\.bump|REQUESTED_BUMP' .github/workflows/release.yml
         rg -Fq 'source_sha:' .github/workflows/release.yml
         rg -Fq 'tooling_sha: ''${{ steps.version.outputs.tooling_sha }}' .github/workflows/release.yml
         test "$(rg -F 'ref: ''${{ needs.prepare.outputs.tooling_sha }}' .github/workflows/release.yml | wc -l)" -eq 3
@@ -605,11 +608,17 @@
         git config user.name 'Lucidity release test'
         mkdir -p .github/workflows docs/reference nix/flake nix/pkgs scripts
         touch flake.nix
-        printf '0.2.0\n' >VERSION
-        printf 'Current version: **0.2.0**\n' >README.md
-        printf '## [0.2.0] - 2026-08-18\n' >CHANGELOG.md
+        printf '0.1.0\n' >VERSION
+        printf 'Current version: **0.1.0**\n' >README.md
+        printf '## [0.1.0] - 2026-08-01\n' >CHANGELOG.md
         git add .
-        git commit -qm 'docs: prepare v0.2.0'
+        git commit -qm 'docs: prepare v0.1.0'
+        git tag v0.1.0
+        printf '0.2.1\n' >VERSION
+        printf 'Current version: **0.2.1**\n' >README.md
+        printf '## [0.2.1] - 2026-08-19\n' >CHANGELOG.md
+        git add .
+        git commit -qm 'docs: prepare exact v0.2.1 target'
         source_sha=$(git rev-parse HEAD)
         printf 'release tooling\n' >.github/workflows/release.yml
         printf 'release helper\n' >nix/pkgs/lucidity.sh
@@ -622,11 +631,19 @@
           GITHUB_SHA="$tooling_sha" \
           GITHUB_OUTPUT=$PWD/outputs \
           LUCIDITY_REPOSITORY_ROOT=$PWD \
-          ${lib.getExe lucidityRelease} release prepare minor "$source_sha"
+          ${lib.getExe lucidityRelease} release prepare 0.2.1 "$source_sha"
         grep -Fxq "source_sha=$source_sha" outputs
         grep -Fxq "tooling_sha=$tooling_sha" outputs
-        grep -Fxq 'tag=v0.2.0' outputs
-        grep -Fxq 'version=0.2.0' outputs
+        grep -Fxq 'tag=v0.2.1' outputs
+        grep -Fxq 'version=0.2.1' outputs
+
+        if GITHUB_REF=refs/heads/main \
+          GITHUB_SHA="$tooling_sha" \
+          LUCIDITY_REPOSITORY_ROOT=$PWD \
+          ${lib.getExe lucidityRelease} release prepare 0.2.0 "$source_sha" 2>/dev/null; then
+          echo 'release preparation accepted a target that differs from VERSION' >&2
+          exit 1
+        fi
 
         mkdir -p nix/den
         printf 'image input\n' >nix/den/disallowed.nix
@@ -635,7 +652,7 @@
         if GITHUB_REF=refs/heads/main \
           GITHUB_SHA=$(git rev-parse HEAD) \
           LUCIDITY_REPOSITORY_ROOT=$PWD \
-          ${lib.getExe lucidityRelease} release prepare minor "$source_sha" 2>/dev/null; then
+          ${lib.getExe lucidityRelease} release prepare 0.2.1 "$source_sha" 2>/dev/null; then
           echo 'release resume accepted a non-tooling change' >&2
           exit 1
         fi

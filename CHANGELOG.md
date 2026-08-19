@@ -7,22 +7,7 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-### Changed
-
-- Release image promotion, SBOM generation, and retained AMI construction now
-  share one ephemeral runner per role. Verified local OCI layers are reused
-  without transferring raw multi-gigabyte disks between jobs.
-- Release job summaries report observed same-runner and raw AMI durations for
-  non-flaky comparisons with the previous split-runner baseline.
-
-### Fixed
-
-- Interrupted releases can resume from an exact ancestor after a release-tool-only
-  fix without changing the immutable source, image digests, AMI metadata, or tag.
-- Infrastructure apply no longer invokes the unsupported SES pricing-plan API
-  after a successful OpenTofu apply.
-
-## [0.2.0] - 2026-08-18
+## [0.2.1] - 2026-08-19
 
 ### Added
 
@@ -47,6 +32,11 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- Release image promotion, SBOM generation, and retained AMI construction now
+  share one ephemeral runner per role. Verified local OCI layers are reused
+  without transferring raw multi-gigabyte disks between jobs.
+- Release job summaries report observed same-runner and raw AMI durations for
+  non-flaky comparisons with the previous split-runner baseline.
 - Nix flake apps are now the supported operator and CI interface. Superseded
   Make, standalone Containerfile, role-tree, and environment-root interfaces
   were removed.
@@ -80,10 +70,14 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Interrupted releases can resume from an exact ancestor after a release-tool-only
+  fix without changing the immutable source, image digests, AMI metadata, or tag.
+- Infrastructure apply no longer invokes the unsupported SES pricing-plan API
+  after a successful OpenTofu apply.
 - Lifecycle image validation no longer loses the role image tag through Bash
   dynamic scope.
 - VM lifecycle cleanup captures its role explicitly, and privileged guest
   validation follows the supported `admin` plus sudo access path.
 
-[Unreleased]: https://github.com/HeartlandTranspersonalAlliance/lucidity/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/HeartlandTranspersonalAlliance/lucidity/compare/v0.1.0...v0.2.0
+[Unreleased]: https://github.com/HeartlandTranspersonalAlliance/lucidity/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/HeartlandTranspersonalAlliance/lucidity/compare/v0.1.0...v0.2.1
