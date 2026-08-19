@@ -64,7 +64,7 @@ jobs intentionally build and validate the image and AMI on one runner.
 | `release.yml` | manual | `prepare`, `roles`, `inventory`, `release` | Exact release identity, verified images, SBOMs, retained AMIs, manifest, tag, and GitHub release | Two parallel full image/SBOM/AMI jobs | Keep and replace the ambiguous bump input with an exact version. Do not split same-runner role work. |
 | `update-flake-lock.yml` | weekly schedule, manual | `update` | Dependency updates arrive as reviewable pull requests | Flake update and check | Keep advisory. Its pull request is the audit and rollback boundary. |
 | `validate-deployment.yml` | manual | `validate` | A deployed controller and worker match expected runtime, network, and backup contracts | AWS and HTTPS read-only validation | Keep manual until the production milestone provides stable endpoints and role configuration. |
-| `validate.yml` | pull request, merge group, main push, release publication, weekly schedule, manual | `hermetic`, `lifecycle`, `required` | Authoritative flake graph plus controller and worker switch/rollback lifecycle | Two full bootc lifecycle jobs | Keep `required` stable. Classify paths inside the always-triggered workflow, run affected lifecycle roles only on merge groups, run both for scheduled/manual validation, and remove duplicate main/release lifecycle triggers. |
+| `validate.yml` | pull request, merge group, main push, weekly schedule, manual | `hermetic`, `lifecycle-controller`, `lifecycle-worker`, `required` | Authoritative flake graph plus applicable controller and worker switch/rollback lifecycle | Up to two full bootc lifecycle jobs | `required` remains stable. Merge groups run only classifier-selected roles, scheduled/manual validation runs both, and main pushes run only the hermetic graph. |
 
 ## Required and advisory gates
 
@@ -108,3 +108,14 @@ Rejected for this milestone:
 The rollback for gating changes is to select both roles for every merge group.
 The classifier itself also fails safe to both roles for unknown paths, invalid
 SHAs, rename ambiguity, mixed role changes, or diff errors.
+
+## Enforced runner-minute model
+
+The representative baseline consumed 52.6 lifecycle runner minutes per merge
+group: 28.7 controller minutes plus 23.9 worker minutes. With enforcement, a
+controller-only change consumes 28.7 minutes, a 45.4% reduction; a worker-only
+change consumes 23.9 minutes, a 54.6% reduction; and a documentation or
+infrastructure-only change consumes no lifecycle runner minutes. Shared,
+unknown, mixed-role, and failed classifications intentionally retain the full
+52.6-minute fail-safe path. The duplicate 52.6-minute lifecycle run after every
+main merge is eliminated independently of path classification.
