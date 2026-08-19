@@ -74,7 +74,7 @@ jobs:
 
   lifecycle-controller:
     needs: prepare
-    if: fromJSON(needs.prepare.outputs.plan).lifecycle.controller
+    if: fromJSON(needs.prepare.outputs.plan).targets.controller.run
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     permissions:
@@ -125,7 +125,7 @@ jobs:
 
   lifecycle-worker:
     needs: prepare
-    if: fromJSON(needs.prepare.outputs.plan).lifecycle.worker
+    if: fromJSON(needs.prepare.outputs.plan).targets.worker.run
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     permissions:

@@ -124,12 +124,22 @@ or non-ancestral SHAs, rename ambiguity, mixed role changes, or diff errors.
 
 ## Authoritative planner contract
 
+`ci/lifecycle-targets.json` is the versioned path-policy graph. Each node owns an
+ordered path delta and declares its immediate ancestors. A direct controller or
+worker delta selects only that lifecycle target. A common-node delta propagates
+through the graph to both lifecycle descendants. Ignored paths are evaluated
+before node deltas, and the explicit match order lets narrow role paths override
+the broader common path rules. The planner validates node names, references,
+uniqueness, and graph acyclicity before classification.
+
 `ci-workflow-prepare` is the sole producer of the workflow plan. Schema version
-1 publishes `schema_version`, `event`, `cache_mode`, the controller and worker
-booleans under `lifecycle`, `fallback`, `reason`, and the sorted unique
-`changed_paths`. It also emits scalar compatibility outputs for external
-adapters, but the repository workflow parses the JSON plan directly for job and
-cache conditions so those projections cannot become a second policy source.
+2 publishes `schema_version`, the path-graph schema version, `event`,
+`cache_mode`, the exact base/head comparison and relationship, per-target `run`,
+`matched_paths`, and `via` evidence under `targets`, plus `fallback`, `reason`,
+and the sorted unique `changed_paths`. It also emits scalar compatibility
+outputs for external adapters, but the repository workflow parses the JSON plan
+directly for job and cache conditions so those projections cannot become a
+second policy source.
 
 Pull requests and main pushes are hermetic-only. Merge groups use path
 classification. Scheduled and manual runs select both roles, and unknown events
@@ -164,6 +174,6 @@ group: 28.7 controller minutes plus 23.9 worker minutes. With enforcement, a
 controller-only change consumes 28.7 minutes, a 45.4% reduction; a worker-only
 change consumes 23.9 minutes, a 54.6% reduction; and a documentation or
 infrastructure-only change consumes no lifecycle runner minutes. Shared,
-unknown, mixed-role, and failed classifications intentionally retain the full
+unknown, mixed-target, and failed classifications intentionally retain the full
 52.6-minute fail-safe path. The duplicate 52.6-minute lifecycle run after every
 main merge is eliminated independently of path classification.

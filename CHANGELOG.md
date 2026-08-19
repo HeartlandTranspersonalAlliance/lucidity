@@ -52,6 +52,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   integrity check, and an independently approved GitHub environment.
 - Deployment acceptance verifies that VPC security groups expose no SSH and
   tests controller-to-worker access only through the Nebula address.
+- Merge-group lifecycle selection now uses a validated per-target path graph.
+  The versioned JSON plan records exact commit ancestry, matched paths, and
+  ancestor propagation evidence for each lifecycle target.
 
 ### Security
 
@@ -78,6 +81,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   dynamic scope.
 - VM lifecycle cleanup captures its role explicitly, and privileged guest
   validation follows the supported `admin` plus sudo access path.
+- CI publication is serialized per source revision, non-ancestral merge-group
+  comparisons fail safe, and isolated lifecycle runs avoid unused cache-token
+  and cleanup work.
 
 [Unreleased]: https://github.com/HeartlandTranspersonalAlliance/lucidity/compare/v0.2.1...HEAD
 [0.2.1]: https://github.com/HeartlandTranspersonalAlliance/lucidity/compare/v0.1.0...v0.2.1
