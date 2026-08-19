@@ -27,6 +27,7 @@ design context, customization, operations, and reference material.
 ## Reference
 
 - [CI and caching](reference/ci-and-caching.md)
+- [Native configuration source audit](reference/generated-configuration-audit.md)
 - [Release process](reference/releases.md)
 - [Upstream OSBuild AWS uploader evaluation](upstream-aws-uploader-evaluation.md)
 - [Project changelog](../CHANGELOG.md)

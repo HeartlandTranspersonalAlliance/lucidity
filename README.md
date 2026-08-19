@@ -78,6 +78,7 @@ Start with the [documentation index](docs/README.md).
 - [Production readiness](docs/production-readiness.md)
 - [Secrets and access](docs/security/secrets-and-access.md)
 - [CI and caching](docs/reference/ci-and-caching.md)
+- [Native configuration source audit](docs/reference/generated-configuration-audit.md)
 - [Release process](docs/reference/releases.md)
 - [Changelog](CHANGELOG.md)
 
