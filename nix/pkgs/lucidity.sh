@@ -21,6 +21,7 @@ Usage: lucidity COMMAND [ARGUMENTS]
   ci cache configure SCOPE
   ci cache cleanup
   ci build-tools-image
+  ci ecr login REGISTRY
   ci ecr resolve ROLE REPOSITORY_URL IMAGE_TAG
   ci ecr push IMAGE_REF
   ci ecr verify IMAGE_REF REPOSITORY_NAME IMAGE_TAG
@@ -651,6 +652,15 @@ ci_build_tools_image() {
         "$root"
 }
 
+ci_ecr_login() {
+    registry=${1:-}
+    [[ $registry =~ ^[0-9]{12}\.dkr\.ecr\.([a-z0-9-]+)\.amazonaws\.com$ && $# -eq 1 ]] ||
+        die "ci ecr login requires a private commercial-region ECR REGISTRY"
+    region=${BASH_REMATCH[1]}
+    aws ecr get-login-password --region "$region" |
+        docker login --username AWS --password-stdin "$registry"
+}
+
 ci_ecr_resolve() {
     role=${1:-}
     repository_url=${2:-}
@@ -673,7 +683,7 @@ ci_ecr_resolve() {
     else
         exists=false
     fi
-    aws ecr get-login-password --region "$region" | docker login --username AWS --password-stdin "$registry"
+    ci_ecr_login "$registry"
     [[ -n ${GITHUB_OUTPUT:-} ]] || die "GITHUB_OUTPUT is required"
     printf 'exists=%s\nimage_ref=%s\nregistry=%s\nrepository_name=%s\n' \
         "$exists" "$image_ref" "$registry" "$repository_name" >>"$GITHUB_OUTPUT"
@@ -923,12 +933,13 @@ ci_command() {
             action=${1:-}
             shift || true
             case "$action" in
+                login) ci_ecr_login "$@" ;;
                 resolve) ci_ecr_resolve "$@" ;;
                 push) ci_ecr_push "$@" ;;
                 verify) ci_ecr_verify "$@" ;;
                 pin-local) ci_ecr_pin_local "$@" ;;
                 logout) ci_ecr_logout "$@" ;;
-                *) die "ci ecr requires resolve, push, verify, pin-local, or logout" ;;
+                *) die "ci ecr requires login, resolve, push, verify, pin-local, or logout" ;;
             esac
             ;;
         ami)

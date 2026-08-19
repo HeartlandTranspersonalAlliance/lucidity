@@ -215,6 +215,11 @@ jobs:
           CONTAINER_ENGINE: docker
         run: nix run .#ci -- build-tools-image
 
+      - name: Refresh ECR credentials for the nested image builder
+        env:
+          ECR_REGISTRY: ${{ steps.candidate.outputs.registry }}
+        run: nix run .#ci -- ecr login "${ECR_REGISTRY}"
+
       - name: Build the raw AMI artifact from the verified local image
         env:
           CONTAINER_ENGINE: docker

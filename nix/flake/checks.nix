@@ -283,6 +283,7 @@
         rg -Fq 'run: nix run .#release -- image' .github/workflows/release.yml
         rg -Fq 'run: nix run .#release -- manifest' .github/workflows/release.yml
         rg -Fq 'run: nix run .#ci -- ecr pin-local' .github/workflows/release.yml
+        rg -Fq 'run: nix run .#ci -- ecr login "''${ECR_REGISTRY}"' .github/workflows/release.yml
         rg -Fq 'IMAGE_NAME: ''${{ env.VERIFIED_IMAGE_REF }}' .github/workflows/release.yml
         rg -Fq -- '--volume "''${docker_config}:/root/.docker/config.json:ro"' scripts/build-disk.sh
         rg -Fq -- '--env "REGISTRY_AUTH_FILE=/root/.docker/config.json"' scripts/build-disk.sh
