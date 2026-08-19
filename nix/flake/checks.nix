@@ -302,6 +302,10 @@
         rg -Fq 'run: nix run .#ci -- ami validate-inputs' .github/workflows/ami.yml
         rg -Fq 'run: nix run .#ci -- benchmark resolve' .github/workflows/ami-switch-benchmark.yml
         rg -Fq 'run: nix run .#ci -- benchmark verify-target' .github/workflows/ami-switch-benchmark.yml
+        ! rg -q '^  workflow_call:' .github/workflows
+        ! rg -Fq 'inputs.source_sha' .github/workflows/publish.yml
+        rg -Fq 'workflow classify "''${BASE_SHA}" "''${HEAD_SHA}"' .github/workflows/validate.yml
+        rg -Fq 'Lifecycle path classification (shadow mode)' .github/workflows/validate.yml
         if rg -n '^\s+(aws (ecr|ec2|ssm|secretsmanager)|podman pull)' .github/workflows; then
           echo "AWS and image policy must live behind flake-owned CI commands" >&2
           exit 1
@@ -310,7 +314,7 @@
         rg -Fq 'extra-substituters = ["https://lucidity.cachix.org"]' flake.nix
         rg -Fq 'lucidity.cachix.org-1:EiVuaCjci+zOjSGxHE3nOXVNPVCfXfwfCFzba1vnirA=' flake.nix
         cache_action='cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71'
-        trusted_events="github.event_name == 'merge_group' || github.event_name == 'release' || github.event_name == 'schedule' || github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')"
+        trusted_events="github.event_name == 'merge_group' || github.event_name == 'release' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')"
         mapfile -t cache_workflows < <(rg -l -F 'run: nix ' .github/workflows | sort)
         test "''${#cache_workflows[@]}" -eq 9
         for workflow in "''${cache_workflows[@]}"; do
@@ -732,6 +736,72 @@
         grep -Fq '[run](https://example.invalid/actions/runs/3)' "$TMPDIR/audit.md"
         touch "$out"
       '';
+    workflowClassifierUnitCheck =
+      pkgs.runCommand "lucidity-workflow-classifier-unit" {
+        nativeBuildInputs = [pkgs.gitMinimal pkgs.jq];
+      } ''
+        export HOME="$TMPDIR/home"
+        mkdir -p "$HOME" "$TMPDIR/repository"
+        cd "$TMPDIR/repository"
+        git init -q
+        git config user.email ci@example.invalid
+        git config user.name "CI Test"
+
+        mkdir -p docs nix/den/aspects/controller nix/den/aspects/worker
+        printf 'initial\n' >nix/den/aspects/controller/default.nix
+        printf 'initial\n' >nix/den/aspects/worker/default.nix
+        printf 'initial\n' >docs/README.md
+        printf 'initial\n' >flake.nix
+        git add .
+        git commit -qm initial
+
+        base=$(git rev-parse HEAD)
+        printf 'controller\n' >>nix/den/aspects/controller/default.nix
+        git commit -qam controller
+        head=$(git rev-parse HEAD)
+        ${lib.getExe lucidity} ci workflow classify "$base" "$head" |
+          jq -e '.controller and (.worker | not) and (.fallback | not) and .reason == "controller-only"' >/dev/null
+
+        base=$head
+        printf 'docs\n' >>docs/README.md
+        git commit -qam docs
+        head=$(git rev-parse HEAD)
+        ${lib.getExe lucidity} ci workflow classify "$base" "$head" |
+          jq -e '(.controller | not) and (.worker | not) and (.fallback | not) and .reason == "non-lifecycle"' >/dev/null
+
+        base=$head
+        git mv nix/den/aspects/controller/default.nix nix/den/aspects/worker/controller-renamed.nix
+        git commit -qm rename
+        head=$(git rev-parse HEAD)
+        ${lib.getExe lucidity} ci workflow classify "$base" "$head" |
+          jq -e '.controller and .worker and (.fallback | not) and .reason == "mixed-role-change"' >/dev/null
+
+        base=$head
+        printf 'shared\n' >>flake.nix
+        git commit -qam shared
+        head=$(git rev-parse HEAD)
+        ${lib.getExe lucidity} ci workflow classify "$base" "$head" |
+          jq -e '.controller and .worker and (.fallback | not) and .reason == "shared-change"' >/dev/null
+
+        base=$head
+        printf 'unknown\n' >unmapped.file
+        git add unmapped.file
+        git commit -qm unknown
+        head=$(git rev-parse HEAD)
+        export GITHUB_OUTPUT="$TMPDIR/github-output"
+        ${lib.getExe lucidity} ci workflow classify "$base" "$head" |
+          jq -e '.controller and .worker and .fallback and .reason == "unknown-path"' >/dev/null
+        grep -Fxq 'controller=true' "$GITHUB_OUTPUT"
+        grep -Fxq 'worker=true' "$GITHUB_OUTPUT"
+        grep -Fxq 'fallback=true' "$GITHUB_OUTPUT"
+        grep -Fxq 'reason=unknown-path' "$GITHUB_OUTPUT"
+
+        ${lib.getExe lucidity} ci workflow classify invalid "$head" |
+          jq -e '.controller and .worker and .fallback and .reason == "invalid-sha"' >/dev/null
+        ${lib.getExe lucidity} ci workflow classify "$head" "$head" |
+          jq -e '(.controller | not) and (.worker | not) and (.fallback | not) and .reason == "no-changes"' >/dev/null
+        touch "$out"
+      '';
     staticChecks = [
       manifestsCheck
       cloudInitCheck
@@ -752,6 +822,7 @@
       backupUnitCheck
       textStyleUnitCheck
       workflowAuditUnitCheck
+      workflowClassifierUnitCheck
       yamlPolicyCheck
     ];
     staticCheck = pkgs.runCommand "lucidity-static-checks" {} ''
@@ -783,6 +854,7 @@
       text-style-unit = textStyleUnitCheck;
       worker-unit = workerUnitCheck;
       workflow-audit-unit = workflowAuditUnitCheck;
+      workflow-classifier-unit = workflowClassifierUnitCheck;
       yaml-policy = yamlPolicyCheck;
     };
   };

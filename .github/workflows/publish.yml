@@ -10,15 +10,6 @@ on:
       - flake.lock
       - flake.nix
       - nix/**
-  workflow_call:
-    inputs:
-      source_sha:
-        description: Exact main-branch commit whose immutable candidates must be published
-        required: true
-        type: string
-    secrets:
-      CACHIX_AUTH_TOKEN:
-        required: true
   workflow_dispatch:
 
 concurrency:
@@ -32,8 +23,8 @@ permissions:
 
 env:
   AWS_REGION: us-east-2
-  IMAGE_TAG: sha-${{ inputs.source_sha || github.sha }}
-  NIX_CACHE_WRITE: ${{ github.event_name == 'merge_group' || github.event_name == 'release' || github.event_name == 'schedule' || github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+  IMAGE_TAG: sha-${{ github.sha }}
+  NIX_CACHE_WRITE: ${{ github.event_name == 'merge_group' || github.event_name == 'release' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
 
 jobs:
   publish:
@@ -53,7 +44,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-          ref: ${{ inputs.source_sha || github.sha }}
+          ref: ${{ github.sha }}
 
       - name: Install locked Nix
         uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9

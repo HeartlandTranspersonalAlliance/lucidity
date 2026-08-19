@@ -6,42 +6,6 @@ on:
       - .github/workflows/ami.yml
       - scripts/build-disk.sh
       - scripts/validate-disk.sh
-  workflow_call:
-    inputs:
-      ami_role:
-        description: Appliance role to build and validate
-        required: true
-        type: string
-      run_aws_validation:
-        description: Upload the raw artifact, register an AMI, and validate its AWS metadata
-        required: true
-        type: boolean
-      ami_lifecycle:
-        description: Disposable cleans up; retained preserves an immutable boot-validated AMI
-        required: true
-        type: string
-      run_aws_launch:
-        description: Boot the AMI on t3a.small and validate the guest through SSM
-        required: true
-        type: boolean
-      release_version:
-        description: Optional immutable vX.Y.Z release associated with a retained AMI
-        required: false
-        type: string
-        default: ""
-      source_image_digest:
-        description: Optional immutable OCI digest associated with the selected role
-        required: false
-        type: string
-        default: ""
-      sbom_sha256:
-        description: Optional SHA-256 of the selected role's SPDX SBOM
-        required: false
-        type: string
-        default: ""
-    secrets:
-      CACHIX_AUTH_TOKEN:
-        required: true
   workflow_dispatch:
     inputs:
       ami_role:
@@ -100,7 +64,7 @@ env:
   AWS_REGION: us-east-2
   CI_TOOLS_IMAGE: localhost/coolify-aws-ci-tools:ami
   IMAGE: localhost/coolify-bootc-${{ inputs.ami_role || 'worker' }}:ami-validation
-  NIX_CACHE_WRITE: ${{ github.event_name == 'merge_group' || github.event_name == 'release' || github.event_name == 'schedule' || github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+  NIX_CACHE_WRITE: ${{ github.event_name == 'merge_group' || github.event_name == 'release' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
 
 jobs:
   ami:
@@ -225,7 +189,7 @@ jobs:
           fi
 
       - name: Require configured AWS validation identifiers
-        if: github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
+        if: github.event_name == 'workflow_dispatch'
         env:
           RUN_AWS_VALIDATION: ${{ inputs.run_aws_validation }}
           RUN_AWS_LAUNCH: ${{ inputs.run_aws_launch }}
