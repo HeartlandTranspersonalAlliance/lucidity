@@ -10,11 +10,23 @@
         "lighthouse"
         "relay"
       ];
-      packages = [pkgs.openssl];
+      packages = with pkgs; [
+        alertmanager-ntfy
+        grafana
+        ntfy-sh
+        openssl
+        prometheus
+        prometheus-alertmanager
+        prometheus-blackbox-exporter
+      ];
       persistentPaths = [
         "/data/coolify"
         "/var/lib/coolify"
         "/var/lib/openbao"
+        "/var/lib/ntfy"
+        "/var/lib/prometheus"
+        "/var/lib/alertmanager"
+        "/var/lib/grafana"
       ];
       files = {
         "etc/openbao/openbao.hcl.in" = ''

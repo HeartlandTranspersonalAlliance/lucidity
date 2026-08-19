@@ -1,0 +1,38 @@
+name: Report CI failures to ntfy
+
+on:
+  workflow_run:
+    workflows:
+      - Audit disposable AMI resources
+      - Plan and apply production infrastructure
+      - Publish bootc images
+      - Release bootc appliance
+      - Update locked Nix inputs
+      - Validate AMI compatibility
+      - Validate bootc switch and rollback delivery
+      - Validate controller-worker boot connectivity
+      - Validate locked flake
+      - Validate production deployment
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  notify:
+    if: contains(fromJSON('["failure","cancelled","timed_out","action_required","stale","startup_failure"]'), github.event.workflow_run.conclusion)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout trusted notification code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          persist-credentials: false
+          sparse-checkout: .github/actions/notify-ci
+      - name: Report failed jobs and steps
+        uses: ./.github/actions/notify-ci
+        with:
+          github-token: ${{ github.token }}
+          ntfy-token: ${{ secrets.NTFY_CI_TOKEN }}

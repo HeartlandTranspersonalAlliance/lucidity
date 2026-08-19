@@ -12,6 +12,11 @@ Git tags and image release identifiers use `vMAJOR.MINOR.PATCH`.
 4. Start the release workflow from `main` with the exact unprefixed target
    version.
 
+For v0.2.1, PR #66 is the one-time release gate. A successful merge of that PR
+into `main` starts the release workflow automatically with exact target
+`0.2.1` and the merge commit as the immutable source. The manual dispatch
+interface remains available only for an intentional release-tool recovery.
+
 The `.#release` app requires an exact canonical `X.Y.Z` target. It must match
 `VERSION` and the dated changelog section at the selected source commit, be
 newer than the latest reachable release tag, and not conflict with an existing

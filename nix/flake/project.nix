@@ -49,7 +49,6 @@ in {
       } ''
         jq '
           .variable.account_cost_budget_notification_email.default = null |
-          .variable.node_alarm_notification_email.default = null |
           .variable.controller_ami_id.default = null |
           .variable.worker_ami_id.default = null |
           .variable.cloudflare_zone_id.default = null |

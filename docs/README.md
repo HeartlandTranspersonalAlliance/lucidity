@@ -17,7 +17,7 @@ design context, customization, operations, and reference material.
 - [Application backup and restore](guides/backup-and-restore.md)
 - [Production readiness roadmap](production-readiness.md)
 - [Controller and worker recovery](node-recovery.md)
-- [Production node monitoring](node-monitoring.md)
+- [Production observability](node-monitoring.md)
 - [Determinate Nix operations](determinate-nix.md)
 
 ## Security

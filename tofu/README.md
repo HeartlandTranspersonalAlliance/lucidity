@@ -221,7 +221,7 @@ available AMD64 UEFI HVM EBS images with ENA and IMDSv2 support.
 The templates use the proposal defaults: `t3a.small` with 40 GiB gp3 for the
 controller and `t3a.medium` with 80 GiB gp3 for the worker. Root volumes are encrypted
 with the AMI snapshot KMS key and retained if an instance is terminated. CPU credits
-are standard, EC2 basic monitoring supplies the selected metrics,
+are standard, EC2 detailed monitoring remains disabled,
 IMDSv2 is required with container-compatible hop limit 2, and no key pair, subnet,
 or public address is embedded. The controller user data contains only the root-only
 Secrets Manager reference file; the worker has none. Consumers must pin the numeric
@@ -258,8 +258,6 @@ enable_ec2_instances        = true
 cloudflare_zone_id          = "4616a45d9d8f6dd9a0ff5b5e739bdf6d"
 enable_cloudflare_dns       = true
 enable_node_backups          = true
-enable_node_monitoring       = true
-node_alarm_notification_email = "operations@example.org"
 
 controller_ami_id = "ami-CONTROLLER"
 worker_ami_id     = "ami-WORKER"
@@ -292,7 +290,7 @@ numeric version is deliberately changed in this deployment.
 The flake-built `production.auto.tfvars.json` makes networking, AMI validation,
 instance identities, runtime-secret metadata, OpenBao KMS, and the account security
 baseline authoritative defaults for every `nix run .#infra -- plan`. It deliberately
-does not enable nodes, DNS, backups, monitoring, or the budget until their AMI IDs,
+does not enable nodes, DNS, backups, or the budget until their AMI IDs,
 notification addresses, and service-specific inputs are supplied and reviewed.
 
 AWS Backup stores only incremental changed blocks after the first EBS snapshot. The
@@ -303,14 +301,10 @@ immutable. Cross-Region copies and cold storage remain off to avoid cost and lon
 restore times until a stronger failure model requires them. Follow
 [`docs/node-recovery.md`](../docs/node-recovery.md) for verification and drills.
 
-Node monitoring uses six standard CloudWatch alarms, one SNS topic, and one dedicated
-customer-managed KMS key. It avoids a dashboard, custom metrics, and CloudWatch Agent.
-Basic monitoring supplies the status-check metric every minute and the CPU and credit
-metrics every five minutes, matching the configured alarm periods.
-The email subscription must be confirmed and tested after apply; see
-[`docs/node-monitoring.md`](../docs/node-monitoring.md). The KMS key and alarms are
-billed resources, so monitoring remains separately gated rather than appearing in the
-low-idle-cost image-pipeline bootstrap.
+Node and application monitoring is part of the locked bootc images rather than AWS
+infrastructure. Prometheus scrapes both roles over Nebula, Grafana and Alertmanager
+remain controller-local, and ntfy is published through the existing Coolify proxy.
+See [`docs/node-monitoring.md`](../docs/node-monitoring.md) for provisioning and access.
 
 After apply, use `ec2_instance_ids` for Session Manager, `ec2_private_ips.worker` when
 registering the worker with Coolify, and `ec2_public_ips` for external DNS. Public IPv4
@@ -471,8 +465,8 @@ network, instance-management, OpenBao KMS, and empty runtime-secret foundations:
 - the EBS Direct snapshot encryption key;
 - the GitHub AMI validation role.
 
-It deliberately leaves launch templates, production nodes, DNS, backups, monitoring,
-and the budget disabled. After the disposable AWS import succeeds, initialize the
+It deliberately leaves launch templates, production nodes, DNS, backups, and the
+budget disabled, so image-bundled monitoring is not yet active. After the disposable AWS import succeeds, initialize the
 runtime secret with `nix run .#lucidity -- secrets initialize-controller-runtime`,
 select the exact retained AMI IDs in a reviewed operator variable file, then enable
 launch templates and instances. Keep `enable_nat_gateways` false for the selected

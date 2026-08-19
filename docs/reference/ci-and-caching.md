@@ -47,7 +47,10 @@ group, the fail-safe classifier records the exact ancestor comparison and
 selects the controller lifecycle, worker lifecycle, both, or neither. A
 common-node change propagates to both descendants. Unknown paths and
 classification errors select both. Scheduled and manual validation always plan
-both roles.
+both roles. The controller job uses the connectivity-only cloud-init fixture for
+boot, switch, update, rollback, native Nix, SELinux, and storage evidence without
+pulling the full Coolify application stack. Full controller bootstrap remains an
+explicit local qualification test.
 Downstream job conditions, cache selection, the human-readable job summary, and
 the stable `required` gate all consume that same plan. GitHub job conditions
 parse the JSON plan directly rather than depending on parallel scalar outputs.

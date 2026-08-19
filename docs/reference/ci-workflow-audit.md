@@ -60,9 +60,9 @@ jobs intentionally build and validate the image and AMI on one runner.
 | `ami.yml` | selected pull-request paths, manual, unused reusable interface | `ami` | Raw disk construction, AMI compatibility, optional AWS metadata and boot validation | bootc image and raw disk build; optional EBS Direct upload and EC2 launch | Keep. Remove the unused reusable interface. Release owns retained AMIs itself. |
 | `audit-ami-resources.yml` | daily schedule, manual | `audit` | Disposable AMI validation resources do not leak | AWS metadata inventory and cleanup audit | Keep. A missing `AWS_AMI_AUDIT_ROLE_ARN` intentionally skips the job and must remain visible as configuration debt. |
 | `infra.yml` | selected pull-request paths, manual | `plan`, `apply` | OpenTofu formatting, validation, plan review, and protected apply | Provider initialization and remote plan | Keep path-scoped and advisory. A missing plan role or state bucket intentionally skips remote planning. |
-| `integration.yml` | selected pull-request paths, manual | `controller-worker` | Controller and worker boot together and complete the Coolify integration contract | Two bootc builds and two concurrent VMs | Keep as distinct pull-request evidence. Do not shard because setup is already consolidated on one runner. |
+| `integration.yml` | selected pull-request paths, manual | `controller-worker` | Controller and worker boot together and establish strict host-key-checked SSH | Two bootc builds and two concurrent VMs | Keep the small boot-connect contract as distinct pull-request evidence. Reserve full role lifecycle and Coolify bootstrap tests for focused or release qualification. |
 | `publish.yml` | selected main pushes, manual, unused reusable interface | `publish` | Immutable controller and worker candidates exist in ECR at the source SHA | Two bootc image builds and registry pushes | Keep. Remove the unused reusable interface. Publication remains separate from release retention. |
-| `release.yml` | manual | `prepare`, `roles`, `inventory`, `release` | Exact release identity, verified images, SBOMs, retained AMIs, manifest, tag, and GitHub release | Two parallel full image/SBOM/AMI jobs | Keep and replace the ambiguous bump input with an exact version. Do not split same-runner role work. |
+| `release.yml` | merged PR #66, manual recovery | `prepare`, `roles`, `inventory`, `release` | Exact release identity, verified images, SBOMs, retained AMIs, manifest, tag, and GitHub release | Two parallel full image/SBOM/AMI jobs | Automatically publish v0.2.1 from PR #66's merge commit. Keep exact-version manual dispatch only for release-tool recovery. Do not split same-runner role work. |
 | `update-flake-lock.yml` | weekly schedule, manual | `update` | Dependency updates arrive as reviewable pull requests | Flake update and check | Keep advisory. Its pull request is the audit and rollback boundary. |
 | `validate-deployment.yml` | manual | `validate` | A deployed controller and worker match expected runtime, network, and backup contracts | AWS and HTTPS read-only validation | Keep manual until the production milestone provides stable endpoints and role configuration. |
 | `validate.yml` | pull request, merge group, main push, weekly schedule, manual | `prepare`, `lifecycle-controller`, `lifecycle-worker`, `required` | Versioned Nix-owned CI plan, authoritative flake graph, and applicable controller and worker switch/rollback lifecycle | Up to two full bootc lifecycle jobs | `required` remains stable. The prepare plan is the single source for role selection, cache mode, summaries, and final gating. |
@@ -109,8 +109,8 @@ Accepted for the post-release follow-up:
 
 Rejected for this milestone:
 
-- the #47 shard proposal, because integration already shares setup on one runner
-  and sharding would duplicate expensive initialization
+- the #47 shard proposal, because the boot-connect check already shares setup
+  on one runner and sharding would duplicate image construction
 - a composite action or reusable setup workflow, because the repeated YAML is
   small, visible, and more debuggable than a new abstraction layer
 - larger or self-hosted runners, because the baseline does not show queue,

@@ -61,6 +61,11 @@ admin_ssh=("${admin_login[@]}" sudo -n)
 if [[ ${role} == worker ]]; then
     coolify_ssh=("${ssh_base[@]}" -i "${coolify_identity}" root@127.0.0.1)
 fi
+connectivity_only=false
+if [[ ${role} == controller ]] && \
+    "${admin_ssh[@]}" test -e /etc/lucidity/vm-connectivity-only; then
+    connectivity_only=true
+fi
 
 reboot_and_wait() {
     local old_boot_id candidate attempt
@@ -109,6 +114,26 @@ wait_for_worker() {
 wait_for_controller() {
     local state attempt
     [[ ${role} == controller ]] || return 0
+    if [[ ${connectivity_only} == true ]]; then
+        for ((attempt = 1; attempt <= wait_attempts; attempt++)); do
+            if "${admin_ssh[@]}" systemctl is-active --quiet docker.service 2>/dev/null && \
+                "${admin_ssh[@]}" systemctl is-active --quiet coolify-controller-storage.service 2>/dev/null && \
+                "${admin_ssh[@]}" systemctl is-active --quiet openbao.service 2>/dev/null; then
+                return 0
+            fi
+            if "${admin_ssh[@]}" systemctl is-failed --quiet coolify-controller-storage.service || \
+                "${admin_ssh[@]}" systemctl is-failed --quiet openbao.service; then
+                echo "Controller connectivity services failed after an OS deployment change" >&2
+                "${admin_ssh[@]}" journalctl \
+                    -u coolify-controller-storage.service \
+                    -u openbao.service --no-pager -n 200 >&2 || true
+                return 1
+            fi
+            sleep 2
+        done
+        echo "timed out waiting for controller connectivity services after an OS deployment change" >&2
+        return 1
+    fi
     for ((attempt = 1; attempt <= controller_wait_attempts; attempt++)); do
         state=$("${admin_ssh[@]}" systemctl is-active coolify-controller-bootstrap.service 2>/dev/null || true)
         if [[ ${state} == active ]]; then
@@ -138,10 +163,12 @@ assert_deployment() {
     local expected_services_hash=${5:-}
     "${admin_ssh[@]}" bash -Eeuo pipefail -s -- \
         "${role}" "${expected_ref}" "${marker}" \
-        "${expected_env_hash}" "${expected_key_hash}" "${expected_services_hash}" <<'REMOTE'
+        "${expected_env_hash}" "${expected_key_hash}" "${expected_services_hash}" \
+        "${connectivity_only}" <<'REMOTE'
 role=$1
 expected_ref=$2
 expected_marker=$3
+connectivity_only=$7
 assertion="read the booted image reference"
 report_assertion_failure() {
     local status=$?
@@ -150,14 +177,15 @@ report_assertion_failure() {
     bootc status --booted >&2 || true
     systemctl --no-pager --full status \
         docker.service \
-        determinate-nix-install.service \
+        lucidity-nix-selinux.service \
+        lucidity-nix-seed.service \
         nix-daemon.service \
         nix.mount \
         coolify-worker-storage.service \
         coolify-controller-storage.service \
         coolify-controller-bootstrap.service \
         aws-workload-credentials-provider-sm.service >&2 || true
-    if [[ ${role} == controller ]]; then
+    if [[ ${role} == controller && ${connectivity_only} == false ]]; then
         stat -c 'controller storage context: %C' /data/coolify >&2 || true
         mountpoint /data/coolify >&2 || true
         docker compose \
@@ -169,16 +197,19 @@ report_assertion_failure() {
     exit "${status}"
 }
 trap report_assertion_failure ERR
-assertion="wait for Determinate Nix installation"
-systemctl start determinate-nix-install.service
+assertion="wait for the image-owned Determinate Nix bootstrap"
+systemctl start lucidity-nix-profile.service
 assertion="read the booted image reference"
 bootc status --booted --format json | grep -Fq "${expected_ref}"
 assertion="verify SELinux enforcing mode"
 [[ $(getenforce) == Enforcing ]]
 assertion="verify Docker is active"
 systemctl is-active --quiet docker.service
-assertion="verify Determinate Nix installation is active"
-systemctl is-active --quiet determinate-nix-install.service
+assertion="verify Determinate Nix persistent state is active"
+systemctl is-active --quiet lucidity-nix-seed.service
+assertion="verify the Determinate Nix SELinux policy is active"
+systemctl is-active --quiet lucidity-nix-selinux.service
+semodule -l | awk '$1 == "nix" { found = 1 } END { exit !found }'
 assertion="verify the Nix daemon is active"
 systemctl is-active --quiet nix-daemon.service
 assertion="verify /nix is mounted from persistent storage"
@@ -224,6 +255,20 @@ expected_key_hash=$5
 expected_services_hash=$6
 assertion="verify controller storage is active"
 systemctl is-active --quiet coolify-controller-storage.service
+assertion="verify persistent controller storage is mounted"
+mountpoint --quiet /data/coolify
+assertion="verify the persistent controller storage SELinux label"
+[[ $(stat -c %C /data/coolify) == *:container_file_t:* ]]
+assertion="read the persistent controller marker"
+[[ $(cat /data/coolify/.update-rollback-marker) == "${expected_marker}" ]]
+if [[ ${connectivity_only} == true ]]; then
+    assertion="verify the OpenBao fixture is active"
+    systemctl is-active --quiet openbao.service
+    assertion="verify controller bootstrap remains available but skipped"
+    systemctl is-enabled --quiet coolify-controller-bootstrap.service
+    ! systemctl is-failed --quiet coolify-controller-bootstrap.service
+    exit 0
+fi
 assertion="verify controller bootstrap is active"
 systemctl is-active --quiet coolify-controller-bootstrap.service
 assertion="verify the Secrets Manager provider is enabled"
@@ -235,12 +280,6 @@ else
     assertion="verify the unconfigured Secrets Manager provider did not fail"
     ! systemctl is-failed --quiet aws-workload-credentials-provider-sm.service
 fi
-assertion="verify persistent controller storage is mounted"
-mountpoint --quiet /data/coolify
-assertion="verify the persistent controller storage SELinux label"
-[[ $(stat -c %C /data/coolify) == *:container_file_t:* ]]
-assertion="read the persistent controller marker"
-[[ $(cat /data/coolify/.update-rollback-marker) == "${expected_marker}" ]]
 env_file=/data/coolify/source/.env
 key_file=/data/coolify/ssh/id.root@host.docker.internal
 assertion="verify the persistent controller environment"
@@ -299,6 +338,13 @@ docker volume create coolify-update-rollback-test >/dev/null
 volume_path=$(docker volume inspect --format '{{ .Mountpoint }}' coolify-update-rollback-test)
 printf '%s\n' "${marker}" > "${volume_path}/marker"
 REMOTE
+elif [[ ${connectivity_only} == true ]]; then
+    "${admin_ssh[@]}" bash -Eeuo pipefail -s -- "${marker}" <<'REMOTE'
+marker=$1
+printf '%s\n' "${marker}" > /data/coolify/.update-rollback-marker
+chmod 0600 /data/coolify/.update-rollback-marker
+restorecon /data/coolify/.update-rollback-marker
+REMOTE
 else
     wait_for_controller
     mapfile -t controller_hashes < <("${admin_ssh[@]}" bash -Eeuo pipefail -s -- "${marker}" <<'REMOTE'
@@ -355,4 +401,8 @@ assert_deployment "${v1_ref}" "${marker}" "${env_hash}" "${key_hash}" "${service
 timer_masked=false
 trap - EXIT
 
-echo "${role^} VM update/rollback validation passed: v1 -> v2 -> v1 with Docker, Nix, role state, and enforcing SELinux preserved"
+if [[ ${connectivity_only} == true ]]; then
+    echo "Controller VM connectivity update/rollback validation passed: v1 -> v2 -> v1 with SSH, Docker, Nix, controller storage, and enforcing SELinux preserved"
+else
+    echo "${role^} VM update/rollback validation passed: v1 -> v2 -> v1 with Docker, Nix, role state, and enforcing SELinux preserved"
+fi

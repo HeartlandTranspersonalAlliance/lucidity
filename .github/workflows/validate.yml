@@ -112,12 +112,14 @@ jobs:
         env:
           CONTAINER_ENGINE: docker
           LUCIDITY_FULL_GUEST_TEST: "1"
+          LUCIDITY_VM_CONNECTIVITY_ONLY: "1"
         run: nix run .#test-controller
       - name: Run the isolated-cache bootc switch and rollback lifecycle
         if: fromJSON(needs.prepare.outputs.plan).cache_mode == 'isolated'
         env:
           CONTAINER_ENGINE: docker
           LUCIDITY_FULL_GUEST_TEST: "1"
+          LUCIDITY_VM_CONNECTIVITY_ONLY: "1"
         run: nix --option extra-substituters "" run .#test-controller
       - name: Remove OCI cache credentials
         if: always() && fromJSON(needs.prepare.outputs.plan).cache_mode != 'isolated'

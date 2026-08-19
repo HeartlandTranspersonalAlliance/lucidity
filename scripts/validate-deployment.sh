@@ -198,22 +198,24 @@ validate_https_url() {
 common_command='
 set -Eeuo pipefail
 cloud-init status --wait >/dev/null
-if ! systemctl start determinate-nix-install.service; then
-    systemctl --no-pager --full status determinate-nix-install.service nix-directory.service nix.mount nix-daemon.socket nix-daemon.service >&2 || true
-    journalctl --no-pager -n 300 -u determinate-nix-install.service -u nix-directory.service -u nix.mount -u nix-daemon.socket -u nix-daemon.service >&2 || true
+if ! systemctl start lucidity-nix-profile.service; then
+    systemctl --no-pager --full status lucidity-nix-selinux.service lucidity-nix-seed.service nix.mount nix-daemon.socket nix-daemon.service lucidity-nix-profile.service >&2 || true
+    journalctl --no-pager -n 300 -u lucidity-nix-selinux.service -u lucidity-nix-seed.service -u nix.mount -u nix-daemon.socket -u nix-daemon.service -u lucidity-nix-profile.service >&2 || true
     journalctl -b --no-pager -n 100 _AUDIT_TYPE_NAME=AVC >&2 || true
     exit 1
 fi
 systemctl is-active --quiet amazon-ssm-agent.service
 systemctl is-active --quiet docker.service
 systemctl is-active --quiet sshd.service
-systemctl is-active --quiet determinate-nix-install.service
+systemctl is-active --quiet lucidity-nix-selinux.service
+systemctl is-active --quiet lucidity-nix-seed.service
 systemctl is-active --quiet nix-daemon.service
 systemctl is-enabled --quiet bootc-fetch-apply-updates.timer
 [[ $(getenforce) == Enforcing ]]
 mountpoint --quiet /nix
 [[ $(stat -c "%d:%i" /nix) == "$(stat -c "%d:%i" /var/lib/nix)" ]]
 [[ -s /nix/receipt.json ]]
+semodule -l | grep -Eq "^nix[[:space:]]"
 docker info --format "{{json .ServerVersion}}" >/dev/null
 docker compose version >/dev/null
 bootc status >/dev/null

@@ -76,6 +76,11 @@ in
 
         coolify_key=""
         ${workerSecret}
+        connectivity_only=''${LUCIDITY_VM_CONNECTIVITY_ONLY:-0}
+        [[ $connectivity_only == 0 || $connectivity_only == 1 ]] || {
+          echo "LUCIDITY_VM_CONNECTIVITY_ONLY must be 0 or 1" >&2
+          exit 2
+        }
 
         printf '#cloud-config\n'
         jq --null-input \
@@ -83,7 +88,8 @@ in
           --arg registryHost "$registry_host" \
           --arg adminKey "$ADMIN_SSH_PUBLIC_KEY" \
           --arg adminFingerprint "$admin_fingerprint" \
-          --arg coolifyKey "$coolify_key" '
+          --arg coolifyKey "$coolify_key" \
+          --arg connectivityOnly "$connectivity_only" '
             {
               hostname: ("coolify-" + $role + "-test"),
               manage_etc_hosts: true,
@@ -124,12 +130,21 @@ in
                   content: ("[[registry]]\nlocation = \"" + $registryHost + "\"\ninsecure = true\n")
                 }
               ] + (
+                if $role == "controller" and $connectivityOnly == "1" then [
+                  {
+                    path: "/etc/lucidity/vm-connectivity-only",
+                    owner: "root:root",
+                    permissions: "0600",
+                    content: "true\n"
+                  }
+                ] else [] end
+              ) + (
                 if $role == "controller" then [
                   {
                     path: "/etc/systemd/system/openbao.service.d/99-lucidity-vm-fixture.conf",
                     owner: "root:root",
                     permissions: "0644",
-                    content: "[Service]\nType=oneshot\nExecStart=\nExecStart=/usr/bin/true\nRemainAfterExit=yes\n"
+                    content: "[Service]\nType=oneshot\nExecStartPre=\nExecStart=\nExecStart=/usr/bin/true\nRemainAfterExit=yes\n"
                   }
                 ] else [
                   {
@@ -138,8 +153,16 @@ in
                     permissions: "0600",
                     content: ($coolifyKey + "\n")
                   }
-            ] end
-          )
+              ] end
+              ),
+              runcmd: (
+                if $role == "controller" then [
+                  ["systemctl", "daemon-reload"],
+                  ["systemctl", "restart", "openbao.service"],
+                  ["systemctl", "reset-failed", "coolify-controller-bootstrap.service"],
+                  ["systemctl", "start", "--no-block", "coolify-controller-bootstrap.service"]
+                ] else [] end
+              )
             }
           '
       '';

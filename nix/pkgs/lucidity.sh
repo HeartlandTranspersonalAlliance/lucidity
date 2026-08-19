@@ -269,6 +269,11 @@ build_role() {
     esac
 
     build_command=("$engine" build)
+    if [[ $engine == podman ]]; then
+        # The generated Containerfile selects Bash with SHELL, which Podman's
+        # default OCI image format cannot encode.
+        build_command+=(--format docker)
+    fi
     if [[ -n ${BUILD_CACHE_FROM:-} || -n ${BUILD_CACHE_TO:-} ]]; then
         case "$engine" in
             docker)
@@ -281,7 +286,7 @@ build_role() {
                 [[ -z ${BUILD_CACHE_TO:-} ]] || build_command+=(--cache-to "type=registry,ref=$BUILD_CACHE_TO,mode=max,image-manifest=true,oci-mediatypes=true")
                 ;;
             podman)
-                build_command=(podman build --layers)
+                build_command=(podman build --format docker --layers)
                 [[ -z ${BUILD_CACHE_FROM:-} ]] || build_command+=(--cache-from "$BUILD_CACHE_FROM" --cache-ttl 168h)
                 [[ -z ${BUILD_CACHE_TO:-} ]] || build_command+=(--cache-to "$BUILD_CACHE_TO")
                 ;;
@@ -316,23 +321,37 @@ validate_role_image() {
     # Expanded by Bash inside the built image.
     # shellcheck disable=SC2016
     "$engine" run --rm --entrypoint /bin/bash "$image" -Eeuo pipefail -c '
-        rpm -q amazon-ssm-agent bootc cloud-init container-selinux docker-ce openssh-server selinux-policy-targeted
+        rpm -q amazon-ssm-agent bootc cloud-init container-selinux docker-ce nix nix-daemon nix-filesystem nix-system openssh-server selinux-policy-targeted
         systemctl is-enabled --quiet amazon-ssm-agent.service
         systemctl is-enabled --quiet bootc-fetch-apply-updates.timer
-        systemctl is-enabled --quiet determinate-nix-install.service
+        systemctl is-enabled --quiet nix.mount
+        systemctl is-enabled --quiet nix-daemon.service
+        systemctl is-enabled --quiet nix-daemon.socket
+        systemctl is-enabled --quiet determinate-nixd.socket
         systemctl is-enabled --quiet lucidity-nix-profile.service
         systemctl is-enabled --quiet lucidity-admin-authorized-key.service
         systemctl is-enabled --quiet docker.service
         systemctl is-enabled --quiet sshd.service
         grep -Eq "^SELINUX=enforcing$" /etc/selinux/config
         grep -Eq "^SELINUXTYPE=targeted$" /etc/selinux/config
-        test -s /usr/lib/lucidity/nix-seed/registration
-        test -n "$(find /usr/lib/lucidity/nix-seed/store -mindepth 1 -maxdepth 1 -print -quit)"
-        test -x /usr/libexec/lucidity/nix-installer
-        test -x /usr/libexec/lucidity/install-determinate-nix
+        test -x /usr/bin/determinate-nixd
+        test -x /usr/lib/lucidity/determinate-nix-seed/nix-installer
+        test -s /usr/lib/lucidity/determinate-nix-seed/receipt.json
+        test -d /usr/lib/lucidity/determinate-nix-seed/store
+        test -d /usr/lib/lucidity/determinate-nix-seed/var/nix
+        test -s /usr/share/selinux/packages/determinate-nix.pp
+        test -s /usr/share/selinux/packages/nix.fc
+        test -s /usr/share/selinux/packages/determinate-nix.fc
+        test -x /usr/libexec/lucidity/install-determinate-nix-selinux-policy
+        test -x /usr/libexec/lucidity/provision-determinate-nix
         test -x /usr/libexec/lucidity/install-admin-authorized-key
         systemd-analyze verify \
-            /usr/lib/systemd/system/determinate-nix-install.service \
+            /usr/lib/systemd/system/lucidity-nix-selinux.service \
+            /usr/lib/systemd/system/lucidity-nix-seed.service \
+            /usr/lib/systemd/system/nix.mount \
+            /usr/lib/systemd/system/nix-daemon.service \
+            /usr/lib/systemd/system/nix-daemon.socket \
+            /usr/lib/systemd/system/determinate-nixd.socket \
             /usr/lib/systemd/system/lucidity-nix-profile.service \
             /usr/lib/systemd/system/lucidity-admin-authorized-key.service
         ssh-keygen -A
@@ -457,19 +476,15 @@ ami_command() {
 }
 
 vm_integration_test() {
-    invoke_repository_script vm-init.sh controller
-    invoke_repository_script vm-init.sh worker
-    VM_HOST_FORWARD_PORT=8000 VM_GUEST_FORWARD_PORT=8000 \
-        invoke_repository_script vm-start.sh controller
-    VM_HOST_FORWARD_PORT=8081 VM_GUEST_FORWARD_PORT=8080 VM_MEMORY_MB=3072 \
-        invoke_repository_script vm-start.sh worker
+    LUCIDITY_VM_CONNECTIVITY_ONLY=1 invoke_repository_script vm-init.sh controller
+    LUCIDITY_VM_CONNECTIVITY_ONLY=1 invoke_repository_script vm-init.sh worker
+    VM_MEMORY_MB=2048 invoke_repository_script vm-start.sh controller
+    VM_MEMORY_MB=2048 invoke_repository_script vm-start.sh worker
     integration_cleanup() {
         invoke_repository_script vm-stop.sh controller || true
         invoke_repository_script vm-stop.sh worker || true
     }
     trap integration_cleanup EXIT
-    invoke_repository_script vm-validate.sh controller
-    invoke_repository_script vm-validate.sh worker
     invoke_repository_script vm-integration.sh
 }
 
