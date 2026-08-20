@@ -338,6 +338,13 @@
           echo "GitHub workflows must invoke flake apps instead of Make or repository scripts" >&2
           exit 1
         fi
+        for workflow in .github/workflows/*.yml; do
+          workflow_name="''${workflow##*/}"
+          rg -Fq "| \`''${workflow_name}\` |" docs/reference/ci-workflow-audit.md || {
+            echo "GitHub workflow is missing from the responsibility map: ''${workflow_name}" >&2
+            exit 1
+          }
+        done
         rg -Fq 'run: nix run .#release -- prepare' .github/workflows/release.yml
         rg -Fq 'pull_request:' .github/workflows/release.yml
         rg -Fq 'types:' .github/workflows/release.yml
@@ -378,7 +385,8 @@
         rg -Fq 'run: nix run .#ci-workflow-prepare' .github/workflows/validate.yml
         rg -Fq 'run: nix run .#ci-hermetic-check' .github/workflows/validate.yml
         rg -Fq 'run: nix run .#ci-workflow-gate' .github/workflows/validate.yml
-        ! rg -Fq 'ci workflow classify' nix/pkgs/lucidity.sh .github/workflows/validate.yml
+        rg -Fq 'ci workflow classify BASE_SHA HEAD_SHA' nix/pkgs/lucidity.sh
+        ! rg -Fq 'ci workflow classify' .github/workflows/validate.yml
         ! rg -q '^        run: \|' .github/workflows/validate.yml
         ! rg -q '^  release:' .github/workflows/validate.yml
         rg -q '^  lifecycle-controller:' .github/workflows/validate.yml
@@ -500,7 +508,7 @@
       general_source_count=$(find ${runtimeToolsSource}/scripts -maxdepth 1 -type f -name '*.sh' ! -name 'ci-*.sh' | wc -l)
       packaged_count=$(find ${lucidity.runtimeScripts}/libexec/lucidity -maxdepth 1 -type f -name '*.sh' | wc -l)
       test "$general_source_count" -eq "$packaged_count"
-      test "$source_count" -eq "$((general_source_count + 4))"
+      test "$source_count" -eq "$((general_source_count + 5))"
       while IFS= read -r source_script; do
         test -x "${lucidity.runtimeScripts}/libexec/lucidity/$(basename "$source_script")"
       done < <(find ${runtimeToolsSource}/scripts -maxdepth 1 -type f -name '*.sh' ! -name 'ci-*.sh' -print)
@@ -508,7 +516,8 @@
         ${lib.getExe ciWorkflow.prepare} \
         ${lib.getExe ciWorkflow.gate} \
         ${lib.getExe ciWorkflow.hermeticCheck} \
-        ${lib.getExe ciWorkflow.requireEnv}; do
+        ${lib.getExe ciWorkflow.requireEnv} \
+        ${lib.getExe ciWorkflow.actionPolicy}; do
         test -x "$ci_program"
       done
       ! grep -Fq '$root/scripts/' ${lib.getExe lucidity}
@@ -517,7 +526,7 @@
     '';
     yamlPolicyCheck =
       pkgs.runCommand "lucidity-yaml-policy-check" {
-        nativeBuildInputs = [pkgs.actionlint pkgs.findutils pkgs.ripgrep pkgs.yq-go];
+        nativeBuildInputs = [pkgs.actionlint pkgs.findutils pkgs.jq pkgs.ripgrep pkgs.yq-go];
       } ''
         cd ${source}
         while IFS= read -r file; do
@@ -528,11 +537,8 @@
         yq -e '.version == 2 and (.updates | length > 0)' .github/dependabot.yml >/dev/null
         yq -e '.check-for-app-update == false and (.default-catalogers | length > 0)' \
           .github/syft.yaml >/dev/null
-        if rg -n -P '^\s*uses:\s*(?!\./)[^@\s]+@(?![0-9a-f]{40}(?:\s|$))' \
-          .github/workflows; then
-          echo 'external GitHub Actions must be pinned to full commit SHAs' >&2
-          exit 1
-        fi
+        ${lib.getExe ciWorkflow.actionPolicy} \
+          .github/workflows ci/github-actions-allowlist.json
         touch "$out"
       '';
     cacheDocker = pkgs.writeShellScriptBin "docker" ''
@@ -912,10 +918,20 @@
           .aggregates[0].median_duration_seconds == 480 and
           .aggregates[1].workflow == "Validate locked flake" and
           .aggregates[1].median_duration_seconds == 180 and
-          .aggregates[1].p95_duration_seconds == 180
+          .aggregates[1].p95_duration_seconds == 180 and
+          .failure_locations == [{
+            run_id: 2,
+            workflow: "Validate locked flake",
+            url: "https://example.invalid/actions/runs/2",
+            jobs: [{
+              name: "lifecycle-controller",
+              failed_steps: ["Run the flake-owned bootc switch and rollback lifecycle"]
+            }]
+          }]
         ' "$TMPDIR/audit.json" >/dev/null
         grep -Fq '| Validate locked flake | `merge_group` | 2 |' "$TMPDIR/audit.md"
         grep -Fq '[run](https://example.invalid/actions/runs/3)' "$TMPDIR/audit.md"
+        grep -Fq '| [2](https://example.invalid/actions/runs/2) | Validate locked flake | lifecycle-controller | Run the flake-owned bootc switch and rollback lifecycle |' "$TMPDIR/audit.md"
         touch "$out"
       '';
     workflowPlannerUnitCheck = mkShellTest {
@@ -928,9 +944,16 @@
       nativeBuildInputs = [
         pkgs.gitMinimal
         pkgs.jq
+        lucidity
         ciWorkflow.gate
         ciWorkflow.prepare
       ];
+    };
+    actionPolicyUnitCheck = mkShellTest {
+      name = "action-policy-unit";
+      script = "tests/ci-action-policy.sh";
+      files = [../../tests/ci-action-policy.sh];
+      nativeBuildInputs = [pkgs.jq ciWorkflow.actionPolicy];
     };
     staticChecks = [
       manifestsCheck
@@ -956,6 +979,7 @@
       textStyleUnitCheck
       workflowAuditUnitCheck
       workflowPlannerUnitCheck
+      actionPolicyUnitCheck
       yamlPolicyCheck
     ];
     staticCheck = pkgs.runCommand "lucidity-static-checks" {} ''
@@ -991,6 +1015,7 @@
       worker-unit = workerUnitCheck;
       workflow-audit-unit = workflowAuditUnitCheck;
       workflow-planner-unit = workflowPlannerUnitCheck;
+      action-policy-unit = actionPolicyUnitCheck;
       yaml-policy = yamlPolicyCheck;
     };
   };

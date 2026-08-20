@@ -32,4 +32,9 @@ in {
     script = ../../scripts/ci-require-env.sh;
     runtimeInputs = [];
   };
+  actionPolicy = mkProgram {
+    name = "lucidity-ci-action-policy";
+    script = ../../scripts/ci-action-policy.sh;
+    runtimeInputs = with pkgs; [coreutils jq ripgrep];
+  };
 }

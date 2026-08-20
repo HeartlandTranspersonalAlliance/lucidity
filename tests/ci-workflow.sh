@@ -32,6 +32,8 @@ printf 'controller\n' >>nix/den/aspects/controller/default.nix
 git commit -qam controller
 head=$(git rev-parse HEAD)
 controller_plan=$(${prepare} merge_group "${base}" "${head}" warm)
+LUCIDITY_REPOSITORY_ROOT=${repository} lucidity ci workflow classify "${base}" "${head}" |
+    jq -e '.targets.controller.run and (.targets.worker.run | not) and .reason == "controller-only"' >/dev/null
 jq -e --arg base "${base}" --arg head "${head}" '
     .schema_version == 2 and
     .target_graph_schema_version == 1 and

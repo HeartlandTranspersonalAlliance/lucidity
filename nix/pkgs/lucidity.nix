@@ -1,4 +1,7 @@
-{pkgs}: let
+{
+  pkgs,
+  ciWorkflow,
+}: let
   inherit (pkgs) lib;
   stripEnvBash = path:
     lib.removePrefix "#!/usr/bin/env bash\n" (builtins.readFile path);
@@ -38,31 +41,33 @@
 in
   (pkgs.writeShellApplication {
     name = "lucidity";
-    runtimeInputs = with pkgs; [
-      awscli2
-      coreutils
-      curl
-      findutils
-      gawk
-      git
-      gh
-      gnugrep
-      gnused
-      jq
-      nix
-      nebula
-      openbao
-      openssl
-      openssh
-      opentofu
-      podman
-      qemu-utils
-      ripgrep
-      secretspec
-      shellcheck
-      coldsnap
-      xorriso
-    ];
+    runtimeInputs =
+      (with pkgs; [
+        awscli2
+        coreutils
+        curl
+        findutils
+        gawk
+        git
+        gh
+        gnugrep
+        gnused
+        jq
+        nix
+        nebula
+        openbao
+        openssl
+        openssh
+        opentofu
+        podman
+        qemu-utils
+        ripgrep
+        secretspec
+        shellcheck
+        coldsnap
+        xorriso
+      ])
+      ++ [ciWorkflow.prepare];
     text =
       builtins.replaceStrings
       [

@@ -31,6 +31,7 @@ Usage: lucidity COMMAND [ARGUMENTS]
   ci timing summarize LABEL STARTED_AT [BASELINE_SECONDS]
   ci benchmark resolve|verify-target
   ci workflow audit REPOSITORY [--limit COUNT] [--json PATH] [--markdown PATH]
+  ci workflow classify BASE_SHA HEAD_SHA
   ci audit-ami-resources
   ci validate-deployment
   backup init|run|check
@@ -960,17 +961,39 @@ ci_workflow_audit() {
     temporary_directory=$(mktemp -d)
     trap 'rm -rf "$temporary_directory"; trap - RETURN' RETURN
     runs_file=$temporary_directory/runs.json
+    failure_details_file=$temporary_directory/failure-details.json
     report_file=$temporary_directory/report.json
 
     if [[ -n ${LUCIDITY_WORKFLOW_RUNS_FILE:-} ]]; then
         cp "$LUCIDITY_WORKFLOW_RUNS_FILE" "$runs_file"
+        jq '[
+          .[] | select(.conclusion == "failure") |
+          {
+            run_id: .databaseId,
+            workflow: .workflowName,
+            url,
+            jobs: (.jobs // [])
+          }
+        ]' "$runs_file" >"$failure_details_file"
     else
         gh run list --repo "$repository" --limit "$limit" \
             --json databaseId,workflowName,event,status,conclusion,createdAt,startedAt,updatedAt,url,headSha \
             >"$runs_file"
+        failure_details_stream=$temporary_directory/failure-details.ndjson
+        : >"$failure_details_stream"
+        while IFS= read -r run_id; do
+            run=$(jq -c --argjson run_id "$run_id" \
+                '.[] | select(.databaseId == $run_id) | {run_id:.databaseId,workflow:.workflowName,url}' \
+                "$runs_file")
+            jobs=$(gh run view "$run_id" --repo "$repository" --json jobs)
+            jq -cn --argjson run "$run" --argjson jobs "$jobs" \
+                '$run + {jobs:($jobs.jobs // [])}' >>"$failure_details_stream"
+        done < <(jq -r '.[] | select(.conclusion == "failure") | .databaseId' "$runs_file")
+        jq -s '.' "$failure_details_stream" >"$failure_details_file"
     fi
 
-    jq --arg repository "$repository" --argjson limit "$limit" '
+    jq --arg repository "$repository" --argjson limit "$limit" \
+      --slurpfile failure_details "$failure_details_file" '
       def epoch: fromdateiso8601;
       def percentile($fraction):
         sort as $values
@@ -1018,6 +1041,23 @@ ci_workflow_audit() {
               })
             | sort_by(.workflow, .event)
           ),
+          failure_locations: (
+            $failure_details[0]
+            | map({
+                run_id,
+                workflow,
+                url,
+                jobs: [
+                  .jobs[]?
+                  | select(.conclusion == "failure")
+                  | {
+                      name,
+                      failed_steps: [.steps[]? | select(.conclusion == "failure") | .name]
+                    }
+                ]
+              })
+            | sort_by(.run_id)
+          ),
           runs: $runs
         }
     ' "$runs_file" >"$report_file"
@@ -1042,13 +1082,31 @@ ci_workflow_audit() {
           "",
           "| ID | Workflow | Event | Result | Queue | Runtime | Link |",
           "| ---: | --- | --- | --- | ---: | ---: | --- |",
-          (.runs[] | "| \(.id) | \(.workflow) | `\(.event)` | `\(.conclusion)` | \(.queue_seconds)s | \(.duration_seconds)s | [run](\(.url)) |")
+          (.runs[] | "| \(.id) | \(.workflow) | `\(.event)` | `\(.conclusion)` | \(.queue_seconds)s | \(.duration_seconds)s | [run](\(.url)) |"),
+          "",
+          "## Failure locations",
+          "",
+          "| Run | Workflow | Failed job | Failed steps |",
+          "| ---: | --- | --- | --- |",
+          (
+            .failure_locations[] as $run
+            | $run.jobs[]
+            | (.failed_steps | join(", ")) as $failed_steps
+            | "| [\($run.run_id)](\($run.url)) | \($run.workflow) | \(.name) | \($failed_steps) |"
+          )
         ' "$report_file" >"$markdown_output"
     fi
 
     if [[ -z $json_output && -z $markdown_output ]]; then
         cat "$report_file"
     fi
+}
+
+ci_workflow_classify() {
+    [[ $# -eq 2 ]] || die "ci workflow classify requires BASE_SHA and HEAD_SHA"
+    root=$(repository_root)
+    LUCIDITY_CI_TARGET_GRAPH=${LUCIDITY_CI_TARGET_GRAPH:-$root/ci/lifecycle-targets.json} \
+        lucidity-ci-workflow-prepare merge_group "$1" "$2" warm
 }
 
 ci_command() {
@@ -1131,7 +1189,8 @@ ci_command() {
             shift || true
             case "$action" in
                 audit) ci_workflow_audit "$@" ;;
-                *) die "ci workflow requires audit" ;;
+                classify) ci_workflow_classify "$@" ;;
+                *) die "ci workflow requires audit or classify" ;;
             esac
             ;;
         *) die "ci requires cache, ecr, ami, benchmark, timing, workflow, build-tools-image, audit-ami-resources, or validate-deployment" ;;

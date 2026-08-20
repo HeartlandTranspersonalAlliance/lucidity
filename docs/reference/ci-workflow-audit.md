@@ -16,8 +16,14 @@ nix develop -c nix run .#ci -- workflow audit \
 ```
 
 The command does not include a generation timestamp, sorts runs and aggregates,
-and emits the same JSON and Markdown for the same GitHub response. It reads only
-Actions metadata and never reads repository or runtime secret values.
+records the failed jobs and steps for failed runs, and emits the same JSON and
+Markdown for the same GitHub response. It reads only Actions metadata and never
+reads repository or runtime secret values.
+
+For a focused classifier diagnostic, run `lucidity ci workflow classify
+BASE_SHA HEAD_SHA`. This convenience interface delegates to the same
+`ci-workflow-prepare` policy engine used by GitHub Actions; it does not maintain
+a second path policy.
 
 The baseline below sampled 100 runs ending at run
 [32216354157](https://github.com/HeartlandTranspersonalAlliance/lucidity/actions/runs/32216354157)
@@ -47,6 +53,10 @@ full lifecycle is repeated after the merge on `main`. Removing that duplicate
 main lifecycle and selecting only affected roles in the merge queue are the
 largest safe opportunities.
 
+The v0.2.1 merge path now keeps the controller's bootc switch and rollback,
+native Nix, SELinux, OpenBao fixture, and persistent-storage evidence while
+using the connectivity-only fixture to omit the full Coolify application pull.
+
 Cache hit rate is not exposed in run-list metadata. The Nix and OCI cache setup
 steps and existing job summaries remain the evidence source for cold and warm
 comparisons. No raw disk artifact is transferred between jobs. Release role
@@ -57,15 +67,16 @@ jobs intentionally build and validate the image and AMI on one runner.
 | Workflow | Triggers | Jobs | Evidence owned | Expensive work | v0.2.1 decision |
 | --- | --- | --- | --- | --- | --- |
 | `ami-switch-benchmark.yml` | manual | `benchmark` | A retained worker AMI can switch from CentOS bootc to the immutable worker image and roll back | AMI import, EC2 launch, bootc switch, rollback | Keep advisory and manual. It validates a distinct migration path. |
-| `ami.yml` | selected pull-request paths, manual, unused reusable interface | `ami` | Raw disk construction, AMI compatibility, optional AWS metadata and boot validation | bootc image and raw disk build; optional EBS Direct upload and EC2 launch | Keep. Remove the unused reusable interface. Release owns retained AMIs itself. |
+| `ami.yml` | selected pull-request paths, manual | `ami` | Raw disk construction, AMI compatibility, optional AWS metadata and boot validation | bootc image and raw disk build; optional EBS Direct upload and EC2 launch | Keep. The unused reusable interface was removed; release owns retained AMIs itself. |
 | `audit-ami-resources.yml` | daily schedule, manual | `audit` | Disposable AMI validation resources do not leak | AWS metadata inventory and cleanup audit | Keep. A missing `AWS_AMI_AUDIT_ROLE_ARN` intentionally skips the job and must remain visible as configuration debt. |
 | `infra.yml` | selected pull-request paths, manual | `plan`, `apply` | OpenTofu formatting, validation, plan review, and protected apply | Provider initialization and remote plan | Keep path-scoped and advisory. A missing plan role or state bucket intentionally skips remote planning. |
 | `integration.yml` | selected pull-request paths, manual | `controller-worker` | Controller and worker boot together and establish strict host-key-checked SSH | Two bootc builds and two concurrent VMs | Keep the small boot-connect contract as distinct pull-request evidence. Reserve full role lifecycle and Coolify bootstrap tests for focused or release qualification. |
-| `publish.yml` | selected main pushes, manual, unused reusable interface | `publish` | Immutable controller and worker candidates exist in ECR at the source SHA | Two bootc image builds and registry pushes | Keep. Remove the unused reusable interface. Publication remains separate from release retention. |
+| `notify-ci.yml` | completed CI workflow runs | `notify` | Failed job and step details reach the operator notification endpoint | GitHub API read and one ntfy publish | Keep advisory. The trusted default-branch workflow resolves its token at runtime and never becomes a merge gate. |
+| `publish.yml` | selected main pushes, manual | `publish` | Immutable controller and worker candidates exist in ECR at the source SHA | Two bootc image builds and registry pushes | Keep. The unused reusable interface was removed; publication remains separate from release retention. |
 | `release.yml` | merged PR #66, manual recovery | `prepare`, `roles`, `inventory`, `release` | Exact release identity, verified images, SBOMs, retained AMIs, manifest, tag, and GitHub release | Two parallel full image/SBOM/AMI jobs | Automatically publish v0.2.1 from PR #66's merge commit. Keep exact-version manual dispatch only for release-tool recovery. Do not split same-runner role work. |
 | `update-flake-lock.yml` | weekly schedule, manual | `update` | Dependency updates arrive as reviewable pull requests | Flake update and check | Keep advisory. Its pull request is the audit and rollback boundary. |
 | `validate-deployment.yml` | manual | `validate` | A deployed controller and worker match expected runtime, network, and backup contracts | AWS and HTTPS read-only validation | Keep manual until the production milestone provides stable endpoints and role configuration. |
-| `validate.yml` | pull request, merge group, main push, weekly schedule, manual | `prepare`, `lifecycle-controller`, `lifecycle-worker`, `required` | Versioned Nix-owned CI plan, authoritative flake graph, and applicable controller and worker switch/rollback lifecycle | Up to two full bootc lifecycle jobs | `required` remains stable. The prepare plan is the single source for role selection, cache mode, summaries, and final gating. |
+| `validate.yml` | pull request, merge group, main push, weekly schedule, manual | `prepare`, `lifecycle-controller`, `lifecycle-worker`, `required` | Versioned Nix-owned CI plan, authoritative flake graph, and applicable controller and worker switch/rollback lifecycle | One full worker lifecycle and one connectivity-only controller lifecycle | `required` remains stable. The prepare plan is the single source for role selection, cache mode, summaries, and final gating. Routine controller validation excludes the full Coolify application pull. |
 
 ## Required and advisory gates
 
@@ -85,6 +96,25 @@ hermetic graph only after path-aware gating is enabled. Scheduled and manual
 validation run both lifecycle roles. Release publication consumes previously
 verified immutable inputs and performs release-specific SBOM, AMI, manifest,
 and boot validation.
+
+## GitHub Action dependency policy
+
+Workflow YAML is an adapter for GitHub platform capabilities. Project tools,
+formatters, linters, builds, tests, release logic, and policy checks belong in
+the flake so the same commands run locally and in CI. External Actions are
+limited to source checkout, trusted Nix bootstrap, cache access, GitHub OIDC,
+artifact and attestation I/O, and dependency pull-request automation.
+
+`ci/github-actions-allowlist.json` records every permitted external Action, its
+category, and why GitHub-native integration is preferable to a flake command.
+The Nix-owned YAML policy rejects unapproved Actions, unused allowlist entries,
+and references that are not pinned to a full commit SHA. First-party local
+Actions under `.github/actions` remain allowed; they execute trusted code from
+the checked-out default branch.
+
+Run the complete local suite with `nix run .#check`. For a fast iteration that
+omits KVM lifecycle checks, use
+`LUCIDITY_SKIP_VM_CHECKS=1 nix run .#check`.
 
 ## Optimization decisions
 
@@ -121,6 +151,10 @@ Rejected for this milestone:
 The rollback for gating changes is to select both roles for every merge group.
 The classifier itself also fails safe to both roles for unknown paths, invalid
 or non-ancestral SHAs, rename ambiguity, mixed role changes, or diff errors.
+The pre-enforcement shadow result is preserved in merge-group
+[run 32224918569](https://github.com/HeartlandTranspersonalAlliance/lucidity/actions/runs/32224918569/job/95982575040),
+where the shared workflow and Nix changes correctly selected both roles while
+the legacy lifecycle gate still ran unchanged.
 
 ## Authoritative planner contract
 

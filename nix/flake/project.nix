@@ -25,8 +25,8 @@ in {
     system,
     ...
   }: let
-    lucidity = import ../pkgs/lucidity.nix {inherit pkgs;};
     ciWorkflow = import ../pkgs/ci-workflow.nix {inherit pkgs;};
+    lucidity = import ../pkgs/lucidity.nix {inherit pkgs ciWorkflow;};
     lucidityRelease = pkgs.symlinkJoin {
       name = "lucidity-release-tools";
       paths = [lucidity];
