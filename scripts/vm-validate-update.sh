@@ -162,13 +162,12 @@ assert_deployment() {
     local expected_key_hash=${4:-}
     local expected_services_hash=${5:-}
     "${admin_ssh[@]}" bash -Eeuo pipefail -s -- \
-        "${role}" "${expected_ref}" "${marker}" \
-        "${expected_env_hash}" "${expected_key_hash}" "${expected_services_hash}" \
-        "${connectivity_only}" <<'REMOTE'
+        "${role}" "${expected_ref}" "${marker}" "${connectivity_only}" \
+        "${expected_env_hash}" "${expected_key_hash}" "${expected_services_hash}" <<'REMOTE'
 role=$1
 expected_ref=$2
 expected_marker=$3
-connectivity_only=$7
+connectivity_only=$4
 assertion="read the booted image reference"
 report_assertion_failure() {
     local status=$?
@@ -250,9 +249,9 @@ if [[ ${role} == worker ]]; then
     exit 0
 fi
 
-expected_env_hash=$4
-expected_key_hash=$5
-expected_services_hash=$6
+expected_env_hash=$5
+expected_key_hash=$6
+expected_services_hash=$7
 assertion="verify controller storage is active"
 systemctl is-active --quiet coolify-controller-storage.service
 assertion="verify persistent controller storage is mounted"

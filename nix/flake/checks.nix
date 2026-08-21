@@ -478,6 +478,12 @@
         ${lucidity.runtimeScripts}/libexec/lucidity/vm-validate.sh
       grep -Fq '/etc/lucidity/vm-connectivity-only' \
         ${lucidity.runtimeScripts}/libexec/lucidity/vm-validate-update.sh
+      grep -Fq '"''${role}" "''${expected_ref}" "''${marker}" "''${connectivity_only}" \' \
+        ${lucidity.runtimeScripts}/libexec/lucidity/vm-validate-update.sh
+      grep -Fq 'connectivity_only=$4' \
+        ${lucidity.runtimeScripts}/libexec/lucidity/vm-validate-update.sh
+      remote_command=$(printf '%s\n' "bash -Eeuo pipefail -c 'role=\$1; expected_ref=\$2; expected_marker=\$3; connectivity_only=\$4; test \"\$role\" = controller; test \"\$expected_ref\" = expected-ref; test \"\$expected_marker\" = expected-marker; test \"\$connectivity_only\" = true' -- controller expected-ref expected-marker true   ")
+      bash -c "$remote_command"
       ! grep -R -Fq '/usr/share/coolify-aws/nix-smoke' \
         ${lucidity.runtimeScripts}/libexec/lucidity
       ! grep -Fq 'IMAGE_NAME: localhost/lucidity-' ${runtimeToolsSource}/.github/workflows/validate.yml
