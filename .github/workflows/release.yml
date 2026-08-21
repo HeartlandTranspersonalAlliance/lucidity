@@ -258,6 +258,7 @@ jobs:
           AMI_EXPECTED_BOOTC_IMAGE_REF: ${{ env.VERIFIED_IMAGE_REF }}
           AMI_LAUNCH_VALIDATION: true
           AMI_LIFECYCLE: retained
+          AMI_ROLE: ${{ matrix.role }}
           AMI_RELEASE_VERSION: ${{ needs.prepare.outputs.tag }}
           AMI_SBOM_SHA256: ${{ steps.image.outputs.sbom_sha256 }}
           AMI_SNAPSHOT_KMS_KEY_ARN: ${{ vars.AWS_AMI_SNAPSHOT_KMS_KEY_ARN }}

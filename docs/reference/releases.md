@@ -40,7 +40,10 @@ narrow AMI-validation role to create and boot-test the encrypted retained AMI.
 Raw multi-gigabyte disks never cross runner boundaries. The installed bootc
 origin and the AMI launch gate use the same digest-pinned ECR reference recorded
 as `SourceImageDigest`; the version tag is promoted separately and resolves to
-that digest.
+that digest. On the guest, bootc private-ECR access uses the Nix-pinned ECR
+credential helper with the EC2 instance profile. The only bootc auth file is an
+ephemeral empty JSON object required to activate helper lookup; no registry
+password or token is stored in the image.
 
 An existing immutable candidate is never overwritten. The local rebuild still
 occurs so BuildKit can reuse cached layers for disk construction; the workflow

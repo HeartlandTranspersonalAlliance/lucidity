@@ -426,6 +426,11 @@
         rg -Fq 'scripts/validate-ami-import.sh | tests/test-ami-import.sh)' nix/pkgs/lucidity.sh
         rg -Fq 'expected_bootc_image_ref##*@' scripts/validate-ami-import.sh
         rg -Fq 'AMI_EXPECTED_BOOTC_IMAGE_REF must match AMI_SOURCE_IMAGE_DIGEST' scripts/validate-ami-import.sh
+        rg -Fq 'AMI_ROLE: ''${{ matrix.role }}' .github/workflows/release.yml
+        rg -Fq 'amazon-ecr-credential-helper' nix/den/aspects/common/default.nix
+        rg -Fq 'credential-helpers = ["ecr-login"]' nix/den/classes/bootc/image.nix
+        rg -Fq 'Requires=lucidity-bootc-ecr-auth.service' nix/den/classes/bootc/image.nix
+        rg -Fq 'command -v docker-credential-ecr-login' scripts/validate-ami-import.sh
         rg -Fq 'IMAGE_SIZE_GIB=16' image/image-builder.env
         rg -Fq 'run: nix run .#ci -- timing summarize' .github/workflows/release.yml
         ! rg -Fq 'uses: ./.github/workflows/ami.yml' .github/workflows/release.yml

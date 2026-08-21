@@ -31,6 +31,16 @@
     cfg.files
     // monitoring.files
     // {
+      "etc/containers/registries.conf.d/50-lucidity-ecr.conf" = ''
+        # Resolve private ECR credentials from the EC2 instance profile at
+        # request time. No registry token is written to the image or disk.
+        credential-helpers = ["ecr-login"]
+      '';
+      "etc/systemd/system/bootc-fetch-apply-updates.service.d/10-lucidity-ecr-auth.conf" = ''
+        [Unit]
+        Requires=lucidity-bootc-ecr-auth.service
+        After=lucidity-bootc-ecr-auth.service
+      '';
       "etc/nebula/config.yml.in" = nebulaConfig;
       "etc/ssh/sshd_config.d/40-lucidity.conf" = ''
         PasswordAuthentication no
@@ -45,6 +55,17 @@
       "etc/lucidity/role" = "${role}\n";
       "etc/lucidity/backup-target.env.example" = builtins.replaceStrings ["@ROLE@"] [role] cfg.files."etc/lucidity/backup-target.env.example";
       "usr/libexec/lucidity/backup" = builtins.readFile ../../aspects/common/files/backup.sh;
+      "usr/libexec/lucidity/prepare-bootc-ecr-auth" = ''
+        #!/usr/bin/env bash
+        set -Eeuo pipefail
+        command -v docker-credential-ecr-login >/dev/null
+        install -d -m 0700 /run/ostree
+        temporary=$(mktemp /run/ostree/auth.json.XXXXXX)
+        trap 'rm -f -- "''${temporary:-}"' EXIT
+        printf '{}\n' >"$temporary"
+        chmod 0600 "$temporary"
+        mv -f "$temporary" /run/ostree/auth.json
+      '';
       "usr/lib/lucidity/profile-path" = "${systemProfile}\n";
       "usr/lib/lucidity/home-activation-path" = "${homeActivation}\n";
       "usr/share/lucidity/nix-smoke/flake.nix" = builtins.readFile ../../../smoke/flake.nix;
@@ -268,6 +289,22 @@
         Type=oneshot
         ExecStart=/usr/libexec/lucidity/activate-nix-profile
         RemainAfterExit=yes
+
+        [Install]
+        WantedBy=multi-user.target
+      '';
+      "usr/lib/systemd/system/lucidity-bootc-ecr-auth.service" = ''
+        [Unit]
+        Description=Prepare ephemeral bootc authentication for private ECR
+        Requires=lucidity-nix-profile.service
+        After=lucidity-nix-profile.service
+        Before=bootc-fetch-apply-updates.service
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        Environment=PATH=${systemProfile}/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        ExecStart=/usr/libexec/lucidity/prepare-bootc-ecr-auth
 
         [Install]
         WantedBy=multi-user.target
@@ -819,6 +856,7 @@
       "nix-daemon.socket"
       "determinate-nixd.socket"
       "lucidity-nix-profile.service"
+      "lucidity-bootc-ecr-auth.service"
       "lucidity-admin-authorized-key.service"
       "nebula.service"
       "lucidity-nebula-expiry.timer"

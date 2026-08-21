@@ -356,6 +356,7 @@ validate_role_image() {
         systemctl is-enabled --quiet nix-daemon.socket
         systemctl is-enabled --quiet determinate-nixd.socket
         systemctl is-enabled --quiet lucidity-nix-profile.service
+        systemctl is-enabled --quiet lucidity-bootc-ecr-auth.service
         systemctl is-enabled --quiet lucidity-admin-authorized-key.service
         systemctl is-enabled --quiet docker.service
         systemctl is-enabled --quiet sshd.service
@@ -371,7 +372,10 @@ validate_role_image() {
         test -s /usr/share/selinux/packages/determinate-nix.fc
         test -x /usr/libexec/lucidity/install-determinate-nix-selinux-policy
         test -x /usr/libexec/lucidity/provision-determinate-nix
+        test -x /usr/libexec/lucidity/prepare-bootc-ecr-auth
         test -x /usr/libexec/lucidity/install-admin-authorized-key
+        grep -Fxq "credential-helpers = [\"ecr-login\"]" /etc/containers/registries.conf.d/50-lucidity-ecr.conf
+        grep -Fq "Requires=lucidity-bootc-ecr-auth.service" /etc/systemd/system/bootc-fetch-apply-updates.service.d/10-lucidity-ecr-auth.conf
         systemd-analyze verify \
             /usr/lib/systemd/system/lucidity-nix-selinux.service \
             /usr/lib/systemd/system/lucidity-nix-seed.service \
@@ -380,6 +384,7 @@ validate_role_image() {
             /usr/lib/systemd/system/nix-daemon.socket \
             /usr/lib/systemd/system/determinate-nixd.socket \
             /usr/lib/systemd/system/lucidity-nix-profile.service \
+            /usr/lib/systemd/system/lucidity-bootc-ecr-auth.service \
             /usr/lib/systemd/system/lucidity-admin-authorized-key.service
         ssh-keygen -A
         sshd -t

@@ -3,6 +3,7 @@
     lucidity = {
       packages = with pkgs; [
         age
+        amazon-ecr-credential-helper
         awscli2
         bashInteractive
         btop
