@@ -10,10 +10,14 @@ observable failure rather than automatic failover.
 Version 0.3.0 is the first production-candidate release. Before publishing it:
 
 1. Merge the complete `nix flake check` graph through the merge queue.
-2. Publish the immutable controller and worker images, SBOMs, checksums, and
+2. Manually run **Validate locked flake** with the smallest lifecycle scope
+   covering bootc, persistent-storage, native Nix, SELinux, or recovery changes.
+   Use `both` only when role-specific persistence differs or for an explicit
+   dual-role release qualification.
+3. Publish the immutable controller and worker images, SBOMs, checksums, and
    retained AMIs from the release workflow.
-3. Confirm the GitHub repository deletes merged branches automatically.
-4. Confirm the `production` environment prevents self-review and requires one
+4. Confirm the GitHub repository deletes merged branches automatically.
+5. Confirm the `production` environment prevents self-review and requires one
    independent ITSM reviewer.
 
 ## Infrastructure gate

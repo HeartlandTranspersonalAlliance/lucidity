@@ -12,6 +12,8 @@ worker_guest_address=${WORKER_GUEST_ADDRESS:-10.0.2.2}
 wait_attempts=${INTEGRATION_WAIT_ATTEMPTS:-120}
 wait_seconds=${INTEGRATION_WAIT_SECONDS:-2}
 container_engine=${CONTAINER_ENGINE:-podman}
+controller_expected_image=${CONTROLLER_EXPECTED_IMAGE:-}
+worker_expected_image=${WORKER_EXPECTED_IMAGE:-}
 
 command -v ssh >/dev/null 2>&1 || { echo "ssh is required" >&2; exit 1; }
 command -v "${container_engine}" >/dev/null 2>&1 || { echo "${container_engine} is required" >&2; exit 1; }
@@ -70,7 +72,8 @@ wait_for_cloud_init() {
 
 validate_guest_boot() {
     local role=$1
-    shift
+    local expected_image=$2
+    shift 2
     local -a guest_ssh=("$@")
     local actual_role
     actual_role=$("${guest_ssh[@]}" cat /etc/lucidity/role)
@@ -78,7 +81,12 @@ validate_guest_boot() {
         echo "expected ${role} guest, found ${actual_role}" >&2
         return 1
     }
-    "${guest_ssh[@]}" bootc status >/dev/null
+    if [[ -n ${expected_image} ]]; then
+        "${guest_ssh[@]}" bootc status --booted --format json |
+            grep -Fq "${expected_image}"
+    else
+        "${guest_ssh[@]}" bootc status --booted >/dev/null
+    fi
     "${guest_ssh[@]}" systemctl is-active --quiet \
         sshd.service nix-daemon.service lucidity-nix-profile.service
 }
@@ -87,8 +95,8 @@ wait_for_guest controller "${controller_ssh_port}" "${controller_identity}" cool
 wait_for_guest worker "${worker_ssh_port}" "${worker_identity}" coolify-worker-vm
 wait_for_cloud_init controller "${controller_ssh[@]}"
 wait_for_cloud_init worker "${worker_ssh[@]}"
-validate_guest_boot controller "${controller_ssh[@]}"
-validate_guest_boot worker "${worker_ssh[@]}"
+validate_guest_boot controller "${controller_expected_image}" "${controller_ssh[@]}"
+validate_guest_boot worker "${worker_expected_image}" "${worker_ssh[@]}"
 
 "${controller_ssh[@]}" test -e /etc/lucidity/vm-connectivity-only
 "${controller_ssh[@]}" test ! -e /data/coolify/.controller-bootstrap-complete

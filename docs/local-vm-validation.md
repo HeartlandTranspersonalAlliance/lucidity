@@ -72,11 +72,11 @@ a marker that prevents the full Coolify bootstrap from starting in this routine
 rebuild check.
 
 The harness waits for both guests to complete cloud-init, confirms their role,
-`bootc` state, SSH service, and native Nix daemon, then creates an ephemeral
-controller identity. It enrolls that public key on the disposable worker and
-proves strict host-key-checked SSH from the controller guest to the worker guest.
-No Coolify images are pulled, no API token is created, and no application is
-deployed.
+exact expected bootc image reference in CI, SSH service, and native Nix daemon,
+then creates an ephemeral controller identity. It enrolls that public key on the
+disposable worker and proves strict host-key-checked SSH from the controller
+guest to the worker guest. No Coolify images are pulled, no API token is
+created, and no application is deployed.
 
 Run the same connectivity contract locally with:
 

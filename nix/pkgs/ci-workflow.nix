@@ -15,7 +15,7 @@ in {
   prepare = mkProgram {
     name = "lucidity-ci-workflow-prepare";
     script = ../../scripts/ci-workflow-prepare.sh;
-    runtimeInputs = with pkgs; [coreutils gitMinimal jq];
+    runtimeInputs = with pkgs; [jq];
   };
   gate = mkProgram {
     name = "lucidity-ci-workflow-gate";

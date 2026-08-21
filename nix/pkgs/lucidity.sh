@@ -31,7 +31,7 @@ Usage: lucidity COMMAND [ARGUMENTS]
   ci timing summarize LABEL STARTED_AT [BASELINE_SECONDS]
   ci benchmark resolve|verify-target
   ci workflow audit REPOSITORY [--limit COUNT] [--json PATH] [--markdown PATH]
-  ci workflow classify BASE_SHA HEAD_SHA
+  ci workflow plan EVENT [none|controller|worker|both] [warm|isolated]
   ci audit-ami-resources
   ci validate-deployment
   backup init|run|check
@@ -1128,11 +1128,10 @@ ci_workflow_audit() {
     fi
 }
 
-ci_workflow_classify() {
-    [[ $# -eq 2 ]] || die "ci workflow classify requires BASE_SHA and HEAD_SHA"
-    root=$(repository_root)
-    LUCIDITY_CI_TARGET_GRAPH=${LUCIDITY_CI_TARGET_GRAPH:-$root/ci/lifecycle-targets.json} \
-        lucidity-ci-workflow-prepare merge_group "$1" "$2" warm
+ci_workflow_plan() {
+    [[ $# -ge 1 && $# -le 3 ]] ||
+        die "ci workflow plan requires EVENT and accepts optional SCOPE and CACHE_MODE"
+    lucidity-ci-workflow-prepare "$@"
 }
 
 ci_command() {
@@ -1215,8 +1214,8 @@ ci_command() {
             shift || true
             case "$action" in
                 audit) ci_workflow_audit "$@" ;;
-                classify) ci_workflow_classify "$@" ;;
-                *) die "ci workflow requires audit or classify" ;;
+                plan) ci_workflow_plan "$@" ;;
+                *) die "ci workflow requires audit or plan" ;;
             esac
             ;;
         *) die "ci requires cache, ecr, ami, benchmark, timing, workflow, build-tools-image, audit-ami-resources, or validate-deployment" ;;

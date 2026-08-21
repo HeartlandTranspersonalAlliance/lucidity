@@ -443,8 +443,7 @@
         rg -Fq 'run: nix run .#ci-workflow-prepare' .github/workflows/validate.yml
         rg -Fq 'run: nix run .#ci-hermetic-check' .github/workflows/validate.yml
         rg -Fq 'run: nix run .#ci-workflow-gate' .github/workflows/validate.yml
-        rg -Fq 'ci workflow classify BASE_SHA HEAD_SHA' nix/pkgs/lucidity.sh
-        ! rg -Fq 'ci workflow classify' .github/workflows/validate.yml
+        rg -Fq 'ci workflow plan EVENT [none|controller|worker|both] [warm|isolated]' nix/pkgs/lucidity.sh
         ! rg -q '^        run: \|' .github/workflows/validate.yml
         ! rg -q '^  release:' .github/workflows/validate.yml
         rg -q '^  lifecycle-controller:' .github/workflows/validate.yml
@@ -454,22 +453,21 @@
         test "$(rg -F 'LUCIDITY_VM_CONNECTIVITY_ONLY: "1"' .github/workflows/validate.yml | wc -l)" -eq 2
         test "$(rg -F 'fromJSON(needs.prepare.outputs.plan).cache_mode' .github/workflows/validate.yml | wc -l)" -eq 12
         ! rg -Fq 'needs.prepare.outputs.lifecycle_' .github/workflows/validate.yml
-        rg -Fq 'fetch-depth: ''${{ github.event_name == ' .github/workflows/validate.yml
-        rg -Fq "merge_group' && '0' || '1" .github/workflows/validate.yml
+        ! rg -Fq 'fetch-depth:' .github/workflows/validate.yml
+        rg -Fq 'LIFECYCLE_SCOPE: ''${{ inputs.lifecycle_scope || ' .github/workflows/validate.yml
+        rg -Fq 'default: none' .github/workflows/validate.yml
+        ! rg -Fq 'schedule:' .github/workflows/validate.yml
         rg -Fq 'authToken: ""' .github/workflows/validate.yml
         rg -Fq 'needs: [prepare, lifecycle-controller, lifecycle-worker]' .github/workflows/validate.yml
         rg -Fq 'WORKFLOW_PLAN: ''${{ needs.prepare.outputs.plan }}' .github/workflows/validate.yml
-        rg -Fq 'git merge-base --is-ancestor "''${base_sha}" "''${head_sha}"' scripts/ci-workflow-prepare.sh
-        rg -Fq 'git diff --no-ext-diff --name-status --find-renames -z' scripts/ci-workflow-prepare.sh
-        jq -e '
-          .schema_version == 1 and
-          .match_order == ["controller", "worker", "common"] and
-          .nodes.controller.ancestors == ["common"] and
-          .nodes.worker.ancestors == ["common"] and
-          (.nodes.common.lifecycle | not) and
-          .nodes.controller.lifecycle and
-          .nodes.worker.lifecycle
-        ' ci/lifecycle-targets.json >/dev/null
+        rg -Fq 'schema_version: 3' scripts/ci-workflow-prepare.sh
+        ! rg -Fq 'git diff' scripts/ci-workflow-prepare.sh
+        ! test -e ci/lifecycle-targets.json
+        rg -Fq 'CONTROLLER_EXPECTED_IMAGE: ''${{ env.CONTROLLER_IMAGE }}' .github/workflows/integration.yml
+        rg -Fq 'WORKER_EXPECTED_IMAGE: ''${{ env.IMAGE }}' .github/workflows/integration.yml
+        rg -Fq 'types: [opened, synchronize, reopened, ready_for_review]' .github/workflows/integration.yml
+        rg -Fq "if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false" .github/workflows/integration.yml
+        rg -Fq 'bootc status --booted --format json' scripts/vm-integration.sh
         rg -Fq 'group: lucidity-image-publication-''${{ github.sha }}' .github/workflows/publish.yml
         rg -Fq 'group: lucidity-image-publication-''${{ inputs.source_sha || github.event.pull_request.merge_commit_sha || github.sha }}' .github/workflows/release.yml
         if rg -n '^\s+(aws (ecr|ec2|ssm|secretsmanager)|podman pull)' .github/workflows; then
@@ -1013,10 +1011,8 @@
       script = "tests/ci-workflow.sh";
       files = [
         ../../tests/ci-workflow.sh
-        ../../ci/lifecycle-targets.json
       ];
       nativeBuildInputs = [
-        pkgs.gitMinimal
         pkgs.jq
         lucidity
         ciWorkflow.gate

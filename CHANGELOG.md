@@ -7,6 +7,15 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- Automatic pull-request, merge-queue, and main validation now runs the locked
+  hermetic graph without full bootc switch and rollback guests. Focused
+  controller, worker, or dual-role lifecycle qualification remains available
+  through an explicit manual workflow dispatch.
+- Draft pull requests defer the controller-worker boot smoke until they are
+  marked ready for review.
+
 ## [0.3.0] - 2026-08-20
 
 ### Added

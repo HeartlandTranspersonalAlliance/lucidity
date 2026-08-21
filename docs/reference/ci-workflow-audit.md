@@ -20,10 +20,9 @@ records the failed jobs and steps for failed runs, and emits the same JSON and
 Markdown for the same GitHub response. It reads only Actions metadata and never
 reads repository or runtime secret values.
 
-For a focused classifier diagnostic, run `lucidity ci workflow classify
-BASE_SHA HEAD_SHA`. This convenience interface delegates to the same
-`ci-workflow-prepare` policy engine used by GitHub Actions; it does not maintain
-a second path policy.
+Preview the exact plan used by GitHub Actions with `lucidity ci workflow plan
+EVENT [SCOPE] [CACHE_MODE]`. For example, `lucidity ci workflow plan
+workflow_dispatch worker isolated` selects a cold-cache worker qualification.
 
 The baseline below sampled 100 runs ending at run
 [32216354157](https://github.com/HeartlandTranspersonalAlliance/lucidity/actions/runs/32216354157)
@@ -48,10 +47,9 @@ A representative successful merge group is run
 [32212513671](https://github.com/HeartlandTranspersonalAlliance/lucidity/actions/runs/32212513671).
 Its hermetic job used 95 seconds, the worker lifecycle used 1,435 seconds, and
 the controller lifecycle used 1,720 seconds. The two lifecycle jobs therefore
-consumed about 52.6 runner minutes even though they ran in parallel. The same
-full lifecycle is repeated after the merge on `main`. Removing that duplicate
-main lifecycle and selecting only affected roles in the merge queue are the
-largest safe opportunities.
+consumed about 52.6 runner minutes even though they ran in parallel. This
+baseline motivated removing automatic lifecycle guests from merge groups and
+main pushes while retaining explicit role-scoped qualification.
 
 The v0.3.0 merge path now keeps the controller's bootc switch and rollback,
 native Nix, SELinux, OpenBao fixture, and persistent-storage evidence while
@@ -76,7 +74,7 @@ jobs intentionally build and validate the image and AMI on one runner.
 | `release.yml` | merged PR #70, manual recovery | `prepare`, `roles`, `inventory`, `release` | Exact release identity, verified images, SBOMs, retained AMIs, manifest, tag, and GitHub release | Two parallel full image/SBOM/AMI jobs | Automatically publish v0.3.0 from PR #70's merge commit. Keep exact-version manual dispatch only for release-tool recovery. Do not split same-runner role work. |
 | `update-flake-lock.yml` | weekly schedule, manual | `update` | Dependency updates arrive as reviewable pull requests | Flake update and check | Keep advisory. Its pull request is the audit and rollback boundary. |
 | `validate-deployment.yml` | manual | `validate` | A deployed controller and worker match expected runtime, network, and backup contracts | AWS and HTTPS read-only validation | Keep manual until the production milestone provides stable endpoints and role configuration. |
-| `validate.yml` | pull request, merge group, main push, weekly schedule, manual | `prepare`, `lifecycle-controller`, `lifecycle-worker`, `required` | Versioned Nix-owned CI plan, authoritative flake graph, and applicable controller and worker switch/rollback lifecycle | One full worker lifecycle and one connectivity-only controller lifecycle | `required` remains stable. The prepare plan is the single source for role selection, cache mode, summaries, and final gating. Routine controller validation excludes the full Coolify application pull. |
+| `validate.yml` | pull request, merge group, main push, manual | `prepare`, `lifecycle-controller`, `lifecycle-worker`, `required` | Versioned Nix-owned CI plan, authoritative flake graph, and explicitly selected switch/rollback qualification | No lifecycle guests for automatic events; one or two role guests only when manually selected | `required` remains stable. Manual dispatch owns role selection and cache mode. Routine automation stays hermetic. |
 
 ## Required and advisory gates
 
@@ -90,12 +88,27 @@ branch requirements because path filtering can leave a required workflow in a
 permanently pending state.
 
 Pull requests run the hermetic graph and any separately path-selected advisory
-AMI or integration evidence. Merge groups run the hermetic graph and trusted
-lifecycle evidence. Main pushes publish immutable candidates and run the
-hermetic graph only after path-aware gating is enabled. Scheduled and manual
-validation run both lifecycle roles. Release publication consumes previously
-verified immutable inputs and performs release-specific SBOM, AMI, manifest,
-and boot validation.
+AMI or integration evidence. Merge groups and main pushes run the hermetic
+graph without lifecycle guests. Manual validation selects no lifecycle by
+default and can explicitly select the controller, worker, or both. Release
+publication consumes previously qualified immutable inputs and performs
+release-specific SBOM, AMI, manifest, and boot validation.
+
+## Artifact test tiers
+
+| Change or milestone | Evidence | Execution |
+| --- | --- | --- |
+| Ordinary image or profile change | Build and validate the role QCOW2, boot it directly, verify the expected bootc image reference and critical services, and prove controller-worker SSH for shared connectivity changes | Path-selected pull-request workflow |
+| Bootc, persistent storage, native Nix, SELinux, or recovery change | Switch, update, rollback, and verify persistent role state after each reboot | Explicit manual lifecycle scope for the affected role; select both only when the role-specific state boundaries differ |
+| Release candidate | Build raw disks from verified ECR digests, upload them with EBS Direct, launch disposable AMIs, and bind the resulting retained AMIs to the release inventory | Release workflow and protected AWS validation |
+| Installer ISO change | Boot the ISO and perform an unattended Kickstart install onto a disposable disk | Out of scope until Lucidity publishes an Anaconda or bootc installer ISO |
+
+This follows the upstream Image Builder distinction between artifact build and
+boot tests and installer-specific tests. The OSBuild images suite dynamically
+builds and boots applicable image types and caches them by manifest ID, while
+Kickstart and Anaconda customizations belong to installer image types. See the
+[OSBuild images testing guide](https://osbuild.org/docs/developer-guide/projects/images/test/)
+and [Image Builder blueprint reference](https://osbuild.org/docs/user-guide/blueprint-reference/).
 
 ## GitHub Action dependency policy
 
@@ -128,12 +141,12 @@ Accepted for v0.3.0:
 
 Accepted for the post-release follow-up:
 
-- parse the versioned JSON plan directly in lifecycle and cache conditions,
-  leaving scalar outputs as compatibility projections only
-- use full Git history only for merge-group classification and shallow checkout
-  for hermetic-only events
-- fail safe to both roles when the supplied merge-group base is not an ancestor
-  of the head
+- remove automatic full lifecycle guests from pull requests, merge groups, and
+  main pushes
+- replace the path classifier and full-history checkout with an explicit manual
+  `none`, `controller`, `worker`, or `both` scope that defaults to `none`
+- retain the full switch, update, rollback, persistence, native Nix, and SELinux
+  harness for focused release and recovery qualification
 - serialize normal immutable image publication with release publication and
   avoid unnecessary cache-token and cleanup work
 
@@ -148,42 +161,25 @@ Rejected for this milestone:
 - cross-event raw image artifacts, because same-runner digest-verified builds
   preserve a simpler trust boundary and avoid large transfers
 
-The rollback for gating changes is to select both roles for every merge group.
-The classifier itself also fails safe to both roles for unknown paths, invalid
-or non-ancestral SHAs, rename ambiguity, mixed role changes, or diff errors.
-The pre-enforcement shadow result is preserved in merge-group
-[run 32224918569](https://github.com/HeartlandTranspersonalAlliance/lucidity/actions/runs/32224918569/job/95982575040),
-where the shared workflow and Nix changes correctly selected both roles while
-the legacy lifecycle gate still ran unchanged.
+The rollback for this optimization is an explicit manual dispatch with
+`lifecycle_scope=both`. Automatic events reject lifecycle scope rather than
+silently expanding an uncertain change into two expensive jobs.
 
 ## Authoritative planner contract
 
-`ci/lifecycle-targets.json` is the versioned path-policy graph. Each node owns an
-ordered path delta and declares its immediate ancestors. A direct controller or
-worker delta selects only that lifecycle target. A common-node delta propagates
-through the graph to both lifecycle descendants. Ignored paths are evaluated
-before node deltas, and the explicit match order lets narrow role paths override
-the broader common path rules. The planner validates node names, references,
-uniqueness, and graph acyclicity before classification.
-
 `ci-workflow-prepare` is the sole producer of the workflow plan. Schema version
-2 publishes `schema_version`, the path-graph schema version, `event`,
-`cache_mode`, the exact base/head comparison and relationship, per-target `run`,
-`matched_paths`, and `via` evidence under `targets`, plus `fallback`, `reason`,
-and the sorted unique `changed_paths`. It also emits scalar compatibility
-outputs for external adapters, but the repository workflow parses the JSON plan
-directly for job and cache conditions so those projections cannot become a
-second policy source.
+3 publishes `schema_version`, `event`, `cache_mode`, `lifecycle_scope`, the two
+role `run` decisions, and a human-readable reason. It emits only the JSON plan;
+the workflow parses that plan directly for role and cache conditions.
 
-Pull requests and main pushes are hermetic-only. Merge groups use path
-classification. Scheduled and manual runs select both roles, and unknown events
-fail safe to both roles. Unknown paths, invalid or non-ancestral commit SHAs,
-malformed diffs, and diff errors also set `fallback` and select both roles. The
-manual `lifecycle_cache=isolated` plan bypasses both Cachix and the role-scoped
-OCI caches, including cache cleanup. Lifecycle conditions, cache mode, the
-prepare summary, and `required` all consume the published plan. The gate
-requires prepare to succeed, each planned lifecycle to succeed, and each
-unplanned lifecycle to be skipped. Publish and release workflows use the same
+Pull requests, merge groups, and main pushes accept only `lifecycle_scope=none`
+and are hermetic-only. A manual dispatch can select `none`, `controller`,
+`worker`, or `both`. Unsupported events, automatic lifecycle requests, invalid
+scopes, and invalid cache modes fail preparation instead of launching expensive
+fallback jobs. The manual `lifecycle_cache=isolated` plan bypasses Cachix and
+the selected role-scoped OCI caches, including cache cleanup. The gate requires
+prepare to succeed, each planned lifecycle to succeed, and each unplanned
+lifecycle to be skipped. Publish and release workflows use the same
 source-revision-scoped, non-cancelling concurrency group so immutable-image
 critical sections for the same source do not overlap while unrelated revisions
 remain independent.
@@ -204,10 +200,8 @@ outputs or invokes test fixtures explicitly with Bash.
 ## Enforced runner-minute model
 
 The representative baseline consumed 52.6 lifecycle runner minutes per merge
-group: 28.7 controller minutes plus 23.9 worker minutes. With enforcement, a
-controller-only change consumes 28.7 minutes, a 45.4% reduction; a worker-only
-change consumes 23.9 minutes, a 54.6% reduction; and a documentation or
-infrastructure-only change consumes no lifecycle runner minutes. Shared,
-unknown, mixed-target, and failed classifications intentionally retain the full
-52.6-minute fail-safe path. The duplicate 52.6-minute lifecycle run after every
-main merge is eliminated independently of path classification.
+group: 28.7 controller minutes plus 23.9 worker minutes. Automatic validation
+now consumes zero lifecycle runner minutes. An explicit controller
+qualification consumes the observed 28.7-minute baseline, a worker
+qualification consumes 23.9 minutes, and a deliberate dual-role qualification
+consumes 52.6 minutes. The jobs still run in parallel when both are selected.
