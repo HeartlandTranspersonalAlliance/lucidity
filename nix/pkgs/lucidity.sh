@@ -1548,7 +1548,7 @@ release_prepare() {
         mapfile -t resume_changes < <(git -C "$root" diff --name-only "$source_sha..$tooling_sha")
         for changed_path in "${resume_changes[@]}"; do
             case "$changed_path" in
-                .github/workflows/release.yml | CHANGELOG.md | docs/reference/ci-and-caching.md | docs/reference/releases.md | nix/flake/checks.nix | nix/pkgs/lucidity.sh | scripts/build-disk.sh) ;;
+                .github/workflows/release.yml | CHANGELOG.md | docs/reference/ci-and-caching.md | docs/reference/releases.md | nix/flake/checks.nix | nix/pkgs/lucidity.sh | scripts/build-disk.sh | scripts/validate-ami-import.sh | tests/test-ami-import.sh) ;;
                 *) die "release resume includes non-tooling path: $changed_path" ;;
             esac
         done

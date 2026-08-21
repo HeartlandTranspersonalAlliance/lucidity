@@ -12,10 +12,10 @@ Git tags and image release identifiers use `vMAJOR.MINOR.PATCH`.
 4. Start the release workflow from `main` with the exact unprefixed target
    version.
 
-For v0.3.0, PR #70 is the one-time release gate. A successful merge of that PR
-into `main` starts the release workflow automatically with exact target
-`0.3.0` and the merge commit as the immutable source. The manual dispatch
-interface remains available only for an intentional release-tool recovery.
+Releases are dispatched from `main` with the exact target version. GitHub OIDC
+therefore presents the repository's trusted `main`-branch subject to AWS. Pass
+the validated merge commit as `source_sha` when resuming after a release-tool
+hotfix so artifacts remain bound to the original source.
 
 The `.#release` app requires an exact canonical `X.Y.Z` target. It must match
 `VERSION` and the dated changelog section at the selected source commit, be
@@ -37,7 +37,10 @@ For each role, one ephemeral runner builds the candidate, verifies its immutable
 ECR digest, generates the compressed SPDX SBOM and checksum, and constructs the
 raw disk from that same digest-pinned local image. The runner then assumes the
 narrow AMI-validation role to create and boot-test the encrypted retained AMI.
-Raw multi-gigabyte disks never cross runner boundaries.
+Raw multi-gigabyte disks never cross runner boundaries. The installed bootc
+origin and the AMI launch gate use the same digest-pinned ECR reference recorded
+as `SourceImageDigest`; the version tag is promoted separately and resolves to
+that digest.
 
 An existing immutable candidate is never overwritten. The local rebuild still
 occurs so BuildKit can reuse cached layers for disk construction; the workflow

@@ -48,8 +48,12 @@ if [[ ${ami_lifecycle} == retained ]]; then
     [[ ${launch_validation} == true ]] || { echo "retained AMIs require the EC2 launch gate" >&2; exit 2; }
     [[ ${source_revision} =~ ^[0-9a-f]{40}$ ]] || { echo "AMI_SOURCE_REVISION must be a full lowercase Git commit SHA for retained AMIs" >&2; exit 2; }
     if [[ ${release_metadata} == true ]]; then
-        [[ ${expected_bootc_image_ref} =~ ^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[a-z0-9]+([._/-][a-z0-9]+)*:${release_version}$ ]] || {
-            echo "AMI_EXPECTED_BOOTC_IMAGE_REF must use the retained release's immutable ECR version tag" >&2
+        [[ ${expected_bootc_image_ref} =~ ^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[a-z0-9]+([._/-][a-z0-9]+)*@sha256:[0-9a-f]{64}$ ]] || {
+            echo "AMI_EXPECTED_BOOTC_IMAGE_REF must use the retained release's immutable ECR digest" >&2
+            exit 2
+        }
+        [[ ${expected_bootc_image_ref##*@} == "${source_image_digest}" ]] || {
+            echo "AMI_EXPECTED_BOOTC_IMAGE_REF must match AMI_SOURCE_IMAGE_DIGEST" >&2
             exit 2
         }
     else

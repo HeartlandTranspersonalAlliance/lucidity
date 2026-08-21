@@ -403,15 +403,13 @@
           }
         done
         rg -Fq 'run: nix run .#release -- prepare' .github/workflows/release.yml
-        rg -Fq 'pull_request:' .github/workflows/release.yml
-        rg -Fq 'types:' .github/workflows/release.yml
-        rg -Fq -- '- closed' .github/workflows/release.yml
-        rg -Fq "github.event.pull_request.merged == true && github.event.pull_request.number == 70" .github/workflows/release.yml
+        ! rg -Fq 'pull_request:' .github/workflows/release.yml
+        rg -Fq 'workflow_dispatch:' .github/workflows/release.yml
         rg -Fq 'target_version:' .github/workflows/release.yml
-        rg -Fq "inputs.target_version || '0.3.0'" .github/workflows/release.yml
+        rg -Fq 'RELEASE_TARGET_VERSION: ''${{ inputs.target_version }}' .github/workflows/release.yml
         ! rg -q 'inputs\.bump|REQUESTED_BUMP' .github/workflows/release.yml
         rg -Fq 'source_sha:' .github/workflows/release.yml
-        rg -Fq 'inputs.source_sha || github.event.pull_request.merge_commit_sha' .github/workflows/release.yml
+        rg -Fq 'RELEASE_SOURCE_SHA: ''${{ inputs.source_sha }}' .github/workflows/release.yml
         rg -Fq 'tooling_sha: ''${{ steps.version.outputs.tooling_sha }}' .github/workflows/release.yml
         test "$(rg -F 'ref: ''${{ needs.prepare.outputs.tooling_sha }}' .github/workflows/release.yml | wc -l)" -eq 3
         ! rg -Fq 'ref: ''${{ needs.prepare.outputs.source_sha }}' .github/workflows/release.yml
@@ -425,7 +423,9 @@
         rg -Fq '[[ -n ''${REGISTRY_AUTH_FILE:-} && ''${SOURCE_IMAGE} == *@sha256:* ]]' scripts/build-disk.sh
         rg -Fq 'podman pull --authfile "''${REGISTRY_AUTH_FILE}" "''${SOURCE_IMAGE}"' scripts/build-disk.sh
         ! rg -q 'cat .*docker_config|cp .*docker_config' scripts/build-disk.sh
-        rg -Fq 'nix/pkgs/lucidity.sh | scripts/build-disk.sh)' nix/pkgs/lucidity.sh
+        rg -Fq 'scripts/validate-ami-import.sh | tests/test-ami-import.sh)' nix/pkgs/lucidity.sh
+        rg -Fq 'expected_bootc_image_ref##*@' scripts/validate-ami-import.sh
+        rg -Fq 'AMI_EXPECTED_BOOTC_IMAGE_REF must match AMI_SOURCE_IMAGE_DIGEST' scripts/validate-ami-import.sh
         rg -Fq 'IMAGE_SIZE_GIB=16' image/image-builder.env
         rg -Fq 'run: nix run .#ci -- timing summarize' .github/workflows/release.yml
         ! rg -Fq 'uses: ./.github/workflows/ami.yml' .github/workflows/release.yml
@@ -469,7 +469,7 @@
         rg -Fq "if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false" .github/workflows/integration.yml
         rg -Fq 'bootc status --booted --format json' scripts/vm-integration.sh
         rg -Fq 'group: lucidity-image-publication-''${{ github.sha }}' .github/workflows/publish.yml
-        rg -Fq 'group: lucidity-image-publication-''${{ inputs.source_sha || github.event.pull_request.merge_commit_sha || github.sha }}' .github/workflows/release.yml
+        rg -Fq 'group: lucidity-image-publication-''${{ inputs.source_sha || github.sha }}' .github/workflows/release.yml
         if rg -n '^\s+(aws (ecr|ec2|ssm|secretsmanager)|podman pull)' .github/workflows; then
           echo "AWS and image policy must live behind flake-owned CI commands" >&2
           exit 1
