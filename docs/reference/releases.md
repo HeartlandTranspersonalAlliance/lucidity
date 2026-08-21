@@ -58,6 +58,14 @@ occurs so BuildKit can reuse cached layers for disk construction; the workflow
 pulls and pins the verified remote digest before producing the AMI. The final
 manifest ties both role images, SBOMs, AMIs, and the source commit together.
 
+SPDX documents use a stable namespace and normalized creation timestamp, and
+their gzip assets omit the original filename and timestamp. Retrying a release
+therefore reproduces the same SBOM bytes for the same immutable image. For AMIs
+created before that normalization, a resume may refresh the `SbomSha256` tag on
+the already validated AMI and snapshot only after the release version, source
+revision, and source-image digest match. Those identity fields remain immutable
+and any conflict stops the release.
+
 GitHub publication occurs only after the two-role inventory and asset set match.
 Release automation uses short-lived GitHub OIDC credentials for AWS operations.
 

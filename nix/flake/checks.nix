@@ -434,6 +434,12 @@
         ! rg -Fq 'wait instance-status-ok' scripts/validate-ami-import.sh
         rg -Fq 'report_instance_readiness' scripts/validate-ami-import.sh
         rg -Fq 'AMI_SSM_READY_ATTEMPTS' scripts/validate-ami-import.sh
+        rg -Fq 'Refreshing retained AMI ''${image_id} SBOM metadata for unchanged source image' scripts/validate-ami-import.sh
+        rg -Fq '"SourceImageDigest=''${source_image_digest}"; do' scripts/validate-ami-import.sh
+        ! rg -Fq '"SbomSha256=''${sbom_sha256}"; do' scripts/validate-ami-import.sh
+        rg -Fq '.documentNamespace = $namespace' nix/pkgs/lucidity.sh
+        rg -Fq '.creationInfo.created = "1970-01-01T00:00:00Z"' nix/pkgs/lucidity.sh
+        rg -Fq 'gzip -9nc "$sbom_path"' nix/pkgs/lucidity.sh
         rg -Fq 'AMI_ROLE: ''${{ matrix.role }}' .github/workflows/release.yml
         rg -Fq 'amazon-ecr-credential-helper' nix/den/aspects/common/default.nix
         rg -Fq 'credential-helpers = ["ecr-login"]' nix/den/classes/bootc/image.nix

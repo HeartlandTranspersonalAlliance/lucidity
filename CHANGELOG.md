@@ -7,6 +7,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- Resumable releases now normalize volatile SPDX and gzip metadata so repeated
+  scans of one immutable image produce stable SBOM bytes. A validated retained
+  AMI may refresh only its SBOM tag for that unchanged image; conflicting
+  release or source-image metadata remains fatal.
+
 ## [0.3.0] - 2026-08-20
 
 ### Added

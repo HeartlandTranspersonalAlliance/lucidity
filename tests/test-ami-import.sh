@@ -11,9 +11,36 @@ release_log="${mock_dir}/release.log"
 release_output="${mock_dir}/release.output"
 rerun_log="${mock_dir}/rerun.log"
 rerun_output="${mock_dir}/rerun.output"
+sbom_refresh_log="${mock_dir}/sbom-refresh.log"
+sbom_refresh_output="${mock_dir}/sbom-refresh.output"
+sbom_refresh_stdout="${mock_dir}/sbom-refresh.stdout"
+source_conflict_log="${mock_dir}/source-conflict.log"
 switch_log="${mock_dir}/switch.log"
 kms_key_arn=arn:aws:kms:us-east-2:123456789012:key/11111111-2222-3333-4444-555555555555
-touch "${artifact}" "${direct_log}" "${release_log}" "${release_output}" "${rerun_log}" "${rerun_output}" "${switch_log}"
+touch "${artifact}" "${direct_log}" "${release_log}" "${release_output}" "${rerun_log}" "${rerun_output}" \
+    "${sbom_refresh_log}" "${sbom_refresh_output}" "${sbom_refresh_stdout}" "${source_conflict_log}" "${switch_log}"
+
+tagged_mock_dir="${mock_dir}/tagged-mock"
+mkdir -p "${tagged_mock_dir}"
+cat >"${tagged_mock_dir}/aws" <<'EOF'
+set -Eeuo pipefail
+
+if [[ ${1:-} == ec2 && ${2:-} == describe-images && " $* " == *" --owners self "* ]]; then
+    printf '%s\n' "$*" >>"${AWS_MOCK_LOG}"
+    jq -cn \
+        --arg image_id ami-abc123 \
+        --arg snapshot_id "${AWS_MOCK_SNAPSHOT_ID}" \
+        --arg release_version "${AWS_MOCK_EXISTING_RELEASE_VERSION}" \
+        --arg source_digest "${AWS_MOCK_EXISTING_SOURCE_DIGEST}" \
+        --arg sbom_sha256 "${AWS_MOCK_EXISTING_SBOM_SHA256}" \
+        '{Images:[{ImageId:$image_id,State:"available",Architecture:"x86_64",RootDeviceType:"ebs",BootMode:"uefi",EnaSupport:true,ImdsSupport:"v2.0",BlockDeviceMappings:[{DeviceName:"/dev/xvda",Ebs:{SnapshotId:$snapshot_id,DeleteOnTermination:true,VolumeType:"gp3"}}],Tags:[{Key:"ReleaseVersion",Value:$release_version},{Key:"SourceImageDigest",Value:$source_digest},{Key:"SbomSha256",Value:$sbom_sha256}]}]}'
+    exit 0
+fi
+
+exec "${AWS_MOCK_BASE_COMMAND}" "$@"
+EOF
+sed -i "1i#!$(command -v bash)" "${tagged_mock_dir}/aws"
+chmod 0755 "${tagged_mock_dir}/aws"
 
 AWS_MOCK_LOG="${direct_log}" \
 AWS_MOCK_SNAPSHOT_ID=snap-123abc \
@@ -167,6 +194,68 @@ grep -Fq 'ec2 create-tags' "${rerun_log}"
 grep -Fq 'ami_id=ami-abc123' "${rerun_output}"
 if grep -Eq '(^| )(coldsnap|ec2 register-image|ec2 run-instances|ec2 deregister-image|ec2 delete-snapshot)( |$)' "${rerun_log}"; then
     echo "an idempotent retained AMI rerun recreated or removed AWS resources" >&2
+    exit 1
+fi
+
+AWS_MOCK_BASE_COMMAND="${repo_root}/tests/fixtures/aws" \
+AWS_MOCK_EXISTING_RELEASE_VERSION=v0.1.0 \
+AWS_MOCK_EXISTING_SBOM_SHA256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc \
+AWS_MOCK_EXISTING_SOURCE_DIGEST=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+AWS_MOCK_LOG="${sbom_refresh_log}" \
+AWS_MOCK_SNAPSHOT_ID=snap-789abc \
+AWS_REGION=us-east-2 \
+AMI_LAUNCH_VALIDATION=true \
+AMI_EXPECTED_BOOTC_IMAGE_REF=123456789012.dkr.ecr.us-east-2.amazonaws.com/lucidity/bootc/worker@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+AMI_LIFECYCLE=retained \
+AMI_RELEASE_VERSION=v0.1.0 \
+AMI_ROLE=worker \
+AMI_SBOM_SHA256=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd \
+AMI_SNAPSHOT_KMS_KEY_ARN="${kms_key_arn}" \
+AMI_SOURCE_IMAGE_DIGEST=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+AMI_SOURCE_REVISION=0123456789abcdef0123456789abcdef01234567 \
+AMI_TEST_INSTANCE_PROFILE_NAME=mock-worker-profile \
+AMI_TEST_INSTANCE_TYPE=t3a.small \
+AMI_TEST_SECURITY_GROUP_ID=sg-test \
+AMI_TEST_SUBNET_ID=subnet-test \
+COLDSNAP_COMMAND="${repo_root}/tests/fixtures/coldsnap" \
+GITHUB_OUTPUT="${sbom_refresh_output}" \
+GITHUB_RUN_ID=mock-sbom-refresh \
+PATH="${tagged_mock_dir}:${repo_root}/tests/fixtures:${PATH}" \
+    "${repo_root}/scripts/validate-ami-import.sh" "${artifact}" >"${sbom_refresh_stdout}"
+
+grep -Fq 'Refreshing retained AMI ami-abc123 SBOM metadata for unchanged source image' "${sbom_refresh_stdout}"
+grep -Fq 'Key=SbomSha256,Value=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd' "${sbom_refresh_log}"
+grep -Fq 'ami_id=ami-abc123' "${sbom_refresh_output}"
+if grep -Eq '(^| )(coldsnap|ec2 register-image|ec2 run-instances|ec2 deregister-image|ec2 delete-snapshot)( |$)' "${sbom_refresh_log}"; then
+    echo "an SBOM metadata refresh recreated or removed AWS resources" >&2
+    exit 1
+fi
+
+if AWS_MOCK_BASE_COMMAND="${repo_root}/tests/fixtures/aws" \
+    AWS_MOCK_EXISTING_RELEASE_VERSION=v0.1.0 \
+    AWS_MOCK_EXISTING_SBOM_SHA256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc \
+    AWS_MOCK_EXISTING_SOURCE_DIGEST=sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee \
+    AWS_MOCK_LOG="${source_conflict_log}" \
+    AWS_MOCK_SNAPSHOT_ID=snap-789abc \
+    AWS_REGION=us-east-2 \
+    AMI_LAUNCH_VALIDATION=true \
+    AMI_EXPECTED_BOOTC_IMAGE_REF=123456789012.dkr.ecr.us-east-2.amazonaws.com/lucidity/bootc/worker@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+    AMI_LIFECYCLE=retained \
+    AMI_RELEASE_VERSION=v0.1.0 \
+    AMI_ROLE=worker \
+    AMI_SBOM_SHA256=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd \
+    AMI_SNAPSHOT_KMS_KEY_ARN="${kms_key_arn}" \
+    AMI_SOURCE_IMAGE_DIGEST=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+    AMI_SOURCE_REVISION=0123456789abcdef0123456789abcdef01234567 \
+    AMI_TEST_INSTANCE_PROFILE_NAME=mock-worker-profile \
+    AMI_TEST_INSTANCE_TYPE=t3a.small \
+    AMI_TEST_SECURITY_GROUP_ID=sg-test \
+    AMI_TEST_SUBNET_ID=subnet-test \
+    COLDSNAP_COMMAND="${repo_root}/tests/fixtures/coldsnap" \
+    GITHUB_RUN_ID=mock-source-conflict \
+    PATH="${tagged_mock_dir}:${repo_root}/tests/fixtures:${PATH}" \
+        "${repo_root}/scripts/validate-ami-import.sh" "${artifact}" 2>/dev/null; then
+    echo "a retained AMI rerun accepted conflicting immutable source metadata" >&2
     exit 1
 fi
 
