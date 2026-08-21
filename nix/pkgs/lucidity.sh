@@ -1645,9 +1645,12 @@ release_image() {
     release_dir=${LUCIDITY_RELEASE_DIR:-release}
     install -d -m 0755 "$release_dir"
     sbom_path=$release_dir/$role.sbom.spdx.json
+    sbom_namespace="https://github.com/${GITHUB_REPOSITORY:-HeartlandTranspersonalAlliance/lucidity}/releases/${release_tag}/${role}/${source_digest#sha256:}"
     syft scan "$immutable_image" --config "$LUCIDITY_SYFT_CONFIG" \
         --exclude './nix/store/**' --source-name "$repository_url" --source-version "$source_digest" \
-        --output spdx-json | jq -c '
+        --output spdx-json | jq -c --arg namespace "$sbom_namespace" '
+          .documentNamespace = $namespace |
+          .creationInfo.created = "1970-01-01T00:00:00Z" |
           .packages |= map(
             if has("externalRefs") then
               .externalRefs |= map(select(.referenceType != "cpe23Type")) |
@@ -1658,7 +1661,7 @@ release_image() {
     jq -e 'type == "object" and (.spdxVersion | startswith("SPDX-")) and (.packages | type == "array")' "$sbom_path" >/dev/null
     sbom_sha256=$(sha256sum "$sbom_path" | cut -d' ' -f1)
     asset=lucidity-$role-$release_tag.spdx.json.gz
-    gzip -9c "$sbom_path" >"$release_dir/$asset"
+    gzip -9nc "$sbom_path" >"$release_dir/$asset"
     (cd "$release_dir" && sha256sum "$asset" >"$asset.sha256")
     asset_sha256=$(sha256sum "$release_dir/$asset" | cut -d' ' -f1)
     jq -n --arg role "$role" --arg repository "$repository_url" --arg source_tag "$source_tag" \

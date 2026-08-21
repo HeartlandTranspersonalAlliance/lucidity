@@ -249,8 +249,7 @@ if [[ ${ami_lifecycle} == retained ]]; then
         if [[ ${release_metadata} == true ]]; then
             for tag_entry in \
                 "ReleaseVersion=${release_version}" \
-                "SourceImageDigest=${source_image_digest}" \
-                "SbomSha256=${sbom_sha256}"; do
+                "SourceImageDigest=${source_image_digest}"; do
                 tag_key=${tag_entry%%=*}
                 expected_value=${tag_entry#*=}
                 existing_value=$(jq -r --arg key "${tag_key}" '.Images[0].Tags[]? | select(.Key == $key) | .Value' <<< "${existing_image}")
@@ -259,6 +258,10 @@ if [[ ${ami_lifecycle} == retained ]]; then
                     exit 1
                 }
             done
+            existing_sbom_sha256=$(jq -r '.Images[0].Tags[]? | select(.Key == "SbomSha256") | .Value' <<< "${existing_image}")
+            if [[ -n ${existing_sbom_sha256} && ${existing_sbom_sha256} != "${sbom_sha256}" ]]; then
+                echo "Refreshing retained AMI ${image_id} SBOM metadata for unchanged source image ${source_image_digest}"
+            fi
             aws ec2 create-tags \
                 --region "${region}" \
                 --resources "${image_id}" "${snapshot_ids[0]}" \
