@@ -527,7 +527,7 @@ if [[ ${launch_validation} == true ]]; then
             .commands += [
                 ("test \"$(bootc status --format=json --format-version=1 --booted | jq -r .status.booted.image.image.image)\" = \"" + $switch_target_ref + "\""),
                 "echo LUCIDITY_SWITCH_TARGET_BOOTED",
-                "systemctl is-active --quiet coolify-bootc-ecr-auth.service",
+                "systemctl is-active --quiet lucidity-bootc-ecr-auth.service",
                 "test \"$(jq -r '.credHelpers[]' /run/ostree/auth.json)\" = ecr-login",
                 "test -s /var/lib/lucidity-update-rollback/source-image-ref",
                 "volume_path=$(docker volume inspect lucidity-update-rollback | jq -r \u0027.[0].Mountpoint\u0027); test \"$(cat \"${volume_path}/marker\")\" = lucidity-update-rollback-marker",
@@ -536,8 +536,10 @@ if [[ ${launch_validation} == true ]]; then
         elif $lifecycle == "retained" then
             .commands += [
                 ("test \"$(bootc status --format=json --format-version=1 --booted | jq -r .status.booted.image.image.image)\" = \"" + $expected_bootc_image_ref + "\""),
-                "systemctl is-active --quiet coolify-bootc-ecr-auth.service",
-                "test \"$(jq -r '.credHelpers[]' /run/ostree/auth.json)\" = ecr-login",
+                "systemctl is-active --quiet lucidity-bootc-ecr-auth.service",
+                "jq -e \u0027type == \u0022object\u0022 and length == 0\u0027 /run/ostree/auth.json >/dev/null",
+                "grep -Fxq \u0027credential-helpers = [\u0022ecr-login\u0022]\u0027 /etc/containers/registries.conf.d/50-lucidity-ecr.conf",
+                "command -v docker-credential-ecr-login >/dev/null",
                 "bootc upgrade --check"
             ]
         else . end |

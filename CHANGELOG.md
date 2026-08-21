@@ -7,21 +7,6 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-### Fixed
-
-- Retained AMI validation now compares the installed bootc origin with the
-  promoted image's exact ECR digest, and release dispatch runs from the
-  main-branch OIDC subject trusted by AWS.
-
-### Changed
-
-- Automatic pull-request, merge-queue, and main validation now runs the locked
-  hermetic graph without full bootc switch and rollback guests. Focused
-  controller, worker, or dual-role lifecycle qualification remains available
-  through an explicit manual workflow dispatch.
-- Draft pull requests defer the controller-worker boot smoke until they are
-  marked ready for review.
-
 ## [0.3.0] - 2026-08-20
 
 ### Added
@@ -70,6 +55,12 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Merge-group lifecycle selection now uses a validated per-target path graph.
   The versioned JSON plan records exact commit ancestry, matched paths, and
   ancestor propagation evidence for each lifecycle target.
+- Automatic pull-request, merge-queue, and main validation now runs the locked
+  hermetic graph without full bootc switch and rollback guests. Focused
+  controller, worker, or dual-role lifecycle qualification remains available
+  through an explicit manual workflow dispatch.
+- Draft pull requests defer the controller-worker boot smoke until they are
+  marked ready for review.
 - Sparse bootc artifacts use a 16 GiB virtual filesystem so native Nix and both
   retained bootc deployments fit during release update and rollback validation.
 
@@ -90,6 +81,12 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Retained AMI validation compares the installed bootc origin with the promoted
+  image's exact ECR digest, and release dispatch runs from the main-branch OIDC
+  subject trusted by AWS.
+- Private ECR bootc updates resolve short-lived credentials from the EC2
+  instance profile through the Nix-pinned ECR credential helper, and AMI
+  release validation preserves the selected controller or worker role.
 - Connectivity-only controller lifecycle assertions no longer require the
   full-bootstrap environment, key, and service hash arguments.
 - Interrupted releases can resume from an exact ancestor after a release-tool-only
