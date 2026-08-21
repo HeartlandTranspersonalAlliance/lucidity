@@ -1,7 +1,7 @@
 {
   description = "Lucidity guest Nix lifecycle smoke build";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs.nixpkgs.url = "https://flakehub.com/f/DeterminateSystems/nixpkgs-weekly/0";
 
   outputs = {nixpkgs, ...}: let
     systems = [

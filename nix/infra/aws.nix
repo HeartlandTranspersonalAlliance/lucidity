@@ -47,7 +47,7 @@ in {
       };
       cloudflare = {
         source = "cloudflare/cloudflare";
-        version = "~> 5.23";
+        version = "~> 5.22";
       };
     };
   };

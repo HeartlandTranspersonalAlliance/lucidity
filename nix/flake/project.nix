@@ -15,7 +15,10 @@ in {
       inputs.home-manager.lib.homeManagerConfiguration {
         pkgs = inputs.nixpkgs.legacyPackages.x86_64-linux;
         extraSpecialArgs = {inherit role;};
-        modules = [../home/admin.nix];
+        modules = [
+          inputs.determinate.homeManagerModules.default
+          ../home/admin.nix
+        ];
       }
   );
 
@@ -26,7 +29,12 @@ in {
     ...
   }: let
     ciWorkflow = import ../pkgs/ci-workflow.nix {inherit pkgs;};
-    lucidity = import ../pkgs/lucidity.nix {inherit pkgs ciWorkflow;};
+    nixpkgsProvenance = {
+      url = "https://flakehub.com/f/DeterminateSystems/nixpkgs-weekly/0";
+      rev = inputs.nixpkgs.sourceInfo.rev or null;
+      narHash = inputs.nixpkgs.sourceInfo.narHash;
+    };
+    lucidity = import ../pkgs/lucidity.nix {inherit pkgs ciWorkflow nixpkgsProvenance;};
     lucidityRelease = pkgs.symlinkJoin {
       name = "lucidity-release-tools";
       paths = [lucidity];
@@ -119,6 +127,7 @@ in {
             passwordLocked = true;
             passwordlessSudo = true;
           };
+          nixpkgs = nixpkgsProvenance;
         }
       );
     in {

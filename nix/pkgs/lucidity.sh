@@ -49,7 +49,7 @@ Usage: lucidity COMMAND [ARGUMENTS]
   secrets initialize-controller-runtime [SECRET_ID]
   secrets check PROFILE [PROVIDER]
   secrets set PROFILE KEY [PROVIDER]
-  secrets run PROFILE [PROVIDER] -- COMMAND [ARGUMENTS]
+  secrets run PROFILE [PROVIDER] [--scope SCOPE] -- COMMAND [ARGUMENTS]
   mesh init
   mesh request NAME DIRECTORY
   mesh sign PUBLIC_KEY CERTIFICATE NAME IP GROUPS
@@ -89,7 +89,11 @@ build_path() {
 }
 
 operator_provider() {
-    printf '%s\n' "${LUCIDITY_OPERATOR_PROVIDER:-keyring://lucidity}"
+    printf '%s\n' "${LUCIDITY_OPERATOR_PROVIDER:-}"
+}
+
+bootstrap_provider() {
+    printf '%s\n' "${LUCIDITY_BOOTSTRAP_PROVIDER:-local-keyring}"
 }
 
 secrets_set_admin_key() {
@@ -102,9 +106,10 @@ secrets_set_admin_key() {
     [[ $actual_fingerprint == "$expected_fingerprint" ]] ||
         die "public key fingerprint $actual_fingerprint does not match Den registry fingerprint $expected_fingerprint"
     public_key=$(<"$public_key_file")
+    provider=$(bootstrap_provider)
     secretspec set --reason "register lucidity administrator public key" \
-        --provider "$(operator_provider)" --profile ssh ADMIN_SSH_PUBLIC_KEY "$public_key"
-    echo "Stored ADMIN_SSH_PUBLIC_KEY in $(operator_provider); no key material was written to the repository"
+        --provider "$provider" --profile ssh ADMIN_SSH_PUBLIC_KEY "$public_key"
+    echo "Stored ADMIN_SSH_PUBLIC_KEY in $provider; no key material was written to the repository"
 }
 
 secrets_initialize_controller_runtime() {
@@ -147,6 +152,12 @@ secrets_initialize_controller_runtime() {
         "$secret_file" >/dev/null
     aws secretsmanager put-secret-value --region "$region" --secret-id "$secret_id" \
         --secret-string "file://$secret_file" --query VersionId --output text >/dev/null
+    if [[ $secret_id == lucidity/production/controller-runtime ]]; then
+        secretspec check --reason "verify initialized controller runtime contract" \
+            --file "$(repository_root)/secretspec.toml" --profile controller-runtime \
+            --scope controller-runtime --provider aws-controller-runtime \
+            --no-prompt --json >/dev/null
+    fi
     echo "Initialized $secret_id with a complete runtime bundle; no secret values were printed or persisted outside tmpfs"
 }
 
@@ -154,8 +165,10 @@ secrets_check() {
     profile=${1:-}
     provider=${2:-$(operator_provider)}
     [[ -n $profile && $# -le 2 ]] || die "secrets check requires PROFILE and optional PROVIDER"
-    exec secretspec check --reason "validate lucidity secret contract" \
-        --provider "$provider" --profile "$profile"
+    secretspec_command=(secretspec check --reason "validate lucidity secret contract" \
+        --profile "$profile")
+    [[ -z $provider ]] || secretspec_command+=(--provider "$provider")
+    exec "${secretspec_command[@]}"
 }
 
 secrets_set() {
@@ -164,8 +177,10 @@ secrets_set() {
     provider=${3:-$(operator_provider)}
     [[ -n $profile && -n $key && $# -le 3 ]] ||
         die "secrets set requires PROFILE KEY and optional PROVIDER"
-    exec secretspec set --reason "update lucidity secret" \
-        --provider "$provider" --profile "$profile" "$key"
+    secretspec_command=(secretspec set --reason "update lucidity secret" \
+        --profile "$profile")
+    [[ -z $provider ]] || secretspec_command+=(--provider "$provider")
+    exec "${secretspec_command[@]}" "$key"
 }
 
 secrets_run() {
@@ -173,15 +188,24 @@ secrets_run() {
     shift || true
     [[ -n $profile ]] || die "secrets run requires PROFILE"
     provider=$(operator_provider)
-    if [[ ${1:-} != -- ]]; then
+    if [[ ${1:-} != -- && ${1:-} != --scope ]]; then
         provider=${1:-}
         shift || true
+    fi
+    scope=
+    if [[ ${1:-} == --scope ]]; then
+        scope=${2:-}
+        [[ -n $scope ]] || die "secrets run --scope requires SCOPE"
+        shift 2
     fi
     [[ ${1:-} == -- ]] || die "secrets run requires -- before the command"
     shift
     [[ $# -gt 0 ]] || die "secrets run requires a command"
-    exec secretspec run --reason "run lucidity command with scoped secrets" \
-        --provider "$provider" --profile "$profile" -- "$@"
+    secretspec_command=(secretspec run --reason "run lucidity command with scoped secrets" \
+        --profile "$profile")
+    [[ -z $provider ]] || secretspec_command+=(--provider "$provider")
+    [[ -z $scope ]] || secretspec_command+=(--scope "$scope")
+    exec "${secretspec_command[@]}" -- "$@"
 }
 
 secrets_command() {
@@ -1682,11 +1706,13 @@ release_manifest() {
             '{ami_id:$ami_id,name:$name,created_at:$created_at,snapshot_id:$snapshot_id,snapshot_kms_key_arn:$snapshot_kms_key_arn,snapshot_volume_size_gib:$snapshot_volume_size_gib,source_image_digest:$source_image_digest,sbom_sha256:$sbom_sha256,validation_run:$validation_run}')
         amis=$(jq -cn --argjson current "$amis" --arg role "$role" --argjson record "$ami_record" '$current + {($role):$record}')
     done
-    jq -n --argjson schema_version 2 --arg version "$version" --arg tag "$release_tag" --arg source_commit "$source_sha" \
+    jq -n --argjson schema_version 3 --arg version "$version" --arg tag "$release_tag" --arg source_commit "$source_sha" \
         --arg created_at "$(date --utc +%Y-%m-%dT%H:%M:%SZ)" --arg region "$region" \
         --arg repository "$GITHUB_REPOSITORY" --arg release_run "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+        --arg nixpkgs_url "@lucidityNixpkgsUrl@" --arg nixpkgs_rev "@lucidityNixpkgsRev@" \
+        --arg nixpkgs_nar_hash "@lucidityNixpkgsNarHash@" \
         --argjson images "$images" --argjson amis "$amis" \
-        '{schema_version:$schema_version,version:$version,tag:$tag,source_commit:$source_commit,created_at:$created_at,repository:$repository,release_run:$release_run,images:$images,aws:{region:$region,amis:$amis}}' \
+        '{schema_version:$schema_version,version:$version,tag:$tag,source_commit:$source_commit,created_at:$created_at,repository:$repository,release_run:$release_run,nixpkgs:{url:$nixpkgs_url,rev:$nixpkgs_rev,nar_hash:$nixpkgs_nar_hash},images:$images,aws:{region:$region,amis:$amis}}' \
         >"$release_dir/release-manifest.json"
     (cd "$release_dir" && sha256sum release-manifest.json >release-manifest.json.sha256)
 }

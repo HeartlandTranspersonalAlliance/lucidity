@@ -41,8 +41,18 @@
       ../den/aspects
     ];
     manifestsCheck = pkgs.runCommand "lucidity-manifest-check" {} ''
-      ${pkgs.jq}/bin/jq -e '.role == "controller" and .overlayIPv4 == "100.96.0.1"' ${rolePackages.host-manifest-controller} >/dev/null
-      ${pkgs.jq}/bin/jq -e '.role == "worker" and .overlayIPv4 == "100.96.0.2"' ${rolePackages.host-manifest-worker} >/dev/null
+      ${pkgs.jq}/bin/jq -e '
+        .role == "controller" and .overlayIPv4 == "100.96.0.1" and
+        .nixpkgs.url == "https://flakehub.com/f/DeterminateSystems/nixpkgs-weekly/0" and
+        (.nixpkgs.rev | test("^[0-9a-f]{40}$")) and
+        (.nixpkgs.narHash | startswith("sha256-"))
+      ' ${rolePackages.host-manifest-controller} >/dev/null
+      ${pkgs.jq}/bin/jq -e '
+        .role == "worker" and .overlayIPv4 == "100.96.0.2" and
+        .nixpkgs.url == "https://flakehub.com/f/DeterminateSystems/nixpkgs-weekly/0" and
+        (.nixpkgs.rev | test("^[0-9a-f]{40}$")) and
+        (.nixpkgs.narHash | startswith("sha256-"))
+      ' ${rolePackages.host-manifest-worker} >/dev/null
       touch "$out"
     '';
     cloudInitCheck =
@@ -277,6 +287,19 @@
       ${pkgs.jq}/bin/jq -e '
         .required == ["NTFY_ALERTMANAGER_TOKEN_FILE"]
       ' monitoring-schema.json >/dev/null
+      ${pkgs.secretspec}/bin/secretspec schema \
+        --file ${secretspecSource}/secretspec.toml --profile controller-runtime --output controller-runtime-schema.json
+      ${pkgs.jq}/bin/jq -e '
+        (.required | sort) == [
+          "COOLIFY_APP_ID",
+          "COOLIFY_APP_KEY",
+          "COOLIFY_DB_PASSWORD",
+          "COOLIFY_PUSHER_APP_ID",
+          "COOLIFY_PUSHER_APP_KEY",
+          "COOLIFY_PUSHER_APP_SECRET",
+          "COOLIFY_REDIS_PASSWORD"
+        ]
+      ' controller-runtime-schema.json >/dev/null
       touch "$out"
     '';
     repositoryCheck =
@@ -320,14 +343,48 @@
 
         rg -q '^\[profiles\.coolify\]$' secretspec.toml
         rg -q '^aws-production = "awssm://us-east-2?' secretspec.toml
-        rg -q '^COOLIFY_API_TOKEN = \{ required = true \}$' secretspec.toml
+        rg -Fq 'openbao-production = { uri = "openbao://127.0.0.1:8200/secret", credentials = { token = "local-keyring" } }' secretspec.toml
+        rg -Fq 'local-dotenv = "dotenv://.env"' secretspec.toml
+        rg -Fq 'local-keyring = "keyring://lucidity"' secretspec.toml
+        rg -Fq 'onepassword-lucidity = "onepassword://Lucidity"' secretspec.toml
+        rg -Fq 'bitwarden-lucidity = "bw://Lucidity"' secretspec.toml
+        rg -Fq 'ci-environment = "env://"' secretspec.toml
+        rg -Fq 'aws-controller-runtime = "awssm://us-east-2"' secretspec.toml
+        rg -Fq 'COOLIFY_API_TOKEN = { required = true, providers = ["openbao-production"] }' secretspec.toml
         rg -Fq 'RESTIC_PASSWORD_FILE = { description = "Restic repository encryption password materialized as a private temporary file", required = false, as_path = true }' secretspec.toml
         rg -q '^\[scopes\.backup-aws\]$' secretspec.toml
         rg -q '^\[scopes\.backup-s3\]$' secretspec.toml
+        rg -q '^\[scopes\.controller-runtime\]$' secretspec.toml
+        rg -q '^\[scopes\.operator-management\]$' secretspec.toml
+        rg -q '^\[scopes\.openbao-cli\]$' secretspec.toml
+        test "$(rg -c 'providers = \["aws-controller-runtime"\], ref = \{ item = "lucidity/production/controller-runtime"' secretspec.toml)" -eq 7
         rg -q 'coolify-worker-storage.service' nix/den/classes/bootc/image.nix
         rg -q 'Environment=COOLIFY_CURL_BIN=/usr/bin/curl' nix/den/classes/bootc/image.nix
         rg -q 'lucidity-admin-authorized-key.service' nix/den/classes/bootc/image.nix
         rg -Fq 'secretspec run' nix/pkgs/cloud-init-fixture.nix
+        rg -Fq -- '--scope "$scope"' nix/pkgs/lucidity.sh
+        rg -Fqx '.env' .gitignore
+        rg -Fqx '.env.*' .gitignore
+        rg -Fqx '!.env.example' .gitignore
+        ! rg -n 'github:NixOS/nixpkgs' flake.nix nix/smoke/flake.nix
+        rg -Fq 'nixpkgs.url = "https://flakehub.com/f/DeterminateSystems/nixpkgs-weekly/0";' flake.nix
+        rg -Fq 'inputs.nixpkgs.url = "https://flakehub.com/f/DeterminateSystems/nixpkgs-weekly/0";' nix/smoke/flake.nix
+        rg -Fq 'home-manager.url = "https://flakehub.com/f/nix-community/home-manager/0";' flake.nix
+        rg -Fq 'determinate.url = "https://flakehub.com/f/DeterminateSystems/determinate/3";' flake.nix
+        rg -Fq 'inputs.determinate.homeManagerModules.default' nix/flake/project.nix
+        root_nixpkgs=$(jq -r '.nodes.root.inputs.nixpkgs' flake.lock)
+        test "$(jq -r --arg node "$root_nixpkgs" '.nodes[$node].original.url' flake.lock)" = \
+          'https://flakehub.com/f/DeterminateSystems/nixpkgs-weekly/0'
+        test "$(jq -r '.nodes.nixpkgs.original.url' nix/smoke/flake.lock)" = \
+          'https://flakehub.com/f/DeterminateSystems/nixpkgs-weekly/0'
+        test "$(jq -r '.nodes["home-manager"].original.url' flake.lock)" = \
+          'https://flakehub.com/f/nix-community/home-manager/0'
+        test "$(jq -r '.nodes.determinate.original.url' flake.lock)" = \
+          'https://flakehub.com/f/DeterminateSystems/determinate/3'
+        rg -Fq 'LUCIDITY_OPERATOR_PROVIDER:-}' nix/pkgs/lucidity.sh
+        rg -Fq 'LUCIDITY_BOOTSTRAP_PROVIDER:-local-keyring' nix/pkgs/lucidity.sh
+        rg -Fq -- '--argjson schema_version 3' nix/pkgs/lucidity.sh
+        ! grep -Fq '@lucidityNixpkgs' ${lucidity}/bin/lucidity
         rg -Fq 'run: nix run .#ci-hermetic-check' .github/workflows/validate.yml
         ! rg -q 'checks\.x86_64-linux|make |\./scripts/' .github/workflows/validate.yml
         rg -Fq 'run: nix run .#audit-ami-resources' .github/workflows/audit-ami-resources.yml

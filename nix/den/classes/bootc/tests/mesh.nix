@@ -272,16 +272,14 @@ in
       ungrouped = mkNode "ungrouped";
     };
     testScript = ''
-      import datetime as dt
-
       start_all()
       for machine in (controller, worker, admin, ungrouped):
-          machine.wait_for_unit("nebula.service", timeout=dt.timedelta(seconds=60))
-          machine.wait_for_unit("sshd.service", timeout=dt.timedelta(seconds=60))
+          machine.wait_for_unit("nebula.service", timeout=60)
+          machine.wait_for_unit("sshd.service", timeout=60)
 
-      controller.wait_until_succeeds("ping -c 1 -W 2 100.96.0.2", timeout=dt.timedelta(seconds=30))
-      admin.wait_until_succeeds("ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /etc/lucidity/admin-ssh admin@100.96.0.1 sudo -n true", timeout=dt.timedelta(seconds=30))
-      admin.wait_until_succeeds("ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /etc/lucidity/admin-ssh admin@100.96.0.2 sudo -n true", timeout=dt.timedelta(seconds=30))
+      controller.wait_until_succeeds("ping -c 1 -W 2 100.96.0.2", timeout=30)
+      admin.wait_until_succeeds("ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /etc/lucidity/admin-ssh admin@100.96.0.1 sudo -n true", timeout=30)
+      admin.wait_until_succeeds("ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /etc/lucidity/admin-ssh admin@100.96.0.2 sudo -n true", timeout=30)
       admin.fail("ssh -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /etc/lucidity/admin-ssh root@100.96.0.1 true")
       controller.succeed("ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /etc/lucidity/controller-ssh root@100.96.0.2 true")
       worker.fail("ssh -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@100.96.0.1 true")
@@ -291,7 +289,7 @@ in
       worker.succeed("nft add table inet relaytest; nft 'add chain inet relaytest output { type filter hook output priority -100; policy accept; }'; nft add rule inet relaytest output ip daddr 192.168.100.10 udp dport 4242 drop")
       admin.succeed("systemctl restart nebula.service")
       worker.succeed("systemctl restart nebula.service")
-      admin.sleep(duration=dt.timedelta(seconds=20))
+      admin.sleep(20)
       admin.succeed("ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /etc/lucidity/admin-ssh admin@100.96.0.2 true")
       # These are disposable test VMs. QMP termination is deterministic,
       # whereas guest poweroff can leave the driver waiting forever on a

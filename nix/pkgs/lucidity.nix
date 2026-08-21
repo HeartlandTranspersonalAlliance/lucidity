@@ -1,6 +1,7 @@
 {
   pkgs,
   ciWorkflow,
+  nixpkgsProvenance,
 }: let
   inherit (pkgs) lib;
   stripEnvBash = path:
@@ -75,12 +76,22 @@ in
         "@lucidityDeploymentValidation@"
         "@lucidityRuntimeScripts@"
         "@luciditySyftConfig@"
+        "@lucidityNixpkgsUrl@"
+        "@lucidityNixpkgsRev@"
+        "@lucidityNixpkgsNarHash@"
       ]
       [
         (lib.getExe lucidityAmiAudit)
         (lib.getExe lucidityDeploymentValidation)
         "${lucidityRuntimeScripts}/libexec/lucidity"
         "${../../.github/syft.yaml}"
+        nixpkgsProvenance.url
+        (
+          if nixpkgsProvenance.rev == null
+          then ""
+          else nixpkgsProvenance.rev
+        )
+        nixpkgsProvenance.narHash
       ]
       (builtins.readFile ./lucidity.sh);
   }).overrideAttrs (old: {
