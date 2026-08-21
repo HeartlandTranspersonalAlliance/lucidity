@@ -13,6 +13,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   scans of one immutable image produce stable SBOM bytes. A validated retained
   AMI may refresh only its SBOM tag for that unchanged image; conflicting
   release or source-image metadata remains fatal.
+- Retained controller AMI validation now checks bootc identity and core host
+  health in connectivity-only mode instead of running the complete Coolify
+  application bootstrap on the disposable release instance.
 
 ## [0.3.0] - 2026-08-20
 

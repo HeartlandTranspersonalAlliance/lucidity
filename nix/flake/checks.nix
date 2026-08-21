@@ -565,6 +565,14 @@
         ${lucidity.runtimeScripts}/libexec/lucidity/vm-validate.sh
       grep -Fq '/etc/lucidity/vm-connectivity-only' \
         ${lucidity.runtimeScripts}/libexec/lucidity/vm-validate-update.sh
+      grep -Fq 'controller_connectivity_only=false' \
+        ${lucidity.runtimeScripts}/libexec/lucidity/validate-ami-import.sh
+      grep -Fq 'ami_lifecycle} == retained && ''${ami_role} == controller' \
+        ${lucidity.runtimeScripts}/libexec/lucidity/validate-ami-import.sh
+      grep -Fq -- '--user-data' \
+        ${lucidity.runtimeScripts}/libexec/lucidity/validate-ami-import.sh
+      grep -Fq 'test ! -e /data/coolify/.controller-bootstrap-complete' \
+        ${lucidity.runtimeScripts}/libexec/lucidity/validate-ami-import.sh
       grep -Fq '"''${role}" "''${expected_ref}" "''${marker}" "''${connectivity_only}" \' \
         ${lucidity.runtimeScripts}/libexec/lucidity/vm-validate-update.sh
       grep -Fq 'connectivity_only=$4' \
