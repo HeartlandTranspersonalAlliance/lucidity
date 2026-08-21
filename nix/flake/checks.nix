@@ -126,6 +126,10 @@
       test -f ${rolePackages.bootc-context-controller}/rootfs/usr/lib/systemd/system/lucidity-nix-selinux.service
       test -x ${rolePackages.bootc-context-controller}/rootfs/usr/libexec/lucidity/provision-determinate-nix
       grep -Fq 'What=/var/lib/nix' ${rolePackages.bootc-context-controller}/rootfs/usr/lib/systemd/system/nix.mount
+      grep -Fq 'DefaultDependencies=no' ${rolePackages.bootc-context-controller}/rootfs/usr/lib/systemd/system/lucidity-nix-selinux.service
+      grep -Fq 'DefaultDependencies=no' ${rolePackages.bootc-context-controller}/rootfs/usr/lib/systemd/system/lucidity-nix-seed.service
+      grep -Fq 'Before=nix.mount local-fs.target' ${rolePackages.bootc-context-controller}/rootfs/usr/lib/systemd/system/lucidity-nix-seed.service
+      grep -Fq 'Before=local-fs.target' ${rolePackages.bootc-context-controller}/rootfs/usr/lib/systemd/system/nix.mount
       grep -Fq 'semodule -i "$policy"' ${rolePackages.bootc-context-controller}/rootfs/usr/libexec/lucidity/install-determinate-nix-selinux-policy
       grep -Fq 'NIX_REMOTE=daemon' ${rolePackages.bootc-context-controller}/rootfs/usr/libexec/lucidity/activate-nix-profile
       grep -Fq 'lucidity-admin-authorized-key.service' ${rolePackages.bootc-context-worker}/Containerfile
@@ -426,11 +430,13 @@
         rg -Fq 'scripts/validate-ami-import.sh | tests/test-ami-import.sh)' nix/pkgs/lucidity.sh
         rg -Fq 'expected_bootc_image_ref##*@' scripts/validate-ami-import.sh
         rg -Fq 'AMI_EXPECTED_BOOTC_IMAGE_REF must match AMI_SOURCE_IMAGE_DIGEST' scripts/validate-ami-import.sh
+        rg -Fq 'Name=tag:Role,Values=''${ami_role}' scripts/validate-ami-import.sh
         rg -Fq 'AMI_ROLE: ''${{ matrix.role }}' .github/workflows/release.yml
         rg -Fq 'amazon-ecr-credential-helper' nix/den/aspects/common/default.nix
         rg -Fq 'credential-helpers = ["ecr-login"]' nix/den/classes/bootc/image.nix
         rg -Fq 'Requires=lucidity-bootc-ecr-auth.service' nix/den/classes/bootc/image.nix
-        rg -Fq 'command -v docker-credential-ecr-login' scripts/validate-ami-import.sh
+        rg -Fq 'test -x /nix/var/nix/profiles/lucidity/bin/docker-credential-ecr-login' scripts/validate-ami-import.sh
+        rg -Fq 'ami_lifecycle} == retained' scripts/validate-ami-import.sh
         rg -Fq 'IMAGE_SIZE_GIB=16' image/image-builder.env
         rg -Fq 'run: nix run .#ci -- timing summarize' .github/workflows/release.yml
         ! rg -Fq 'uses: ./.github/workflows/ami.yml' .github/workflows/release.yml

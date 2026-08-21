@@ -312,6 +312,8 @@
       "usr/lib/systemd/system/lucidity-nix-selinux.service" = ''
         [Unit]
         Description=Install the Determinate Nix SELinux policy
+        DefaultDependencies=no
+        After=local-fs-pre.target
         ConditionSecurity=selinux
         Before=lucidity-nix-seed.service
 
@@ -323,9 +325,10 @@
       "usr/lib/systemd/system/lucidity-nix-seed.service" = ''
         [Unit]
         Description=Provision persistent Determinate Nix state
+        DefaultDependencies=no
         Requires=lucidity-nix-selinux.service
-        After=lucidity-nix-selinux.service
-        Before=nix.mount
+        After=local-fs-pre.target lucidity-nix-selinux.service
+        Before=nix.mount local-fs.target
         RequiresMountsFor=/var/lib
 
         [Service]
@@ -338,6 +341,7 @@
         Description=Mount persistent Determinate Nix state on /nix
         Requires=lucidity-nix-seed.service
         After=lucidity-nix-seed.service
+        Before=local-fs.target
         PropagatesStopTo=nix-daemon.service
         ConditionPathIsDirectory=/nix
         DefaultDependencies=no
