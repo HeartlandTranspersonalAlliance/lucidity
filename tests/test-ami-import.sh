@@ -70,11 +70,25 @@ delete_snapshot_line=$(grep -n -m1 'ec2 delete-snapshot' "${direct_log}" | cut -
     exit 1
 }
 
+if AWS_REGION=us-east-2 \
+    AMI_LAUNCH_VALIDATION=true \
+    AMI_EXPECTED_BOOTC_IMAGE_REF=123456789012.dkr.ecr.us-east-2.amazonaws.com/lucidity/bootc/worker@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc \
+    AMI_LIFECYCLE=retained \
+    AMI_RELEASE_VERSION=v0.1.0 \
+    AMI_ROLE=worker \
+    AMI_SBOM_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+    AMI_SOURCE_IMAGE_DIGEST=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+    AMI_SOURCE_REVISION=0123456789abcdef0123456789abcdef01234567 \
+    "${repo_root}/scripts/validate-ami-import.sh" "${artifact}" 2>/dev/null; then
+    echo "retained AMI validation accepted a bootc digest different from the release digest" >&2
+    exit 1
+fi
+
 AWS_MOCK_LOG="${release_log}" \
 AWS_MOCK_SNAPSHOT_ID=snap-789abc \
 AWS_REGION=us-east-2 \
 AMI_LAUNCH_VALIDATION=true \
-AMI_EXPECTED_BOOTC_IMAGE_REF=123456789012.dkr.ecr.us-east-2.amazonaws.com/lucidity/bootc/worker:v0.1.0 \
+AMI_EXPECTED_BOOTC_IMAGE_REF=123456789012.dkr.ecr.us-east-2.amazonaws.com/lucidity/bootc/worker@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
 AMI_LIFECYCLE=retained \
 AMI_RELEASE_VERSION=v0.1.0 \
 AMI_ROLE=worker \
@@ -111,7 +125,7 @@ AWS_MOCK_LOG="${rerun_log}" \
 AWS_MOCK_SNAPSHOT_ID=snap-789abc \
 AWS_REGION=us-east-2 \
 AMI_LAUNCH_VALIDATION=true \
-AMI_EXPECTED_BOOTC_IMAGE_REF=123456789012.dkr.ecr.us-east-2.amazonaws.com/lucidity/bootc/worker:v0.1.0 \
+AMI_EXPECTED_BOOTC_IMAGE_REF=123456789012.dkr.ecr.us-east-2.amazonaws.com/lucidity/bootc/worker@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
 AMI_LIFECYCLE=retained \
 AMI_RELEASE_VERSION=v0.1.0 \
 AMI_ROLE=worker \

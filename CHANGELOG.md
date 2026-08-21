@@ -7,6 +7,12 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- Retained AMI validation now compares the installed bootc origin with the
+  promoted image's exact ECR digest, and release dispatch runs from the
+  main-branch OIDC subject trusted by AWS.
+
 ### Changed
 
 - Automatic pull-request, merge-queue, and main validation now runs the locked
