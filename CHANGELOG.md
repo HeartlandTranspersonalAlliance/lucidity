@@ -87,6 +87,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Private ECR bootc updates resolve short-lived credentials from the EC2
   instance profile through the Nix-pinned ECR credential helper, and AMI
   release validation preserves the selected controller or worker role.
+- Retained AMI validation waits for first-boot Nix and ECR-helper activation,
+  early Nix provisioning no longer creates a systemd socket ordering cycle,
+  and concurrent role cleanup only removes its own snapshots.
 - Connectivity-only controller lifecycle assertions no longer require the
   full-bootstrap environment, key, and service hash arguments.
 - Interrupted releases can resume from an exact ancestor after a release-tool-only

@@ -45,6 +45,11 @@ credential helper with the EC2 instance profile. The only bootc auth file is an
 ephemeral empty JSON object required to activate helper lookup; no registry
 password or token is stored in the image.
 
+The first-boot gate treats Nix profile activation and ECR-helper preparation as
+readiness conditions. It retries while those one-shot services complete, then
+checks the helper through the stable Lucidity profile path before asking bootc
+to query the private registry.
+
 An existing immutable candidate is never overwritten. The local rebuild still
 occurs so BuildKit can reuse cached layers for disk construction; the workflow
 pulls and pins the verified remote digest before producing the AMI. The final

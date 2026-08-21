@@ -159,6 +159,7 @@ cleanup() {
                 "Name=tag:Project,Values=lucidity" \
                 "Name=tag:Purpose,Values=${artifact_purpose}" \
                 "Name=tag:GitHubRunId,Values=${run_id}" \
+                "Name=tag:Role,Values=${ami_role}" \
             --query 'Snapshots[].SnapshotId' \
             --output text 2>/dev/null | tr '\t' '\n')
     fi
@@ -536,10 +537,11 @@ if [[ ${launch_validation} == true ]]; then
         elif $lifecycle == "retained" then
             .commands += [
                 ("test \"$(bootc status --format=json --format-version=1 --booted | jq -r .status.booted.image.image.image)\" = \"" + $expected_bootc_image_ref + "\""),
+                "systemctl is-active --quiet lucidity-nix-profile.service",
                 "systemctl is-active --quiet lucidity-bootc-ecr-auth.service",
                 "jq -e \u0027type == \u0022object\u0022 and length == 0\u0027 /run/ostree/auth.json >/dev/null",
                 "grep -Fxq \u0027credential-helpers = [\u0022ecr-login\u0022]\u0027 /etc/containers/registries.conf.d/50-lucidity-ecr.conf",
-                "command -v docker-credential-ecr-login >/dev/null",
+                "test -x /nix/var/nix/profiles/lucidity/bin/docker-credential-ecr-login",
                 "bootc upgrade --check"
             ]
         else . end |
@@ -555,7 +557,7 @@ if [[ ${launch_validation} == true ]]; then
         else . end')
     command_succeeded=false
     validation_attempts=1
-    if [[ -n ${switch_target_ref} || ${ami_role} == controller ]]; then
+    if [[ -n ${switch_target_ref} || ${ami_lifecycle} == retained || ${ami_role} == controller ]]; then
         validation_attempts=90
     fi
     for ((validation_attempt = 1; validation_attempt <= validation_attempts; validation_attempt++)); do
@@ -606,8 +608,7 @@ if [[ ${launch_validation} == true ]]; then
                 *)
                     command_finished=true
                     command_output=$(jq -r '.StandardOutputContent' <<< "${invocation}")
-                    if grep -Eq 'LUCIDITY_SWITCH_TARGET_BOOTED|LUCIDITY_CONTROLLER_BOOTSTRAP_FAILED' <<< "${command_output}" ||
-                        [[ -z ${switch_target_ref} && ${ami_role} != controller ]]; then
+                    if grep -Eq 'LUCIDITY_SWITCH_TARGET_BOOTED|LUCIDITY_CONTROLLER_BOOTSTRAP_FAILED' <<< "${command_output}"; then
                         jq -r '.StandardOutputContent, .StandardErrorContent' <<< "${invocation}" >&2
                         echo "SSM guest validation failed with status ${command_status}" >&2
                         exit 1
