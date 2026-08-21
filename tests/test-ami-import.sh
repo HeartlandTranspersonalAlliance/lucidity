@@ -40,6 +40,7 @@ grep -Fq -- '"VolumeSize":12' "${direct_log}"
 grep -Fq -- '--credit-specification CpuCredits=standard' "${direct_log}"
 grep -Fq 'HttpEndpoint=enabled,HttpTokens=required,HttpPutResponseHopLimit=2,InstanceMetadataTags=enabled' "${direct_log}"
 grep -Fq 'ssm send-command' "${direct_log}"
+grep -Fq 'ec2 describe-instance-status' "${direct_log}"
 grep -Fq 'coolify-controller-bootstrap.service' "${direct_log}"
 grep -Fq 'coolify-controller-storage.service' "${direct_log}"
 grep -Fq '/data/coolify/.controller-bootstrap-complete' "${direct_log}"
@@ -61,6 +62,19 @@ if grep -Eq -- '--min-count|--max-count' "${direct_log}"; then
     echo "mocked launch used obsolete AWS CLI instance count options" >&2
     exit 1
 fi
+
+if grep -Fq 'ec2 wait instance-status-ok' "${direct_log}"; then
+    echo "mocked launch blocked guest readiness on the coarse EC2 status waiter" >&2
+    exit 1
+fi
+
+instance_running_line=$(grep -n -m1 'ec2 wait instance-running' "${direct_log}" | cut -d: -f1)
+ssm_ready_line=$(grep -n -m1 'ssm describe-instance-information' "${direct_log}" | cut -d: -f1)
+instance_status_line=$(grep -n -m1 'ec2 describe-instance-status' "${direct_log}" | cut -d: -f1)
+((instance_running_line < ssm_ready_line && ssm_ready_line < instance_status_line)) || {
+    echo "launch validation must use running state, SSM readiness, then record EC2 status evidence" >&2
+    exit 1
+}
 
 terminate_line=$(grep -n -m1 'ec2 terminate-instances' "${direct_log}" | cut -d: -f1)
 deregister_line=$(grep -n -m1 'ec2 deregister-image' "${direct_log}" | cut -d: -f1)

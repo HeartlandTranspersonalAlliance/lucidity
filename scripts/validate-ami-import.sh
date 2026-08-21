@@ -77,7 +77,11 @@ if [[ ${launch_validation} == true ]]; then
 fi
 
 ssm_reboot_wait_seconds=${AMI_SSM_REBOOT_WAIT_SECONDS:-20}
+ssm_ready_attempts=${AMI_SSM_READY_ATTEMPTS:-90}
+ssm_ready_interval_seconds=${AMI_SSM_READY_INTERVAL_SECONDS:-10}
 [[ ${ssm_reboot_wait_seconds} =~ ^[0-9]+$ ]] || { echo "AMI_SSM_REBOOT_WAIT_SECONDS must be a non-negative integer" >&2; exit 2; }
+[[ ${ssm_ready_attempts} =~ ^[1-9][0-9]*$ ]] || { echo "AMI_SSM_READY_ATTEMPTS must be a positive integer" >&2; exit 2; }
+[[ ${ssm_ready_interval_seconds} =~ ^[0-9]+$ ]] || { echo "AMI_SSM_READY_INTERVAL_SECONDS must be a non-negative integer" >&2; exit 2; }
 
 for command in aws jq; do
     command -v "${command}" >/dev/null 2>&1 || { echo "${command} is required" >&2; exit 1; }
@@ -115,6 +119,23 @@ image_id=""
 instance_id=""
 snapshot_ids=()
 completed_successfully=false
+
+report_instance_readiness() {
+    local readiness_output
+    [[ -n ${instance_id} ]] || return 0
+    echo "EC2 and SSM readiness diagnostics for ${instance_id}:" >&2
+    readiness_output=$(aws ec2 describe-instance-status \
+        --region "${region}" \
+        --instance-ids "${instance_id}" \
+        --include-all-instances \
+        --query 'InstanceStatuses[0].{AvailabilityZone:AvailabilityZone,InstanceState:InstanceState.Name,SystemStatus:SystemStatus.Status,InstanceStatus:InstanceStatus.Status,SystemDetails:SystemStatus.Details,InstanceDetails:InstanceStatus.Details}' \
+        --output json 2>/dev/null) && printf '%s\n' "${readiness_output}" >&2 || true
+    readiness_output=$(aws ssm describe-instance-information \
+        --region "${region}" \
+        --filters "Key=InstanceIds,Values=${instance_id}" \
+        --query 'InstanceInformationList[0].{PingStatus:PingStatus,LastPingDateTime:LastPingDateTime,AgentVersion:AgentVersion,PlatformName:PlatformName,PlatformVersion:PlatformVersion}' \
+        --output json 2>/dev/null) && printf '%s\n' "${readiness_output}" >&2 || true
+}
 
 cleanup() {
     local original_status=$?
@@ -424,10 +445,9 @@ if [[ ${launch_validation} == true ]]; then
     [[ -n ${instance_id} ]] || { echo "EC2 did not return a validation instance ID" >&2; exit 1; }
 
     aws ec2 wait instance-running --region "${region}" --instance-ids "${instance_id}"
-    aws ec2 wait instance-status-ok --region "${region}" --instance-ids "${instance_id}"
 
     ssm_online=false
-    for _ in {1..90}; do
+    for ((readiness_attempt = 1; readiness_attempt <= ssm_ready_attempts; readiness_attempt++)); do
         ping_status=$(aws ssm describe-instance-information \
             --region "${region}" \
             --filters "Key=InstanceIds,Values=${instance_id}" \
@@ -437,8 +457,9 @@ if [[ ${launch_validation} == true ]]; then
             ssm_online=true
             break
         fi
-        sleep 10
+        sleep "${ssm_ready_interval_seconds}"
     done
+    report_instance_readiness
     [[ ${ssm_online} == true ]] || { echo "validation instance did not become available through SSM" >&2; exit 1; }
 
     if [[ -n ${switch_target_ref} ]]; then
