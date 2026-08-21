@@ -1,7 +1,7 @@
-# GitHub Actions audit for v0.2.1
+# GitHub Actions audit for v0.3.0
 
 This document is the responsibility map and pre-optimization baseline for issue
-#50. Workflows remain thin runner adapters. Policy and executable behavior belong
+#52. Workflows remain thin runner adapters. Policy and executable behavior belong
 to flake-owned programs, and the packaged `ci-hermetic-check` app evaluates the
 authoritative `nix flake check` graph.
 
@@ -53,7 +53,7 @@ full lifecycle is repeated after the merge on `main`. Removing that duplicate
 main lifecycle and selecting only affected roles in the merge queue are the
 largest safe opportunities.
 
-The v0.2.1 merge path now keeps the controller's bootc switch and rollback,
+The v0.3.0 merge path now keeps the controller's bootc switch and rollback,
 native Nix, SELinux, OpenBao fixture, and persistent-storage evidence while
 using the connectivity-only fixture to omit the full Coolify application pull.
 
@@ -64,7 +64,7 @@ jobs intentionally build and validate the image and AMI on one runner.
 
 ## Responsibility map and decisions
 
-| Workflow | Triggers | Jobs | Evidence owned | Expensive work | v0.2.1 decision |
+| Workflow | Triggers | Jobs | Evidence owned | Expensive work | v0.3.0 decision |
 | --- | --- | --- | --- | --- | --- |
 | `ami-switch-benchmark.yml` | manual | `benchmark` | A retained worker AMI can switch from CentOS bootc to the immutable worker image and roll back | AMI import, EC2 launch, bootc switch, rollback | Keep advisory and manual. It validates a distinct migration path. |
 | `ami.yml` | selected pull-request paths, manual | `ami` | Raw disk construction, AMI compatibility, optional AWS metadata and boot validation | bootc image and raw disk build; optional EBS Direct upload and EC2 launch | Keep. The unused reusable interface was removed; release owns retained AMIs itself. |
@@ -73,7 +73,7 @@ jobs intentionally build and validate the image and AMI on one runner.
 | `integration.yml` | selected pull-request paths, manual | `controller-worker` | Controller and worker boot together and establish strict host-key-checked SSH | Two bootc builds and two concurrent VMs | Keep the small boot-connect contract as distinct pull-request evidence. Reserve full role lifecycle and Coolify bootstrap tests for focused or release qualification. |
 | `notify-ci.yml` | completed CI workflow runs | `notify` | Failed job and step details reach the operator notification endpoint | GitHub API read and one ntfy publish | Keep advisory. The trusted default-branch workflow resolves its token at runtime and never becomes a merge gate. |
 | `publish.yml` | selected main pushes, manual | `publish` | Immutable controller and worker candidates exist in ECR at the source SHA | Two bootc image builds and registry pushes | Keep. The unused reusable interface was removed; publication remains separate from release retention. |
-| `release.yml` | merged PR #66, manual recovery | `prepare`, `roles`, `inventory`, `release` | Exact release identity, verified images, SBOMs, retained AMIs, manifest, tag, and GitHub release | Two parallel full image/SBOM/AMI jobs | Automatically publish v0.2.1 from PR #66's merge commit. Keep exact-version manual dispatch only for release-tool recovery. Do not split same-runner role work. |
+| `release.yml` | merged PR #70, manual recovery | `prepare`, `roles`, `inventory`, `release` | Exact release identity, verified images, SBOMs, retained AMIs, manifest, tag, and GitHub release | Two parallel full image/SBOM/AMI jobs | Automatically publish v0.3.0 from PR #70's merge commit. Keep exact-version manual dispatch only for release-tool recovery. Do not split same-runner role work. |
 | `update-flake-lock.yml` | weekly schedule, manual | `update` | Dependency updates arrive as reviewable pull requests | Flake update and check | Keep advisory. Its pull request is the audit and rollback boundary. |
 | `validate-deployment.yml` | manual | `validate` | A deployed controller and worker match expected runtime, network, and backup contracts | AWS and HTTPS read-only validation | Keep manual until the production milestone provides stable endpoints and role configuration. |
 | `validate.yml` | pull request, merge group, main push, weekly schedule, manual | `prepare`, `lifecycle-controller`, `lifecycle-worker`, `required` | Versioned Nix-owned CI plan, authoritative flake graph, and applicable controller and worker switch/rollback lifecycle | One full worker lifecycle and one connectivity-only controller lifecycle | `required` remains stable. The prepare plan is the single source for role selection, cache mode, summaries, and final gating. Routine controller validation excludes the full Coolify application pull. |
@@ -118,7 +118,7 @@ omits KVM lifecycle checks, use
 
 ## Optimization decisions
 
-Accepted for v0.2.1:
+Accepted for v0.3.0:
 
 - remove unused reusable-workflow interfaces
 - add a fail-safe path classifier and shadow it before enforcing it

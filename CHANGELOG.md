@@ -7,7 +7,7 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-## [0.2.1] - 2026-08-19
+## [0.3.0] - 2026-08-20
 
 ### Added
 
@@ -55,6 +55,8 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Merge-group lifecycle selection now uses a validated per-target path graph.
   The versioned JSON plan records exact commit ancestry, matched paths, and
   ancestor propagation evidence for each lifecycle target.
+- Sparse bootc artifacts use a 16 GiB virtual filesystem so native Nix and both
+  retained bootc deployments fit during release update and rollback validation.
 
 ### Security
 
@@ -73,6 +75,8 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Connectivity-only controller lifecycle assertions no longer require the
+  full-bootstrap environment, key, and service hash arguments.
 - Interrupted releases can resume from an exact ancestor after a release-tool-only
   fix without changing the immutable source, image digests, AMI metadata, or tag.
 - Infrastructure apply no longer invokes the unsupported SES pricing-plan API
@@ -85,5 +89,5 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   comparisons fail safe, and isolated lifecycle runs avoid unused cache-token
   and cleanup work.
 
-[Unreleased]: https://github.com/HeartlandTranspersonalAlliance/lucidity/compare/v0.2.1...HEAD
-[0.2.1]: https://github.com/HeartlandTranspersonalAlliance/lucidity/compare/v0.1.0...v0.2.1
+[Unreleased]: https://github.com/HeartlandTranspersonalAlliance/lucidity/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/HeartlandTranspersonalAlliance/lucidity/compare/v0.1.0...v0.3.0

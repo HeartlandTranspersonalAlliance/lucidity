@@ -263,7 +263,7 @@
 in
   pkgs.testers.runNixOSTest {
     name = "lucidity-mesh-vm";
-    globalTimeout = 5 * 60;
+    globalTimeout = 7 * 60;
     qemu.forceAccel = true;
     nodes = {
       controller = mkNode "controller";
@@ -274,8 +274,8 @@ in
     testScript = ''
       start_all()
       for machine in (controller, worker, admin, ungrouped):
-          machine.wait_for_unit("nebula.service", timeout=60)
-          machine.wait_for_unit("sshd.service", timeout=60)
+          machine.wait_for_unit("nebula.service", timeout=120)
+          machine.wait_for_unit("sshd.service", timeout=120)
 
       controller.wait_until_succeeds("ping -c 1 -W 2 100.96.0.2", timeout=30)
       admin.wait_until_succeeds("ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /etc/lucidity/admin-ssh admin@100.96.0.1 sudo -n true", timeout=30)

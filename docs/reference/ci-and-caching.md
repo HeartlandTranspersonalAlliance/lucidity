@@ -3,7 +3,7 @@
 GitHub workflows are runner adapters around flake apps. `nix flake check` is the
 required hermetic graph.
 
-The v0.2.1 workflow responsibility map, measurements, and optimization decisions
+The v0.3.0 workflow responsibility map, measurements, and optimization decisions
 are recorded in [the GitHub Actions audit](ci-workflow-audit.md). Reproduce its
 run metadata with `lucidity ci workflow audit` from the locked Nix environment.
 

@@ -51,6 +51,7 @@ in {
     openbaoKmsPlugin = pkgs.callPackage ../pkgs/openbao-kms-aws.nix {
       openbaoPluginsSrc = inputs.openbao-plugins;
     };
+    meshVmCheck = import ../den/classes/bootc/tests/mesh.nix {inherit pkgs;};
     awsConfig =
       pkgs.runCommand "lucidity-aws-config.tf.json" {
         nativeBuildInputs = [pkgs.jq];
@@ -200,6 +201,7 @@ in {
         ciWorkflow
         lucidity
         lucidityRelease
+        meshVmCheck
         mkLucidityApp
         mkLucidityAppWith
         mkPatchedSource

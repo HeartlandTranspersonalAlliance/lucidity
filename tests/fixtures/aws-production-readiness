@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+service=${1:-}
+operation=${2:-}
+scenario=${MOCK_READINESS_SCENARIO:-empty}
+configured=false
+[[ ${scenario} == configured ]] && configured=true
+
+case "${service} ${operation}" in
+    "sts get-caller-identity")
+        printf '%s\n' '{"Account":"111122223333","Arn":"arn:aws:sts::111122223333:assumed-role/lucidity-audit/test","UserId":"fixture"}' ;;
+    "ec2 describe-instances")
+        if ${configured}; then
+            printf '%s\n' '{"Reservations":[{"Instances":[{"InstanceId":"i-controller","State":{"Name":"running"},"Tags":[{"Key":"Role","Value":"controller"}]},{"InstanceId":"i-worker","State":{"Name":"running"},"Tags":[{"Key":"Role","Value":"worker"}]}]}]}'
+        else printf '%s\n' '{"Reservations":[]}'; fi ;;
+    "ec2 describe-volumes")
+        if ${configured}; then printf '%s\n' '{"Volumes":[{"Encrypted":true},{"Encrypted":true}]}'; else printf '%s\n' '{"Volumes":[]}'; fi ;;
+    "ec2 describe-security-groups")
+        if ${configured}; then printf '%s\n' '{"SecurityGroups":[{"GroupId":"sg-controller","IpPermissions":[{"IpProtocol":"tcp","FromPort":22,"ToPort":22,"UserIdGroupPairs":[{"GroupId":"sg-worker"}]}]},{"GroupId":"sg-worker","IpPermissions":[]}]}'; else printf '%s\n' '{"SecurityGroups":[]}'; fi ;;
+    "ec2 describe-launch-templates")
+        if ${configured}; then printf '%s\n' '{"LaunchTemplates":[{},{}]}'; else printf '%s\n' '{"LaunchTemplates":[]}'; fi ;;
+    "ec2 describe-images")
+        if ${configured}; then printf '%s\n' '{"Images":[{"Tags":[{"Key":"Role","Value":"controller"}]},{"Tags":[{"Key":"Role","Value":"worker"}]}]}'; else printf '%s\n' '{"Images":[]}'; fi ;;
+    "ssm describe-instance-information")
+        printf '%s\n' '{"InstanceInformationList":[{"InstanceId":"i-controller","PingStatus":"Online"},{"InstanceId":"i-worker","PingStatus":"Online"}]}' ;;
+    "ec2 get-ebs-encryption-by-default") printf '{"EbsEncryptionByDefault":%s}\n' "${configured}" ;;
+    "ec2 get-ebs-default-kms-key-id")
+        if ${configured}; then printf '%s\n' '{"KmsKeyId":"arn:aws:kms:us-east-2:111122223333:key/fixture"}'; else printf '%s\n' '{"KmsKeyId":"alias/aws/ebs"}'; fi ;;
+    "ec2 get-snapshot-block-public-access-state")
+        if ${configured}; then printf '%s\n' '{"State":"block-all-sharing"}'; else printf '%s\n' '{"State":"unblocked"}'; fi ;;
+    "cloudwatch describe-alarms")
+        if ${configured}; then printf '%s\n' '{"MetricAlarms":[{}]}'; else printf '%s\n' '{"MetricAlarms":[]}'; fi ;;
+    "cloudtrail describe-trails")
+        if ${configured}; then printf '%s\n' '{"trailList":[{"Name":"lucidity-production-account"}]}'; else printf '%s\n' '{"trailList":[]}'; fi ;;
+    "cloudtrail get-trail-status") printf '%s\n' '{"IsLogging":true}' ;;
+    "configservice describe-configuration-recorders")
+        if ${configured}; then printf '%s\n' '{"ConfigurationRecorders":[{"name":"lucidity-production-account"}]}'; else printf '%s\n' '{"ConfigurationRecorders":[]}'; fi ;;
+    "configservice describe-configuration-recorder-status")
+        if ${configured}; then printf '%s\n' '{"ConfigurationRecordersStatus":[{"name":"lucidity-production-account","recording":true}]}'; else printf '%s\n' '{"ConfigurationRecordersStatus":[]}'; fi ;;
+    "guardduty list-detectors")
+        if ${configured}; then printf '%s\n' '{"DetectorIds":["detector-fixture"]}'; else printf '%s\n' '{"DetectorIds":[]}'; fi ;;
+    "guardduty get-detector") printf '%s\n' '{"Status":"ENABLED"}' ;;
+    "inspector2 batch-get-account-status")
+        if ${configured}; then printf '%s\n' '{"accounts":[{"state":{"status":"ENABLED"},"resourceState":{"ec2":{"status":"ENABLED"},"ecr":{"status":"ENABLED"}}}]}'; else printf '%s\n' '{"accounts":[{"state":{"status":"DISABLED"},"resourceState":{"ec2":{"status":"DISABLED"},"ecr":{"status":"DISABLED"}}}]}'; fi ;;
+    "securityhub describe-hub-v2")
+        if ${configured}; then printf '%s\n' '{"HubV2Arn":"arn:aws:securityhub:us-east-2:111122223333:hubv2/default"}'; else exit 254; fi ;;
+    "budgets describe-budgets")
+        if ${configured}; then printf '%s\n' '{"Budgets":[{"BudgetName":"lucidity-production-account-annual-cost","BudgetType":"COST","TimeUnit":"ANNUALLY","BudgetLimit":{"Amount":"1100","Unit":"USD"}}]}'; else printf '%s\n' '{"Budgets":[]}'; fi ;;
+    "secretsmanager list-secrets")
+        if ${configured}; then printf '%s\n' '{"SecretList":[{"Name":"lucidity/production/controller-runtime","Tags":[{"Key":"Project","Value":"lucidity"},{"Key":"Environment","Value":"production"}]}]}'; else printf '%s\n' '{"SecretList":[]}'; fi ;;
+    "backup list-backup-plans")
+        if ${configured}; then printf '%s\n' '{"BackupPlansList":[{"BackupPlanName":"lucidity-production-nodes"}]}'; else printf '%s\n' '{"BackupPlansList":[]}'; fi ;;
+    "backup list-backup-vaults")
+        if ${configured}; then printf '%s\n' '{"BackupVaultList":[{"BackupVaultName":"lucidity-production-vault"}]}'; else printf '%s\n' '{"BackupVaultList":[]}'; fi ;;
+    *) echo "unexpected mock AWS operation: ${service} ${operation}" >&2; exit 2 ;;
+esac

@@ -37,10 +37,12 @@ recovery path.
 
 ### Test the deployment model
 
-Checks validate generated files and policies. NixOS mesh tests validate network
-rules. Disposable bootc VMs validate first boot, persistent storage, upgrades,
-rollback, services, Docker, Nix, and SELinux. AMI validation uses disposable EC2
-resources before an image can be retained.
+Default checks validate generated files, policies, and role boot/connectivity.
+The four-node NixOS mesh test validates detailed network rules only when run
+explicitly for networking, firewall, or relay changes. Disposable bootc VMs can
+validate first boot, persistent storage, upgrades, rollback, services, Docker,
+Nix, and SELinux when a change needs that depth. AMI validation uses disposable
+EC2 resources before an image can be retained.
 
 ### Optimize substitution, not correctness
 

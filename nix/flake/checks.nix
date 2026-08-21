@@ -406,9 +406,9 @@
         rg -Fq 'pull_request:' .github/workflows/release.yml
         rg -Fq 'types:' .github/workflows/release.yml
         rg -Fq -- '- closed' .github/workflows/release.yml
-        rg -Fq "github.event.pull_request.merged == true && github.event.pull_request.number == 66" .github/workflows/release.yml
+        rg -Fq "github.event.pull_request.merged == true && github.event.pull_request.number == 70" .github/workflows/release.yml
         rg -Fq 'target_version:' .github/workflows/release.yml
-        rg -Fq "inputs.target_version || '0.2.1'" .github/workflows/release.yml
+        rg -Fq "inputs.target_version || '0.3.0'" .github/workflows/release.yml
         ! rg -q 'inputs\.bump|REQUESTED_BUMP' .github/workflows/release.yml
         rg -Fq 'source_sha:' .github/workflows/release.yml
         rg -Fq 'inputs.source_sha || github.event.pull_request.merge_commit_sha' .github/workflows/release.yml
@@ -426,6 +426,7 @@
         rg -Fq 'podman pull --authfile "''${REGISTRY_AUTH_FILE}" "''${SOURCE_IMAGE}"' scripts/build-disk.sh
         ! rg -q 'cat .*docker_config|cp .*docker_config' scripts/build-disk.sh
         rg -Fq 'nix/pkgs/lucidity.sh | scripts/build-disk.sh)' nix/pkgs/lucidity.sh
+        rg -Fq 'IMAGE_SIZE_GIB=16' image/image-builder.env
         rg -Fq 'run: nix run .#ci -- timing summarize' .github/workflows/release.yml
         ! rg -Fq 'uses: ./.github/workflows/ami.yml' .github/workflows/release.yml
         ! rg -Fq 'uses: ./.github/workflows/publish.yml' .github/workflows/release.yml
@@ -508,6 +509,9 @@
         rg -Fq 'BUILD_CACHE_TO="''${BUILD_CACHE_TO}"' .github/workflows/ami.yml
         ! rg -q 'tests/run\.sh|tests/vm-(role|mesh)\.sh|ci/run-with-progress\.sh' \
           nix .github/workflows README.md
+        ! rg -q '^[[:space:]]+mesh-vm[[:space:]]*=' nix/flake/checks.nix
+        rg -Fq 'mesh-vm = meshVmCheck;' nix/flake/outputs.nix
+        rg -Fq '"$root#packages.$system.mesh-vm"' nix/pkgs/lucidity.sh
         test ! -e Containerfile
         test ! -e Makefile
         test ! -e roles
@@ -547,13 +551,16 @@
         ${lucidity.runtimeScripts}/libexec/lucidity/vm-validate-update.sh
       grep -Fq 'connectivity_only=$4' \
         ${lucidity.runtimeScripts}/libexec/lucidity/vm-validate-update.sh
-      remote_command=$(printf '%s\n' "bash -Eeuo pipefail -c 'role=\$1; expected_ref=\$2; expected_marker=\$3; connectivity_only=\$4; test \"\$role\" = controller; test \"\$expected_ref\" = expected-ref; test \"\$expected_marker\" = expected-marker; test \"\$connectivity_only\" = true' -- controller expected-ref expected-marker true   ")
+      grep -Fq 'expected_env_hash=''${5:-}' \
+        ${lucidity.runtimeScripts}/libexec/lucidity/vm-validate-update.sh
+      remote_command=$(printf '%s\n' "bash -Eeuo pipefail -c 'role=\$1; expected_ref=\$2; expected_marker=\$3; connectivity_only=\$4; expected_env_hash=\''${5:-}; test \"\$role\" = controller; test \"\$expected_ref\" = expected-ref; test \"\$expected_marker\" = expected-marker; test \"\$connectivity_only\" = true; test -z \"\$expected_env_hash\"' -- controller expected-ref expected-marker true")
       bash -c "$remote_command"
       ! grep -R -Fq '/usr/share/coolify-aws/nix-smoke' \
         ${lucidity.runtimeScripts}/libexec/lucidity
       ! grep -Fq 'IMAGE_NAME: localhost/lucidity-' ${runtimeToolsSource}/.github/workflows/validate.yml
       for script in \
-        audit-ami-validation-resources.sh build-disk.sh check-text-style.sh \
+        audit-ami-validation-resources.sh audit-production-readiness.sh \
+        build-disk.sh check-text-style.sh \
         validate-ami-import.sh validate-deployment.sh validate-disk.sh \
         vm-init.sh vm-integration.sh vm-registry.sh vm-start.sh vm-stop.sh \
         vm-validate-update.sh vm-validate.sh; do
@@ -818,11 +825,11 @@
         git add .
         git commit -qm 'docs: prepare v0.1.0'
         git tag v0.1.0
-        printf '0.2.1\n' >VERSION
-        printf 'Current version: **0.2.1**\n' >README.md
-        printf '## [0.2.1] - 2026-08-19\n' >CHANGELOG.md
+        printf '0.3.0\n' >VERSION
+        printf 'Current version: **0.3.0**\n' >README.md
+        printf '## [0.3.0] - 2026-08-20\n' >CHANGELOG.md
         git add .
-        git commit -qm 'docs: prepare exact v0.2.1 target'
+        git commit -qm 'docs: prepare exact v0.3.0 target'
         source_sha=$(git rev-parse HEAD)
         printf 'release tooling\n' >.github/workflows/release.yml
         printf 'release helper\n' >nix/pkgs/lucidity.sh
@@ -835,11 +842,11 @@
           GITHUB_SHA="$tooling_sha" \
           GITHUB_OUTPUT=$PWD/outputs \
           LUCIDITY_REPOSITORY_ROOT=$PWD \
-          ${lib.getExe lucidityRelease} release prepare 0.2.1 "$source_sha"
+          ${lib.getExe lucidityRelease} release prepare 0.3.0 "$source_sha"
         grep -Fxq "source_sha=$source_sha" outputs
         grep -Fxq "tooling_sha=$tooling_sha" outputs
-        grep -Fxq 'tag=v0.2.1' outputs
-        grep -Fxq 'version=0.2.1' outputs
+        grep -Fxq 'tag=v0.3.0' outputs
+        grep -Fxq 'version=0.3.0' outputs
 
         if GITHUB_REF=refs/heads/main \
           GITHUB_SHA="$tooling_sha" \
@@ -856,7 +863,7 @@
         if GITHUB_REF=refs/heads/main \
           GITHUB_SHA=$(git rev-parse HEAD) \
           LUCIDITY_REPOSITORY_ROOT=$PWD \
-          ${lib.getExe lucidityRelease} release prepare 0.2.1 "$source_sha" 2>/dev/null; then
+          ${lib.getExe lucidityRelease} release prepare 0.3.0 "$source_sha" 2>/dev/null; then
           echo 'release resume accepted a non-tooling change' >&2
           exit 1
         fi
@@ -910,6 +917,16 @@
         ../../scripts/audit-ami-validation-resources.sh
       ];
       nativeBuildInputs = [pkgs.jq];
+    };
+    productionReadinessAuditUnitCheck = mkShellTest {
+      name = "production-readiness-audit-unit";
+      script = "tests/test-production-readiness-audit.sh";
+      files = [
+        ../../tests/test-production-readiness-audit.sh
+        ../../tests/fixtures/aws-production-readiness
+        ../../scripts/audit-production-readiness.sh
+      ];
+      nativeBuildInputs = [pkgs.jq pkgs.ripgrep];
     };
     deploymentUnitCheck = mkShellTest {
       name = "deployment-unit";
@@ -1029,6 +1046,7 @@
       workerUnitCheck
       amiImportUnitCheck
       amiAuditUnitCheck
+      productionReadinessAuditUnitCheck
       deploymentUnitCheck
       backupUnitCheck
       monitoringCollectorUnitCheck
@@ -1051,6 +1069,7 @@
       monitoring-collector-unit = monitoringCollectorUnitCheck;
       ci-notify-unit = ciNotifyUnitCheck;
       ami-audit-unit = amiAuditUnitCheck;
+      production-readiness-audit-unit = productionReadinessAuditUnitCheck;
       ami-import-unit = amiImportUnitCheck;
       cache-unit = cacheUnitCheck;
       ci-workflow-unit = ciWorkflowUnitCheck;
@@ -1060,7 +1079,6 @@
       infrastructure = infrastructureCheck;
       lifecycle-scope = lifecycleScopeCheck;
       manifests = manifestsCheck;
-      mesh-vm = import ../den/classes/bootc/tests/mesh.nix {inherit pkgs;};
       policy = policyCheck;
       monitoring-config = monitoringConfigCheck;
       repository = repositoryCheck;

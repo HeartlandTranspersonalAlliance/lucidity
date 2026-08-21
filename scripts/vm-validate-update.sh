@@ -249,9 +249,9 @@ if [[ ${role} == worker ]]; then
     exit 0
 fi
 
-expected_env_hash=$5
-expected_key_hash=$6
-expected_services_hash=$7
+expected_env_hash=${5:-}
+expected_key_hash=${6:-}
+expected_services_hash=${7:-}
 assertion="verify controller storage is active"
 systemctl is-active --quiet coolify-controller-storage.service
 assertion="verify persistent controller storage is mounted"

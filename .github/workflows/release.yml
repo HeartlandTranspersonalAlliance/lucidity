@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       target_version:
-        description: Exact unprefixed SemVer to release, for example 0.2.1
+        description: Exact unprefixed SemVer to release, for example 0.3.0
         required: true
         type: string
       source_sha:
@@ -28,12 +28,12 @@ permissions:
 env:
   AWS_REGION: us-east-2
   GH_TOKEN: ${{ github.token }}
-  NIX_CACHE_WRITE: ${{ github.event_name == 'merge_group' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.number == 66) }}
+  NIX_CACHE_WRITE: ${{ github.event_name == 'merge_group' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.number == 70) }}
 
 jobs:
   prepare:
     name: Select version and require tested images
-    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.merged == true && github.event.pull_request.number == 66)
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.merged == true && github.event.pull_request.number == 70)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -74,7 +74,7 @@ jobs:
         id: version
         env:
           RELEASE_SOURCE_SHA: ${{ inputs.source_sha || github.event.pull_request.merge_commit_sha }}
-          RELEASE_TARGET_VERSION: ${{ inputs.target_version || '0.2.1' }}
+          RELEASE_TARGET_VERSION: ${{ inputs.target_version || '0.3.0' }}
         run: nix run .#release -- prepare "${RELEASE_TARGET_VERSION}" "${RELEASE_SOURCE_SHA}"
 
   roles:
