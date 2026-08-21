@@ -37,6 +37,8 @@ Usage: lucidity COMMAND [ARGUMENTS]
   backup init|run|check
   backup restore SNAPSHOT DESTINATION
   infra plan [OpenTofu arguments]
+  infra refresh-plan SAVED_PLAN [OpenTofu arguments]
+  infra audit [--json|--markdown] [--output PATH]
   infra apply SAVED_PLAN [OpenTofu apply arguments]
   infra output [OpenTofu output arguments]
   infra show [OpenTofu show arguments]
@@ -1246,7 +1248,17 @@ prepare_infra() {
 infra() {
     action=${1:-}
     shift || true
-    [[ $action =~ ^(plan|apply|output|show)$ ]] || die "infra requires plan, apply, output, or show"
+    [[ $action =~ ^(plan|refresh-plan|audit|apply|output|show)$ ]] ||
+        die "infra requires plan, refresh-plan, audit, apply, output, or show"
+    if [[ $action == audit ]]; then
+        exec "$LUCIDITY_RUNTIME_SCRIPTS/audit-production-readiness.sh" "$@"
+    fi
+    if [[ $action == refresh-plan ]]; then
+        saved_plan=${1:-}
+        [[ -n $saved_plan && $# -ge 1 ]] || die "infra refresh-plan requires a saved-plan path"
+        saved_plan=$(realpath -m "$saved_plan")
+        shift
+    fi
     if [[ $action == apply ]]; then
         saved_plan=${1:-}
         [[ -f $saved_plan ]] || die "infra apply requires an existing saved plan as its first argument"
@@ -1262,6 +1274,12 @@ infra() {
         die "infra apply requires the production remote-backend input"
     fi
     tofu -chdir="$workdir" init -reconfigure "${backend_args[@]}"
+    if [[ $action == refresh-plan ]]; then
+        [[ $remote_backend == true ]] || die "infra refresh-plan requires the production remote-backend input"
+        tofu -chdir="$workdir" plan -refresh-only -out="$saved_plan" "$@"
+        echo "Saved the review-only refresh plan to $saved_plan; inspect it with lucidity infra show $saved_plan"
+        return
+    fi
     if [[ $action == plan ]]; then
         tofu -chdir="$workdir" plan "$@"
         return

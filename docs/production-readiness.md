@@ -18,6 +18,22 @@ Version 0.2.1 is the first production-candidate release. Before publishing it:
 
 ## Infrastructure gate
 
+Capture a local, read-only AWS inventory before each staged plan:
+
+```console
+nix run .#lucidity -- infra audit --json --output .lucidity/production-readiness.json
+```
+
+The report reads configuration metadata only, records unavailable APIs instead
+of guessing, and never calls a Secrets Manager value API. Keep generated reports
+under `.lucidity/`; they contain account metadata and must not be committed.
+Review remote-state drift as a saved plan, without applying it:
+
+```console
+nix run .#lucidity -- infra refresh-plan .lucidity/production-refresh.tfplan
+nix run .#lucidity -- infra show .lucidity/production-refresh.tfplan
+```
+
 Pull requests create a redacted OpenTofu plan summary when the planning role
 and state bucket variables are configured. Production apply is manual from
 `main`. The workflow downloads the exact saved plan, verifies its SHA-256

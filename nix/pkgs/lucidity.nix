@@ -8,6 +8,7 @@
     lib.removePrefix "#!/usr/bin/env bash\n" (builtins.readFile path);
   runtimeScriptPaths = [
     ../../scripts/audit-ami-validation-resources.sh
+    ../../scripts/audit-production-readiness.sh
     ../../scripts/build-disk.sh
     ../../scripts/check-text-style.sh
     ../../scripts/validate-ami-import.sh

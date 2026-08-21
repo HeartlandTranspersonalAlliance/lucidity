@@ -553,7 +553,8 @@
         ${lucidity.runtimeScripts}/libexec/lucidity
       ! grep -Fq 'IMAGE_NAME: localhost/lucidity-' ${runtimeToolsSource}/.github/workflows/validate.yml
       for script in \
-        audit-ami-validation-resources.sh build-disk.sh check-text-style.sh \
+        audit-ami-validation-resources.sh audit-production-readiness.sh \
+        build-disk.sh check-text-style.sh \
         validate-ami-import.sh validate-deployment.sh validate-disk.sh \
         vm-init.sh vm-integration.sh vm-registry.sh vm-start.sh vm-stop.sh \
         vm-validate-update.sh vm-validate.sh; do
@@ -911,6 +912,16 @@
       ];
       nativeBuildInputs = [pkgs.jq];
     };
+    productionReadinessAuditUnitCheck = mkShellTest {
+      name = "production-readiness-audit-unit";
+      script = "tests/test-production-readiness-audit.sh";
+      files = [
+        ../../tests/test-production-readiness-audit.sh
+        ../../tests/fixtures/aws-production-readiness
+        ../../scripts/audit-production-readiness.sh
+      ];
+      nativeBuildInputs = [pkgs.jq pkgs.ripgrep];
+    };
     deploymentUnitCheck = mkShellTest {
       name = "deployment-unit";
       script = "tests/test-deployment-validation.sh";
@@ -1029,6 +1040,7 @@
       workerUnitCheck
       amiImportUnitCheck
       amiAuditUnitCheck
+      productionReadinessAuditUnitCheck
       deploymentUnitCheck
       backupUnitCheck
       monitoringCollectorUnitCheck
@@ -1051,6 +1063,7 @@
       monitoring-collector-unit = monitoringCollectorUnitCheck;
       ci-notify-unit = ciNotifyUnitCheck;
       ami-audit-unit = amiAuditUnitCheck;
+      production-readiness-audit-unit = productionReadinessAuditUnitCheck;
       ami-import-unit = amiImportUnitCheck;
       cache-unit = cacheUnitCheck;
       ci-workflow-unit = ciWorkflowUnitCheck;
