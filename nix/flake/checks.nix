@@ -431,6 +431,9 @@
         rg -Fq 'expected_bootc_image_ref##*@' scripts/validate-ami-import.sh
         rg -Fq 'AMI_EXPECTED_BOOTC_IMAGE_REF must match AMI_SOURCE_IMAGE_DIGEST' scripts/validate-ami-import.sh
         rg -Fq 'Name=tag:Role,Values=''${ami_role}' scripts/validate-ami-import.sh
+        ! rg -Fq 'wait instance-status-ok' scripts/validate-ami-import.sh
+        rg -Fq 'report_instance_readiness' scripts/validate-ami-import.sh
+        rg -Fq 'AMI_SSM_READY_ATTEMPTS' scripts/validate-ami-import.sh
         rg -Fq 'AMI_ROLE: ''${{ matrix.role }}' .github/workflows/release.yml
         rg -Fq 'amazon-ecr-credential-helper' nix/den/aspects/common/default.nix
         rg -Fq 'credential-helpers = ["ecr-login"]' nix/den/classes/bootc/image.nix

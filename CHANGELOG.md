@@ -63,6 +63,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   marked ready for review.
 - Sparse bootc artifacts use a 16 GiB virtual filesystem so native Nix and both
   retained bootc deployments fit during release update and rollback validation.
+- Retained AMI validation now proceeds from EC2 `running` to SSM guest
+  readiness, records EC2 status-check evidence, and no longer blocks before
+  guest health checks on the fixed ten-minute EC2 status waiter.
 
 ### Security
 

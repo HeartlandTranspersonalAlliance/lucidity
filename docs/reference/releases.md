@@ -48,7 +48,10 @@ password or token is stored in the image.
 The first-boot gate treats Nix profile activation and ECR-helper preparation as
 readiness conditions. It retries while those one-shot services complete, then
 checks the helper through the stable Lucidity profile path before asking bootc
-to query the private registry.
+to query the private registry. After EC2 reaches `running`, SSM connectivity is
+the guest-readiness signal; the gate records EC2 system and instance status as
+diagnostic evidence without blocking guest validation on the coarse EC2 status
+waiter.
 
 An existing immutable candidate is never overwritten. The local rebuild still
 occurs so BuildKit can reuse cached layers for disk construction; the workflow
