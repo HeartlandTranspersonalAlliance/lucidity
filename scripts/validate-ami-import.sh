@@ -429,6 +429,14 @@ if [[ ${launch_validation} == true ]]; then
             Ebs:{DeleteOnTermination:true,Encrypted:true,VolumeSize:$volume_size,VolumeType:"gp3"}
         }]')
 
+    controller_connectivity_only=false
+    launch_user_data_args=()
+    if [[ ${ami_lifecycle} == retained && ${ami_role} == controller && -z ${switch_target_ref} ]]; then
+        controller_connectivity_only=true
+        launch_user_data=$'#cloud-config\nwrite_files:\n  - path: /etc/lucidity/vm-connectivity-only\n    owner: root:root\n    permissions: "0600"\n    content: |\n      true\n'
+        launch_user_data_args=(--user-data "${launch_user_data}")
+    fi
+
     echo "Launching disposable ${launch_instance_type} without a key pair or inbound SSH"
     instance_response=$(aws ec2 run-instances \
         --region "${region}" \
@@ -438,6 +446,7 @@ if [[ ${launch_validation} == true ]]; then
         --subnet-id "${launch_subnet}" \
         --security-group-ids "${launch_security_group}" \
         --iam-instance-profile "Name=${launch_instance_profile}" \
+        "${launch_user_data_args[@]}" \
         --associate-public-ip-address \
         --credit-specification CpuCredits=standard \
         --metadata-options HttpEndpoint=enabled,HttpTokens=required,HttpPutResponseHopLimit=2,InstanceMetadataTags=enabled \
@@ -538,6 +547,7 @@ if [[ ${launch_validation} == true ]]; then
         --arg role "${ami_role}" \
         --arg expected_bootc_image_ref "${expected_bootc_image_ref}" \
         --arg switch_target_ref "${switch_target_ref}" \
+        --argjson controller_connectivity_only "${controller_connectivity_only}" \
         '{commands:[
             "set -eu",
             "test \"$(uname -m)\" = x86_64",
@@ -569,7 +579,18 @@ if [[ ${launch_validation} == true ]]; then
                 "bootc upgrade --check"
             ]
         else . end |
-        if $role == "controller" then
+        if $role == "controller" and $controller_connectivity_only then
+            .commands += [
+                "test -e /etc/lucidity/vm-connectivity-only",
+                "systemctl is-active --quiet coolify-controller-storage.service",
+                "systemctl is-enabled --quiet coolify-controller-bootstrap.service",
+                "! systemctl is-active --quiet coolify-controller-bootstrap.service",
+                "! systemctl is-failed --quiet coolify-controller-bootstrap.service",
+                "mountpoint --quiet /data/coolify",
+                "test ! -e /data/coolify/.controller-bootstrap-complete",
+                "test ! -e /data/coolify/source/.env"
+            ]
+        elif $role == "controller" then
             .commands += [
                 "if systemctl is-failed --quiet coolify-controller-bootstrap.service; then echo LUCIDITY_CONTROLLER_BOOTSTRAP_FAILED; systemctl --no-pager --full status coolify-controller-bootstrap.service; exit 1; fi",
                 "systemctl is-active --quiet coolify-controller-storage.service",

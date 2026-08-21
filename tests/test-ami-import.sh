@@ -9,6 +9,8 @@ artifact="${mock_dir}/worker.raw"
 direct_log="${mock_dir}/direct.log"
 release_log="${mock_dir}/release.log"
 release_output="${mock_dir}/release.output"
+controller_release_log="${mock_dir}/controller-release.log"
+controller_release_output="${mock_dir}/controller-release.output"
 rerun_log="${mock_dir}/rerun.log"
 rerun_output="${mock_dir}/rerun.output"
 sbom_refresh_log="${mock_dir}/sbom-refresh.log"
@@ -17,7 +19,8 @@ sbom_refresh_stdout="${mock_dir}/sbom-refresh.stdout"
 source_conflict_log="${mock_dir}/source-conflict.log"
 switch_log="${mock_dir}/switch.log"
 kms_key_arn=arn:aws:kms:us-east-2:123456789012:key/11111111-2222-3333-4444-555555555555
-touch "${artifact}" "${direct_log}" "${release_log}" "${release_output}" "${rerun_log}" "${rerun_output}" \
+touch "${artifact}" "${direct_log}" "${release_log}" "${release_output}" \
+    "${controller_release_log}" "${controller_release_output}" "${rerun_log}" "${rerun_output}" \
     "${sbom_refresh_log}" "${sbom_refresh_output}" "${sbom_refresh_stdout}" "${source_conflict_log}" "${switch_log}"
 
 tagged_mock_dir="${mock_dir}/tagged-mock"
@@ -162,6 +165,46 @@ grep -Fq 'ami_id=ami-test' "${release_output}"
 grep -Fq 'snapshot_id=snap-789abc' "${release_output}"
 if grep -Eq 'ec2 (deregister-image|delete-snapshot)' "${release_log}"; then
     echo "a successful retained AMI release was removed during cleanup" >&2
+    exit 1
+fi
+
+AWS_MOCK_LOG="${controller_release_log}" \
+AWS_MOCK_SNAPSHOT_ID=snap-c011ec70 \
+AWS_REGION=us-east-2 \
+AMI_LAUNCH_VALIDATION=true \
+AMI_EXPECTED_BOOTC_IMAGE_REF=123456789012.dkr.ecr.us-east-2.amazonaws.com/lucidity/bootc/controller@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+AMI_LIFECYCLE=retained \
+AMI_RELEASE_VERSION=v0.1.0 \
+AMI_ROLE=controller \
+AMI_SBOM_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+AMI_SNAPSHOT_KMS_KEY_ARN="${kms_key_arn}" \
+AMI_SOURCE_IMAGE_DIGEST=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+AMI_SOURCE_REVISION=0123456789abcdef0123456789abcdef01234567 \
+AMI_TEST_INSTANCE_PROFILE_NAME=mock-controller-profile \
+AMI_TEST_INSTANCE_TYPE=t3a.small \
+AMI_TEST_SECURITY_GROUP_ID=sg-test \
+AMI_TEST_SUBNET_ID=subnet-test \
+COLDSNAP_COMMAND="${repo_root}/tests/fixtures/coldsnap" \
+GITHUB_OUTPUT="${controller_release_output}" \
+GITHUB_RUN_ID=mock-controller-release \
+PATH="${repo_root}/tests/fixtures:${PATH}" \
+    "${repo_root}/scripts/validate-ami-import.sh" "${artifact}"
+
+grep -Fq -- '--user-data #cloud-config' "${controller_release_log}"
+grep -Fq '/etc/lucidity/vm-connectivity-only' "${controller_release_log}"
+grep -Fq 'systemctl is-active --quiet coolify-controller-storage.service' "${controller_release_log}"
+grep -Fq 'systemctl is-enabled --quiet coolify-controller-bootstrap.service' "${controller_release_log}"
+grep -Fq '! systemctl is-active --quiet coolify-controller-bootstrap.service' "${controller_release_log}"
+grep -Fq 'test ! -e /data/coolify/.controller-bootstrap-complete' "${controller_release_log}"
+grep -Fq 'test ! -e /data/coolify/source/.env' "${controller_release_log}"
+grep -Fq 'ami_id=ami-test' "${controller_release_output}"
+if grep -Fq 'test -s /data/coolify/source/.env' "${controller_release_log}"; then
+    echo "retained controller AMI validation unexpectedly required full application bootstrap" >&2
+    exit 1
+fi
+
+if grep -Fq -- '--user-data' "${release_log}"; then
+    echo "retained worker AMI validation unexpectedly received controller connectivity-only user data" >&2
     exit 1
 fi
 

@@ -53,6 +53,13 @@ the guest-readiness signal; the gate records EC2 system and instance status as
 diagnostic evidence without blocking guest validation on the coarse EC2 status
 waiter.
 
+Retained controller AMIs boot with the connectivity-only cloud-init marker.
+The release gate verifies the exact bootc digest, SELinux enforcement, SSM,
+Docker, native Nix, ECR-helper activation, and persistent storage without
+starting the full Coolify application stack on the small disposable instance.
+Application bootstrap and controller-to-worker behavior remain deployment and
+explicit lifecycle qualifications rather than release-artifact boot checks.
+
 An existing immutable candidate is never overwritten. The local rebuild still
 occurs so BuildKit can reuse cached layers for disk construction; the workflow
 pulls and pins the verified remote digest before producing the AMI. The final
