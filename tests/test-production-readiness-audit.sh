@@ -16,6 +16,7 @@ jq -e '
   .schema_version == 1 and
   .identity.type == "assumed_role" and
   .summary.not_configured > 0 and
+  any(.checks[]; .id == "observability.self_hosted" and .state == "declared" and .observed.aws_paid_canaries == false) and
   any(.checks[]; .id == "security.security_hub_v2" and .state == "not_configured") and
   any(.checks[]; .id == "secrets.runtime_metadata" and .observed.values_read == false)
 ' "${test_dir}/empty.json" >/dev/null
@@ -30,6 +31,14 @@ grep -Fq '`compute.controller_singleton` | `configured`' "${test_dir}/configured
 # shellcheck disable=SC2016
 grep -Fq '`network.no_cidr_ssh` | `configured`' "${test_dir}/configured.md"
 grep -Fq '0 unavailable' "${test_dir}/configured.md"
+# Backticks are literal Markdown delimiters in this assertion.
+# shellcheck disable=SC2016
+grep -Fq '`observability.self_hosted` | `declared`' "${test_dir}/configured.md"
+
+if rg -qi 'cloudwatch describe-alarms|synthetics (create|update|delete)-canary' "${audit_script}" "${test_dir}"; then
+    echo "production audit queried an excluded AWS monitoring service" >&2
+    exit 1
+fi
 
 if rg -qi 'get-secret-value|batch-get-secret-value' "${audit_script}" "${test_dir}"; then
     echo "production audit contains or emitted a forbidden secret value operation" >&2

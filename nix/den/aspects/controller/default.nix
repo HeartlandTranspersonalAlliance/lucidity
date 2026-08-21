@@ -13,6 +13,7 @@
       packages = with pkgs; [
         alertmanager-ntfy
         grafana
+        grafana-loki
         ntfy-sh
         openssl
         prometheus
@@ -27,6 +28,8 @@
         "/var/lib/prometheus"
         "/var/lib/alertmanager"
         "/var/lib/grafana"
+        "/var/lib/loki"
+        "/var/lib/alloy"
       ];
       files = {
         "etc/openbao/openbao.hcl.in" = ''
@@ -44,6 +47,13 @@
           listener "tcp" {
             address = "127.0.0.1:8200"
             cluster_address = "127.0.0.1:8201"
+            tls_disable = false
+            tls_cert_file = "/var/lib/openbao/tls/server.crt"
+            tls_key_file = "/var/lib/openbao/tls/server.key"
+          }
+
+          listener "tcp" {
+            address = "100.96.0.1:8200"
             tls_disable = false
             tls_cert_file = "/var/lib/openbao/tls/server.crt"
             tls_key_file = "/var/lib/openbao/tls/server.key"

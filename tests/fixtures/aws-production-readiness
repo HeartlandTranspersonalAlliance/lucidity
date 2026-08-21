@@ -29,8 +29,6 @@ case "${service} ${operation}" in
         if ${configured}; then printf '%s\n' '{"KmsKeyId":"arn:aws:kms:us-east-2:111122223333:key/fixture"}'; else printf '%s\n' '{"KmsKeyId":"alias/aws/ebs"}'; fi ;;
     "ec2 get-snapshot-block-public-access-state")
         if ${configured}; then printf '%s\n' '{"State":"block-all-sharing"}'; else printf '%s\n' '{"State":"unblocked"}'; fi ;;
-    "cloudwatch describe-alarms")
-        if ${configured}; then printf '%s\n' '{"MetricAlarms":[{}]}'; else printf '%s\n' '{"MetricAlarms":[]}'; fi ;;
     "cloudtrail describe-trails")
         if ${configured}; then printf '%s\n' '{"trailList":[{"Name":"lucidity-production-account"}]}'; else printf '%s\n' '{"trailList":[]}'; fi ;;
     "cloudtrail get-trail-status") printf '%s\n' '{"IsLogging":true}' ;;

@@ -309,6 +309,23 @@
         "url": "https://flakehub.com/f/DeterminateSystems/nixpkgs-weekly/0"
       }
     },
+    "ooye": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1780553259,
+        "narHash": "sha256-Wpt+UJvhQyJgNZD6k18HvLMJMQPuRcZEISLIkoIVZms=",
+        "ref": "refs/heads/main",
+        "rev": "b5768697644ef64717641693e20fc730604fa7b6",
+        "revCount": 956,
+        "type": "git",
+        "url": "https://gitdab.com/cadence/out-of-your-element.git"
+      },
+      "original": {
+        "rev": "b5768697644ef64717641693e20fc730604fa7b6",
+        "type": "git",
+        "url": "https://gitdab.com/cadence/out-of-your-element.git"
+      }
+    },
     "openbao-plugins": {
       "flake": false,
       "locked": {
@@ -333,6 +350,7 @@
         "flake-parts": "flake-parts_2",
         "home-manager": "home-manager",
         "nixpkgs": "nixpkgs_2",
+        "ooye": "ooye",
         "openbao-plugins": "openbao-plugins",
         "terranix": "terranix",
         "treefmt-nix": "treefmt-nix"

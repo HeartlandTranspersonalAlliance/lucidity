@@ -21,6 +21,11 @@
         type = lib.types.ints.positive;
         description = "Production gp3 root volume size.";
       };
+      monitoring.httpsTargets = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [];
+        description = "Public HTTPS endpoints probed by the controller blackbox exporter.";
+      };
       admin = {
         sshPublicKeySecret = lib.mkOption {type = lib.types.str;};
         sshFingerprint = lib.mkOption {type = lib.types.str;};

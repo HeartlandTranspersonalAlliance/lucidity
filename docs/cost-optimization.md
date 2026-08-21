@@ -47,8 +47,10 @@ a complete IPv6 egress path.
 - Direct EC2 networking and Coolify-managed routing provide the ingress and service
   layers.
 - EC2 basic monitoring supplies the one-minute
-  status checks and five-minute CPU and credit metrics used by the alarms.
-- VPC Flow Logs capture rejected traffic only and expire after 30 days.
+  status checks and five-minute CPU and credit metrics available to operators;
+  Lucidity does not create CloudWatch alarms or paid canaries.
+- VPC Flow Logs are a security control, not the runtime observability stack.
+  They capture rejected traffic only and expire after 90 days.
 - AWS Backup keeps 7 daily incremental recovery points in warm regional storage.
 - The bundled runtime secret uses a dedicated rotating customer-managed KMS key so
   its controller policy can be scoped to one key and Secrets Manager service path.
@@ -56,9 +58,16 @@ a complete IPv6 egress path.
   forecasted spend, and 100 percent actual spend without enabling automated actions.
 
 Monitoring-only AWS Budgets and their notifications are free. Budget data is not
-real-time, and forecast alerts need enough usage history to become available, so the
-budget complements resource-health alarms rather than replacing them. Its account-wide
-scope catches untagged or accidentally created resources outside the lucidity stack.
+real-time, and forecast alerts need enough usage history to become available. Its
+account-wide scope catches untagged or accidentally created resources outside the
+lucidity stack.
+
+Prometheus, Loki, Grafana, Alertmanager, blackbox exporter, and ntfy run on the
+existing controller, so they add no AWS monitoring-service line item. Their cost is
+controller CPU, memory, and gp3 capacity. Seven-day Loki retention, bounded journal
+and Docker logs, and ingestion limits protect the initial `t3a.small`; resize only if
+the 72-hour soak shows memory pressure, sustained CPU credits, or less than 20 percent
+disk free.
 
 Review instance memory, CPU credits, gp3 consumption, backup storage, CloudWatch Logs,
 and internet egress after the first month. Resize only from measured peaks: the Matrix

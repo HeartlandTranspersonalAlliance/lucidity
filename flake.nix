@@ -30,6 +30,11 @@
       flake = false;
     };
 
+    ooye = {
+      url = "git+https://gitdab.com/cadence/out-of-your-element.git?rev=b5768697644ef64717641693e20fc730604fa7b6";
+      flake = false;
+    };
+
     terranix.url = "github:terranix/terranix";
     terranix.inputs.nixpkgs.follows = "nixpkgs";
 

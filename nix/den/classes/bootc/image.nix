@@ -25,6 +25,7 @@
   monitoring = import ./monitoring.nix {
     inherit lib pkgs isController systemProfile;
     overlayIPv4 = cfg.overlayIPv4;
+    httpsTargets = cfg.monitoring.httpsTargets;
   };
 
   generatedFiles =
@@ -82,10 +83,12 @@
           u alertmanager - "Alertmanager service" /var/lib/alertmanager /sbin/nologin
           u blackbox-exporter - "Blackbox exporter service" /var/empty /sbin/nologin
           u grafana - "Grafana service" /var/lib/grafana /sbin/nologin
+          u loki - "Loki service" /var/lib/loki /sbin/nologin
           u ntfy - "ntfy service" /var/lib/ntfy /sbin/nologin
           u alertmanager-ntfy - "Alertmanager ntfy forwarder" /var/empty /sbin/nologin
         ''}
         ${lib.optionalString isController ''u openbao - "OpenBao service" /var/lib/openbao /sbin/nologin''}
+        ${lib.optionalString (!isController) ''u ooye - "Out Of Your Element bridge" /var/lib/ooye /sbin/nologin''}
       '';
       "usr/lib/sysusers.d/nix.conf" = ''
         # Keep EPEL's nix-system identities deterministic and compatible with
@@ -140,6 +143,11 @@
         d /var/usrlocal 0755 root root -
         d /var/usrlocal/bin 0755 root root -
         d /etc/coolify-worker 0700 root root -
+        ${lib.optionalString (!isController) ''
+          d /var/lib/ooye 0700 ooye ooye -
+          d /etc/openbao 0755 root root -
+          d /etc/ooye 0755 root root -
+        ''}
         d /data/coolify 0700 root root -
         ${lib.optionalString isController ''
           d /etc/coolify-controller 0700 root root -
@@ -151,6 +159,10 @@
           d /var/lib/openbao/snapshots 0700 openbao openbao -
           d /var/lib/ntfy 0700 ntfy ntfy -
           d /var/lib/ntfy/attachments 0700 ntfy ntfy -
+          d /var/lib/loki 0700 loki loki -
+          d /var/lib/loki/chunks 0700 loki loki -
+          d /var/lib/loki/rules 0700 loki loki -
+          d /var/lib/loki/compactor 0700 loki loki -
         ''}
       '';
       "usr/libexec/lucidity/activate-nix-profile" = ''
@@ -690,7 +702,7 @@
         if [[ ! -s /var/lib/openbao/tls/server.key ]]; then
           ${pkgs.openssl}/bin/openssl req -x509 -newkey rsa:3072 -sha256 -nodes \
             -subj /CN=localhost -days 825 \
-            -addext subjectAltName=IP:127.0.0.1,DNS:localhost \
+            -addext subjectAltName=IP:127.0.0.1,IP:100.96.0.1,DNS:localhost \
             -keyout /var/lib/openbao/tls/server.key \
             -out /var/lib/openbao/tls/server.crt
           chown openbao:openbao /var/lib/openbao/tls/server.key /var/lib/openbao/tls/server.crt
@@ -845,7 +857,7 @@
   installFiles = lib.concatStringsSep "\n" (
     lib.mapAttrsToList (path: source: ''
       install -D -m ${
-        if lib.hasPrefix "usr/libexec/" path
+        if lib.hasPrefix "usr/libexec/" path || (lib.hasPrefix "etc/lucidity/backup.d/" path && lib.hasSuffix ".sh" path)
         then "0755"
         else "0644"
       } ${source} "$out/rootfs/${path}"
@@ -878,6 +890,9 @@
     ++ lib.optionals (!isController) [
       "coolify-worker-storage.service"
       "coolify-worker-authorized-keys.service"
+      "openbao-agent-worker.service"
+      "ooye-registration.service"
+      "ooye.service"
     ];
 
   containerfile = pkgs.writeText "Containerfile-${role}" ''

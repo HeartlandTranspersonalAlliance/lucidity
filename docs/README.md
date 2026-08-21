@@ -18,6 +18,7 @@ design context, customization, operations, and reference material.
 - [Production readiness roadmap](production-readiness.md)
 - [Controller and worker recovery](node-recovery.md)
 - [Production observability](node-monitoring.md)
+- [Worker workloads: Continuwuity and OOYE](guides/worker-workloads.md)
 - [Determinate Nix operations](determinate-nix.md)
 
 ## Security

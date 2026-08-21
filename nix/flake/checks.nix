@@ -148,12 +148,28 @@
       grep -Fq 'Requires=openbao.service' ${rolePackages.bootc-context-controller}/rootfs/usr/lib/systemd/system/lucidity-backup.service
       ! grep -Fq 'openbao.service' ${rolePackages.bootc-context-worker}/rootfs/usr/lib/systemd/system/lucidity-backup.service
       ! grep -R -E 'GetSecretValue|BatchGetSecretValue' ${rolePackages.bootc-context-controller}/rootfs/usr/libexec
+      test -x ${rolePackages.system-profile-worker}/bin/ooye
+      test -f ${rolePackages.bootc-context-worker}/rootfs/usr/share/lucidity/workloads/continuwuity/compose.yaml
+      grep -Fq 'CONTINUWUITY_IMAGE_DIGEST' ${rolePackages.bootc-context-worker}/rootfs/usr/share/lucidity/workloads/continuwuity/compose.yaml
+      grep -Fq 'name: lucidity-continuwuity-data' ${rolePackages.bootc-context-worker}/rootfs/usr/share/lucidity/workloads/continuwuity/compose.yaml
+      grep -Fq 'host.docker.internal:host-gateway' ${rolePackages.bootc-context-worker}/rootfs/usr/share/lucidity/workloads/continuwuity/compose.yaml
+      test -f ${rolePackages.bootc-context-worker}/rootfs/usr/lib/systemd/system/openbao-agent-worker.service
+      test -f ${rolePackages.bootc-context-worker}/rootfs/usr/lib/systemd/system/ooye.service
+      grep -Fq 'BAO_TOKEN_PATH=/run/openbao-agent/token' ${rolePackages.bootc-context-worker}/rootfs/usr/libexec/lucidity/materialize-ooye-registration
+      grep -Fq 'CapabilityBoundingSet=' ${rolePackages.bootc-context-worker}/rootfs/usr/lib/systemd/system/ooye.service
+      grep -Fq 'ReadWritePaths=/var/lib/ooye' ${rolePackages.bootc-context-worker}/rootfs/usr/lib/systemd/system/ooye.service
+      test -x ${rolePackages.bootc-context-worker}/rootfs/etc/lucidity/backup.d/50-worker-workloads.sh
+      ! grep -R -F '/var/run/docker.sock' \
+        ${rolePackages.bootc-context-controller}/rootfs/etc/alloy \
+        ${rolePackages.bootc-context-worker}/rootfs/etc/alloy
       touch "$out"
     '';
     monitoringConfigCheck =
       pkgs.runCommand "lucidity-monitoring-config-check" {
         nativeBuildInputs = [
           pkgs.gnused
+          pkgs.grafana-alloy
+          pkgs.grafana-loki
           pkgs.jq
           pkgs.prometheus.cli
           pkgs.prometheus-alertmanager
@@ -167,8 +183,16 @@
         promtool check rules "$root/etc/prometheus/rules.yml"
         amtool check-config "$root/etc/alertmanager/alertmanager.yml"
         blackbox_exporter --config.check --config.file="$root/etc/prometheus/blackbox.yml"
-        jq -e '.uid == "lucidity-production" and (.panels | length) == 3' \
+        alloy validate "$root/etc/alloy/config.alloy"
+        loki -verify-config -config.file="$root/etc/loki/config.yml"
+        alloy validate ${rolePackages.bootc-context-worker}/rootfs/etc/alloy/config.alloy
+        jq -e '.uid == "lucidity-production" and (.panels | length) == 5' \
           "$root/etc/grafana/dashboards/lucidity-overview.json" >/dev/null
+        grep -Fq 'uid: lucidity-loki' "$root/etc/grafana/provisioning/datasources/prometheus.yml"
+        grep -Fq 'retention_period: 168h' "$root/etc/loki/config.yml"
+        grep -Fq '100.96.0.1:3100/loki/api/v1/push' \
+          ${rolePackages.bootc-context-worker}/rootfs/etc/alloy/config.alloy
+        grep -Fq 'json-file' ${rolePackages.bootc-context-worker}/rootfs/etc/docker/daemon.json
         grep -Fq '100.96.0.1:2586' "$root/etc/lucidity/ntfy-traefik.yml"
         grep -Fq 'LoadCredential=bao-token:/var/lib/openbao/monitoring-token' \
           "$root/usr/lib/systemd/system/alertmanager-ntfy.service"
@@ -291,6 +315,11 @@
       ${pkgs.jq}/bin/jq -e '
         .required == ["NTFY_ALERTMANAGER_TOKEN_FILE"]
       ' monitoring-schema.json >/dev/null
+      ${pkgs.secretspec}/bin/secretspec schema \
+        --file ${secretspecSource}/secretspec.toml --profile ooye-worker --output ooye-schema.json
+      ${pkgs.jq}/bin/jq -e '
+        .required == ["OOYE_REGISTRATION_FILE"]
+      ' ooye-schema.json >/dev/null
       ${pkgs.secretspec}/bin/secretspec schema \
         --file ${secretspecSource}/secretspec.toml --profile controller-runtime --output controller-runtime-schema.json
       ${pkgs.jq}/bin/jq -e '

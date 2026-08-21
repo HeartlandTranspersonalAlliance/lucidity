@@ -50,11 +50,14 @@ metric '# HELP lucidity_docker_unhealthy_containers Number of unhealthy Docker c
 metric '# TYPE lucidity_docker_unhealthy_containers gauge'
 metric "lucidity_docker_unhealthy_containers{role=\"$role\"} $unhealthy"
 
-common_services=(docker.service nebula.service lucidity-backup.timer)
+common_services=(docker.service nebula.service lucidity-backup.timer alloy.service)
 if [[ $role == controller ]]; then
-    role_services=(openbao.service coolify-controller-bootstrap.service prometheus.service prometheus-alertmanager.service prometheus-blackbox-exporter.service grafana.service ntfy.service)
+    role_services=(openbao.service coolify-controller-bootstrap.service prometheus.service prometheus-alertmanager.service prometheus-blackbox-exporter.service loki.service grafana.service ntfy.service)
 else
     role_services=(coolify-worker-storage.service coolify-worker-authorized-keys.service)
+    if [[ -s /var/lib/ooye/registration.yaml ]]; then
+        role_services+=(openbao-agent-worker.service ooye-registration.service ooye.service)
+    fi
 fi
 metric '# HELP lucidity_role_service_active Whether a required role service is active.'
 metric '# TYPE lucidity_role_service_active gauge'
