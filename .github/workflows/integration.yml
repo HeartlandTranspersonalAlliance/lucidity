@@ -3,24 +3,12 @@ name: Validate controller-worker boot connectivity
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - .github/workflows/integration.yml
-      - ci/**
-      - flake.lock
-      - flake.nix
-      - image/image-builder.env
-      - nix/**
-      - secretspec.toml
-      - scripts/build-disk.sh
-      - scripts/vm-integration.sh
-      - scripts/vm-init.sh
-      - scripts/vm-start.sh
-      - scripts/vm-validate.sh
   workflow_dispatch:
 
 permissions:
   contents: read
   packages: read
+  pull-requests: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -34,8 +22,27 @@ env:
   NIX_CACHE_WRITE: ${{ github.event_name == 'merge_group' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
 
 jobs:
-  controller-worker:
+  classify:
+    name: Select advisory integration scope
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
+    runs-on: ubuntu-24.04
+    outputs:
+      reason: ${{ steps.classifier.outputs.reason }}
+      scope: ${{ steps.classifier.outputs.scope }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - id: classifier
+        name: Classify changed files conservatively
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci-integration-classify.sh "${{ github.event_name }}"
+
+  boot:
+    name: Boot ${{ needs.classify.outputs.scope }} scope
+    needs: classify
+    if: needs.classify.outputs.scope != 'none'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -84,6 +91,7 @@ jobs:
 
       - id: controller-cache
         name: Authenticate to GHCR and restore controller cache
+        if: needs.classify.outputs.scope == 'controller' || needs.classify.outputs.scope == 'pair'
         env:
           GHCR_CACHE_WRITE: ${{ env.NIX_CACHE_WRITE }}
           GITHUB_TOKEN: ${{ github.token }}
@@ -91,6 +99,7 @@ jobs:
 
       - name: Build and validate controller disk
         id: controller
+        if: needs.classify.outputs.scope == 'controller' || needs.classify.outputs.scope == 'pair'
         env:
           CONTAINER_ENGINE: docker
           IMAGE_NAME: ${{ env.CONTROLLER_IMAGE }}
@@ -107,6 +116,7 @@ jobs:
 
       - id: worker-cache
         name: Authenticate to GHCR and restore worker cache
+        if: needs.classify.outputs.scope == 'worker' || needs.classify.outputs.scope == 'pair'
         env:
           GHCR_CACHE_WRITE: ${{ env.NIX_CACHE_WRITE }}
           GITHUB_TOKEN: ${{ github.token }}
@@ -114,6 +124,7 @@ jobs:
 
       - name: Build and validate worker disk
         id: worker
+        if: needs.classify.outputs.scope == 'worker' || needs.classify.outputs.scope == 'pair'
         env:
           CONTAINER_ENGINE: docker
           IMAGE_NAME: ${{ env.IMAGE }}
@@ -128,8 +139,28 @@ jobs:
           nix run .#disk -- build worker qcow2
           nix run .#disk -- validate image-output/worker/coolify-worker-qcow2.qcow2
 
+      - name: Boot selected image and validate system health
+        id: role-smoke
+        if: needs.classify.outputs.scope == 'controller' || needs.classify.outputs.scope == 'worker'
+        env:
+          CONTAINER_ENGINE: docker
+          LUCIDITY_VM_CONNECTIVITY_ONLY: ${{ needs.classify.outputs.scope == 'controller' && '1' || '0' }}
+          ROLE: ${{ needs.classify.outputs.scope }}
+          VM_EXPECTED_IMAGE: ${{ needs.classify.outputs.scope == 'controller' && env.CONTROLLER_IMAGE || env.IMAGE }}
+          VM_TOOL_IMAGE: ${{ env.CI_TOOLS_IMAGE }}
+        run: |
+          started=${SECONDS}
+          record_duration() {
+            echo "seconds=$((SECONDS - started))" >>"${GITHUB_OUTPUT}"
+          }
+          trap record_duration EXIT
+          nix run .#lucidity -- vm init "${ROLE}"
+          nix run .#lucidity -- vm start "${ROLE}"
+          nix run .#lucidity -- vm validate "${ROLE}"
+
       - name: Boot controller and worker and validate connectivity
         id: integration
+        if: needs.classify.outputs.scope == 'pair'
         env:
           CONTAINER_ENGINE: docker
           VM_TOOL_IMAGE: ${{ env.CI_TOOLS_IMAGE }}
@@ -197,6 +228,10 @@ jobs:
           CONTROLLER_SECONDS: ${{ steps.controller.outputs.seconds }}
           INTEGRATION_OUTCOME: ${{ steps.integration.outcome }}
           INTEGRATION_SECONDS: ${{ steps.integration.outputs.seconds }}
+          ROLE_SMOKE_OUTCOME: ${{ steps.role-smoke.outcome }}
+          ROLE_SMOKE_SECONDS: ${{ steps.role-smoke.outputs.seconds }}
+          SELECTED_REASON: ${{ needs.classify.outputs.reason }}
+          SELECTED_SCOPE: ${{ needs.classify.outputs.scope }}
           TOOLING_OUTCOME: ${{ steps.tooling.outcome }}
           TOOLING_SECONDS: ${{ steps.tooling.outputs.seconds }}
           WORKER_OUTCOME: ${{ steps.worker.outcome }}
@@ -214,13 +249,16 @@ jobs:
             comparison="$((-difference))s slower"
           fi
           {
-            echo '### Controller-worker boot connectivity'
+            echo '### Advisory boot integration'
+            echo
+            echo "Selected scope: \`${SELECTED_SCOPE}\` (${SELECTED_REASON})"
             echo
             echo '| Phase | Outcome | Duration |'
             echo '| --- | --- | ---: |'
             echo "| VM tooling | \`${TOOLING_OUTCOME:-skipped}\` | ${TOOLING_SECONDS:-0}s |"
             echo "| Controller image and disk | \`${CONTROLLER_OUTCOME:-skipped}\` | ${CONTROLLER_SECONDS:-0}s |"
             echo "| Worker image and disk | \`${WORKER_OUTCOME:-skipped}\` | ${WORKER_SECONDS:-0}s |"
+            echo "| Role boot and health | \`${ROLE_SMOKE_OUTCOME:-skipped}\` | ${ROLE_SMOKE_SECONDS:-0}s |"
             echo "| Guest boot and controller-worker SSH | \`${INTEGRATION_OUTCOME:-skipped}\` | ${INTEGRATION_SECONDS:-0}s |"
             echo "| Total | | ${elapsed}s |"
             echo

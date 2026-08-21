@@ -33,6 +33,7 @@
           openbaoKmsPlugin
           ;
         ci-hermetic-check = ciWorkflow.hermeticCheck;
+        ci-integration-classify = ciWorkflow.classify;
         ci-require-env = ciWorkflow.requireEnv;
         ci-workflow-gate = ciWorkflow.gate;
         ci-workflow-prepare = ciWorkflow.prepare;
@@ -56,6 +57,7 @@
       ];
       check = mkLucidityApp "check" ["check"];
       ci-hermetic-check.program = lib.getExe ciWorkflow.hermeticCheck;
+      ci-integration-classify.program = lib.getExe ciWorkflow.classify;
       ci-require-env.program = lib.getExe ciWorkflow.requireEnv;
       ci-workflow-gate.program = lib.getExe ciWorkflow.gate;
       ci-workflow-prepare.program = lib.getExe ciWorkflow.prepare;

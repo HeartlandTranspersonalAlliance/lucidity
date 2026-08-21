@@ -12,6 +12,11 @@
       text = stripEnvBash script;
     };
 in {
+  classify = mkProgram {
+    name = "lucidity-ci-integration-classify";
+    script = ../../scripts/ci-integration-classify.sh;
+    runtimeInputs = with pkgs; [gh jq];
+  };
   prepare = mkProgram {
     name = "lucidity-ci-workflow-prepare";
     script = ../../scripts/ci-workflow-prepare.sh;

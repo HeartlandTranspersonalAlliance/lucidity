@@ -68,7 +68,7 @@ jobs intentionally build and validate the image and AMI on one runner.
 | `ami.yml` | selected pull-request paths, manual | `ami` | Raw disk construction, AMI compatibility, optional AWS metadata and boot validation | bootc image and raw disk build; optional EBS Direct upload and EC2 launch | Keep. The unused reusable interface was removed; release owns retained AMIs itself. |
 | `audit-ami-resources.yml` | daily schedule, manual | `audit` | Disposable AMI validation resources do not leak | AWS metadata inventory and cleanup audit | Keep. A missing `AWS_AMI_AUDIT_ROLE_ARN` intentionally skips the job and must remain visible as configuration debt. |
 | `infra.yml` | selected pull-request paths, manual | `plan`, `apply` | OpenTofu formatting, validation, plan review, and protected apply | Provider initialization and remote plan | Keep path-scoped and advisory. A missing plan role or state bucket intentionally skips remote planning. |
-| `integration.yml` | selected pull-request paths, manual | `controller-worker` | Controller and worker boot together and establish strict host-key-checked SSH | Two bootc builds and two concurrent VMs | Keep the small boot-connect contract as distinct pull-request evidence. Reserve full role lifecycle and Coolify bootstrap tests for focused or release qualification. |
+| `integration.yml` | non-draft pull request, manual | `classify`, `boot` | The affected role boots healthy, or the pair establishes strict host-key-checked SSH for shared changes | Zero, one, or two bootc builds selected conservatively from the GitHub file list | Keep advisory. Unknown and mixed changes select the pair; infrastructure and documentation changes skip guest work. |
 | `notify-ci.yml` | completed CI workflow runs | `notify` | Failed job and step details reach the operator notification endpoint | GitHub API read and one ntfy publish | Keep advisory. The trusted default-branch workflow resolves its token at runtime and never becomes a merge gate. |
 | `publish.yml` | selected main pushes, manual | `publish` | Immutable controller and worker candidates exist in ECR at the source SHA | Two bootc image builds and registry pushes | Keep. The unused reusable interface was removed; publication remains separate from release retention. |
 | `release.yml` | merged PR #70, manual recovery | `prepare`, `roles`, `inventory`, `release` | Exact release identity, verified images, SBOMs, retained AMIs, manifest, tag, and GitHub release | Two parallel full image/SBOM/AMI jobs | Automatically publish v0.3.0 from PR #70's merge commit. Keep exact-version manual dispatch only for release-tool recovery. Do not split same-runner role work. |
@@ -81,6 +81,8 @@ jobs intentionally build and validate the image and AMI on one runner.
 The branch ruleset requires only the check named `required`. The `required` job
 must always start and must fail unless the Nix prepare job succeeds, every
 planned lifecycle job succeeds, and every unplanned lifecycle job is skipped.
+It invokes the versioned gate script directly with Bash and the runner's `jq`,
+so it does not repeat the Nix and Cachix bootstrap.
 Individual lifecycle, integration, AMI,
 infrastructure, publishing, audit, deployment, dependency-update, benchmark,
 and release jobs are advisory or event-specific. They must not be added as
@@ -195,7 +197,7 @@ outputs or invokes test fixtures explicitly with Bash.
 | Image payload | `nix/den/aspects/common/files/backup.sh`, controller and worker `files/bootstrap-*.sh` | Image construction reads their contents and installs the payload commands in the bootc image. |
 | Derivation test fixture | Controller and worker `tests/bootstrap.sh`; every `tests/*.sh` | Flake checks copy, patch, and invoke these fixtures explicitly; they are not public commands. |
 | General Lucidity command | `nix/pkgs/lucidity.sh`; non-CI helpers under `scripts/` for disk, VM, validation, AWS audit, and text-style behavior | `nix/pkgs/lucidity.nix` packages the public `lucidity` interface and installs helper commands under its store-owned `libexec` tree. |
-| Dedicated CI app | `scripts/ci-workflow-prepare.sh`, `ci-workflow-gate.sh`, `ci-hermetic-check.sh`, and `ci-require-env.sh` | `nix/pkgs/ci-workflow.nix` creates four pinned-runtime shell applications. GitHub Actions invokes only their public flake apps. |
+| Dedicated CI app | `scripts/ci-workflow-prepare.sh`, `ci-workflow-gate.sh`, `ci-integration-classify.sh`, `ci-hermetic-check.sh`, and `ci-require-env.sh` | `nix/pkgs/ci-workflow.nix` creates pinned-runtime applications for local and Nix checks. The lightweight prepare, classifier, environment guard, and final gate execute with Bash in GitHub before or without Nix installation. |
 
 ## Enforced runner-minute model
 

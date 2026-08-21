@@ -3,6 +3,32 @@ set -Eeuo pipefail
 
 prepare=lucidity-ci-workflow-prepare
 gate=lucidity-ci-workflow-gate
+classify=lucidity-ci-integration-classify
+
+classify_files() {
+    local expected=$1
+    shift
+    printf '%s\n' "$@" >"${TMPDIR}/changed-files"
+    actual=$(CHANGED_FILES_FILE="${TMPDIR}/changed-files" "${classify}" pull_request)
+    [[ ${actual} == "${expected}" ]] || {
+        echo "expected integration scope ${expected}, got ${actual}" >&2
+        exit 1
+    }
+}
+
+classify_files none docs/production-readiness.md tofu/modules/network/main.tf
+classify_files controller nix/den/aspects/controller/default.nix
+classify_files worker nix/den/aspects/worker/default.nix
+classify_files pair nix/den/aspects/controller/default.nix nix/den/aspects/worker/default.nix
+classify_files pair nix/den/classes/bootc/default.nix
+classify_files pair unknown/new-input.txt
+[[ $("${classify}" workflow_dispatch) == pair ]]
+
+export GITHUB_OUTPUT=${TMPDIR}/classify-output
+CHANGED_FILES_FILE="${TMPDIR}/changed-files" "${classify}" pull_request >/dev/null
+grep -Fxq 'scope=pair' "${GITHUB_OUTPUT}"
+grep -Fxq 'reason=shared-or-unknown-change' "${GITHUB_OUTPUT}"
+unset GITHUB_OUTPUT
 
 for event in pull_request merge_group push; do
     plan=$(${prepare} "${event}" none warm)
