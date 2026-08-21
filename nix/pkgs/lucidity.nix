@@ -1,9 +1,14 @@
-{pkgs}: let
+{
+  pkgs,
+  ciWorkflow,
+  nixpkgsProvenance,
+}: let
   inherit (pkgs) lib;
   stripEnvBash = path:
     lib.removePrefix "#!/usr/bin/env bash\n" (builtins.readFile path);
   runtimeScriptPaths = [
     ../../scripts/audit-ami-validation-resources.sh
+    ../../scripts/audit-production-readiness.sh
     ../../scripts/build-disk.sh
     ../../scripts/check-text-style.sh
     ../../scripts/validate-ami-import.sh
@@ -38,31 +43,33 @@
 in
   (pkgs.writeShellApplication {
     name = "lucidity";
-    runtimeInputs = with pkgs; [
-      awscli2
-      coreutils
-      curl
-      findutils
-      gawk
-      git
-      gh
-      gnugrep
-      gnused
-      jq
-      nix
-      nebula
-      openbao
-      openssl
-      openssh
-      opentofu
-      podman
-      qemu-utils
-      ripgrep
-      secretspec
-      shellcheck
-      coldsnap
-      xorriso
-    ];
+    runtimeInputs =
+      (with pkgs; [
+        awscli2
+        coreutils
+        curl
+        findutils
+        gawk
+        git
+        gh
+        gnugrep
+        gnused
+        jq
+        nix
+        nebula
+        openbao
+        openssl
+        openssh
+        opentofu
+        podman
+        qemu-utils
+        ripgrep
+        secretspec
+        shellcheck
+        coldsnap
+        xorriso
+      ])
+      ++ [ciWorkflow.prepare];
     text =
       builtins.replaceStrings
       [
@@ -70,12 +77,22 @@ in
         "@lucidityDeploymentValidation@"
         "@lucidityRuntimeScripts@"
         "@luciditySyftConfig@"
+        "@lucidityNixpkgsUrl@"
+        "@lucidityNixpkgsRev@"
+        "@lucidityNixpkgsNarHash@"
       ]
       [
         (lib.getExe lucidityAmiAudit)
         (lib.getExe lucidityDeploymentValidation)
         "${lucidityRuntimeScripts}/libexec/lucidity"
         "${../../.github/syft.yaml}"
+        nixpkgsProvenance.url
+        (
+          if nixpkgsProvenance.rev == null
+          then ""
+          else nixpkgsProvenance.rev
+        )
+        nixpkgsProvenance.narHash
       ]
       (builtins.readFile ./lucidity.sh);
   }).overrideAttrs (old: {

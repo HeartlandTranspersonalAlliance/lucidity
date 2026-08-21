@@ -69,6 +69,42 @@ wait_for_ssh() {
     return 1
 }
 
+report_controller_bootstrap_failure() {
+    echo "Coolify controller bootstrap or a required dependency failed" >&2
+    "${admin_ssh[@]}" systemctl --no-pager --full status \
+        lucidity-nix-profile.service \
+        coolify-controller-storage.service \
+        docker.service \
+        openbao.service \
+        aws-workload-credentials-provider-sm.service \
+        coolify-controller-bootstrap.service >&2 || true
+    "${admin_ssh[@]}" systemctl --no-pager --full --failed >&2 || true
+    "${admin_ssh[@]}" systemctl --no-pager --full list-dependencies \
+        coolify-controller-bootstrap.service >&2 || true
+    "${admin_ssh[@]}" journalctl --no-pager -n 400 \
+        -u lucidity-nix-profile.service \
+        -u coolify-controller-storage.service \
+        -u docker.service \
+        -u openbao.service \
+        -u aws-workload-credentials-provider-sm.service \
+        -u coolify-controller-bootstrap.service >&2 || true
+    "${admin_ssh[@]}" journalctl -b --no-pager -n 100 \
+        _AUDIT_TYPE_NAME=AVC >&2 || true
+}
+
+controller_required_dependency_failed() {
+    "${admin_ssh[@]}" bash -s <<'REMOTE'
+for unit in \
+    lucidity-nix-profile.service \
+    coolify-controller-storage.service \
+    docker.service \
+    openbao.service; do
+    systemctl is-failed --quiet "${unit}" && exit 0
+done
+exit 1
+REMOTE
+}
+
 wait_for_controller() {
     local state attempt
     for ((attempt = 1; attempt <= controller_wait_attempts; attempt++)); do
@@ -76,14 +112,12 @@ wait_for_controller() {
         if [[ ${state} == active ]]; then
             return 0
         fi
-        if "${admin_ssh[@]}" systemctl is-failed --quiet coolify-controller-storage.service; then
-            echo "Coolify controller storage failed" >&2
-            "${admin_ssh[@]}" journalctl -u coolify-controller-storage.service -u coolify-controller-bootstrap.service --no-pager -n 200 >&2 || true
+        if controller_required_dependency_failed; then
+            report_controller_bootstrap_failure
             return 1
         fi
         if [[ ${state} == failed ]]; then
-            echo "Coolify controller bootstrap failed" >&2
-            "${admin_ssh[@]}" journalctl -u coolify-controller-bootstrap.service --no-pager -n 200 >&2 || true
+            report_controller_bootstrap_failure
             return 1
         fi
         if ! "${container_engine}" container inspect "${vm_name}" >/dev/null 2>&1; then
@@ -93,7 +127,7 @@ wait_for_controller() {
         sleep 2
     done
     echo "timed out waiting for Coolify controller bootstrap" >&2
-    "${admin_ssh[@]}" journalctl -u coolify-controller-bootstrap.service --no-pager -n 200 >&2 || true
+    report_controller_bootstrap_failure
     return 1
 }
 
@@ -119,20 +153,22 @@ printf '%s' "${running}" | sha256sum | cut -d ' ' -f 1
 REMOTE
 }
 
-report_nix_install_failure() {
-    echo "Determinate Nix installation failed" >&2
+report_nix_bootstrap_failure() {
+    echo "Determinate Nix bootstrap failed" >&2
     "${admin_ssh[@]}" systemctl --no-pager --full status \
-        determinate-nix-install.service \
-        nix-directory.service \
+        lucidity-nix-selinux.service \
+        lucidity-nix-seed.service \
         nix.mount \
         nix-daemon.socket \
-        nix-daemon.service >&2 || true
+        nix-daemon.service \
+        lucidity-nix-profile.service >&2 || true
     "${admin_ssh[@]}" journalctl --no-pager -n 300 \
-        -u determinate-nix-install.service \
-        -u nix-directory.service \
+        -u lucidity-nix-selinux.service \
+        -u lucidity-nix-seed.service \
         -u nix.mount \
         -u nix-daemon.socket \
-        -u nix-daemon.service >&2 || true
+        -u nix-daemon.service \
+        -u lucidity-nix-profile.service >&2 || true
     "${admin_ssh[@]}" journalctl -b --no-pager -n 100 \
         _AUDIT_TYPE_NAME=AVC >&2 || true
 }
@@ -154,7 +190,8 @@ assert_common_host() {
     "${admin_ssh[@]}" bash -Eeuo pipefail -s <<'REMOTE'
 systemctl is-active --quiet docker.service
 systemctl is-active --quiet sshd.service
-systemctl is-active --quiet determinate-nix-install.service
+systemctl is-active --quiet lucidity-nix-selinux.service
+systemctl is-active --quiet lucidity-nix-seed.service
 systemctl is-active --quiet nix-daemon.service
 systemctl is-active --quiet lucidity-nix-profile.service
 systemctl is-active --quiet lucidity-admin-authorized-key.service
@@ -163,6 +200,7 @@ systemctl is-enabled --quiet bootc-fetch-apply-updates.timer
 mountpoint --quiet /nix
 [[ $(stat -c '%d:%i' /nix) == "$(stat -c '%d:%i' /var/lib/nix)" ]]
 [[ -s /nix/receipt.json ]]
+semodule -l | awk '$1 == "nix" { found = 1 } END { exit !found }'
 docker info --format '{{json .ServerVersion}}' >/dev/null
 docker compose version >/dev/null
 bootc status >/dev/null
@@ -206,6 +244,18 @@ REMOTE
     controller_state >/dev/null
 }
 
+assert_controller_connectivity() {
+    "${admin_ssh[@]}" bash -Eeuo pipefail -s <<'REMOTE'
+systemctl is-active --quiet coolify-controller-storage.service
+systemctl is-active --quiet openbao.service
+systemctl is-enabled --quiet coolify-controller-bootstrap.service
+! systemctl is-failed --quiet coolify-controller-bootstrap.service
+mountpoint --quiet /data/coolify
+matchpathcon -V /data/coolify >/dev/null
+[[ $(stat -c %C /data/coolify) == *:container_file_t:* ]]
+REMOTE
+}
+
 wait_for_ssh "${admin_identity}"
 "${admin_login[@]}" true
 "${admin_login[@]}" sudo -n true
@@ -219,11 +269,18 @@ if ! cloud_status=$("${admin_ssh[@]}" cloud-init status --wait); then
     exit 1
 fi
 printf '%s\n' "${cloud_status}"
-if ! "${admin_ssh[@]}" systemctl start determinate-nix-install.service; then
-    report_nix_install_failure
+if ! "${admin_ssh[@]}" systemctl start lucidity-nix-profile.service; then
+    report_nix_bootstrap_failure
     exit 1
 fi
 assert_common_host
+
+if [[ ${role} == controller ]] && \
+    "${admin_ssh[@]}" test -e /etc/lucidity/vm-connectivity-only; then
+    assert_controller_connectivity
+    echo "Controller VM connectivity validation passed: cloud-init, SSH, Docker, bootc, Determinate Nix, persistent controller storage, and SELinux enforcing"
+    exit 0
+fi
 
 if [[ ${role} == worker ]]; then
     coolify_ssh=("${ssh_base[@]}" -i "${coolify_identity}" root@127.0.0.1)

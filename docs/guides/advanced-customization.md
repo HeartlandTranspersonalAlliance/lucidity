@@ -42,5 +42,6 @@ nix flake check --show-trace --print-build-logs
 ```
 
 For image or service changes, also run the appropriate controller or worker VM
-test. For networking changes, run `nix run .#test-mesh`. See
+test. The four-node mesh VM is intentionally outside the default flake checks;
+for networking, firewall, or relay changes, run `nix run .#test-mesh`. See
 [local VM validation](../local-vm-validation.md) for resource requirements.

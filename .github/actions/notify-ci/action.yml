@@ -1,0 +1,17 @@
+name: Notify ntfy about a failed workflow
+description: Report a completed failed workflow without executing code from its head revision
+inputs:
+  ntfy-token:
+    description: Publish-only token for the Lucidity CI ntfy topic
+    required: false
+  github-token:
+    description: Ephemeral token used to read failed job and step metadata
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        NTFY_TOKEN: ${{ inputs.ntfy-token }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: "$GITHUB_ACTION_PATH/notify.sh"

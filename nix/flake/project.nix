@@ -15,7 +15,10 @@ in {
       inputs.home-manager.lib.homeManagerConfiguration {
         pkgs = inputs.nixpkgs.legacyPackages.x86_64-linux;
         extraSpecialArgs = {inherit role;};
-        modules = [../home/admin.nix];
+        modules = [
+          inputs.determinate.homeManagerModules.default
+          ../home/admin.nix
+        ];
       }
   );
 
@@ -25,8 +28,13 @@ in {
     system,
     ...
   }: let
-    lucidity = import ../pkgs/lucidity.nix {inherit pkgs;};
     ciWorkflow = import ../pkgs/ci-workflow.nix {inherit pkgs;};
+    nixpkgsProvenance = {
+      url = "https://flakehub.com/f/DeterminateSystems/nixpkgs-weekly/0";
+      rev = inputs.nixpkgs.sourceInfo.rev or null;
+      narHash = inputs.nixpkgs.sourceInfo.narHash;
+    };
+    lucidity = import ../pkgs/lucidity.nix {inherit pkgs ciWorkflow nixpkgsProvenance;};
     lucidityRelease = pkgs.symlinkJoin {
       name = "lucidity-release-tools";
       paths = [lucidity];
@@ -43,13 +51,13 @@ in {
     openbaoKmsPlugin = pkgs.callPackage ../pkgs/openbao-kms-aws.nix {
       openbaoPluginsSrc = inputs.openbao-plugins;
     };
+    meshVmCheck = import ../den/classes/bootc/tests/mesh.nix {inherit pkgs;};
     awsConfig =
       pkgs.runCommand "lucidity-aws-config.tf.json" {
         nativeBuildInputs = [pkgs.jq];
       } ''
         jq '
           .variable.account_cost_budget_notification_email.default = null |
-          .variable.node_alarm_notification_email.default = null |
           .variable.controller_ami_id.default = null |
           .variable.worker_ami_id.default = null |
           .variable.cloudflare_zone_id.default = null |
@@ -120,6 +128,7 @@ in {
             passwordLocked = true;
             passwordlessSudo = true;
           };
+          nixpkgs = nixpkgsProvenance;
         }
       );
     in {
@@ -192,6 +201,7 @@ in {
         ciWorkflow
         lucidity
         lucidityRelease
+        meshVmCheck
         mkLucidityApp
         mkLucidityAppWith
         mkPatchedSource

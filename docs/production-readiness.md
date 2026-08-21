@@ -7,16 +7,36 @@ observable failure rather than automatic failover.
 
 ## Release gate
 
-Version 0.2.1 is the first production-candidate release. Before publishing it:
+Version 0.3.0 is the first production-candidate release. Before publishing it:
 
 1. Merge the complete `nix flake check` graph through the merge queue.
-2. Publish the immutable controller and worker images, SBOMs, checksums, and
+2. Manually run **Validate locked flake** with the smallest lifecycle scope
+   covering bootc, persistent-storage, native Nix, SELinux, or recovery changes.
+   Use `both` only when role-specific persistence differs or for an explicit
+   dual-role release qualification.
+3. Publish the immutable controller and worker images, SBOMs, checksums, and
    retained AMIs from the release workflow.
-3. Confirm the GitHub repository deletes merged branches automatically.
-4. Confirm the `production` environment prevents self-review and requires one
+4. Confirm the GitHub repository deletes merged branches automatically.
+5. Confirm the `production` environment prevents self-review and requires one
    independent ITSM reviewer.
 
 ## Infrastructure gate
+
+Capture a local, read-only AWS inventory before each staged plan:
+
+```console
+nix run .#lucidity -- infra audit --json --output .lucidity/production-readiness.json
+```
+
+The report reads configuration metadata only, records unavailable APIs instead
+of guessing, and never calls a Secrets Manager value API. Keep generated reports
+under `.lucidity/`; they contain account metadata and must not be committed.
+Review remote-state drift as a saved plan, without applying it:
+
+```console
+nix run .#lucidity -- infra refresh-plan .lucidity/production-refresh.tfplan
+nix run .#lucidity -- infra show .lucidity/production-refresh.tfplan
+```
 
 Pull requests create a redacted OpenTofu plan summary when the planning role
 and state bucket variables are configured. Production apply is manual from

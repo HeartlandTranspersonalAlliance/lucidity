@@ -3,7 +3,7 @@
 GitHub workflows are runner adapters around flake apps. `nix flake check` is the
 required hermetic graph.
 
-The v0.2.1 workflow responsibility map, measurements, and optimization decisions
+The v0.3.0 workflow responsibility map, measurements, and optimization decisions
 are recorded in [the GitHub Actions audit](ci-workflow-audit.md). Reproduce its
 run metadata with `lucidity ci workflow audit` from the locked Nix environment.
 
@@ -38,27 +38,32 @@ the same time without blocking publication of an unrelated revision.
 
 ## Trusted lifecycle checks
 
-Pull requests and main pushes run the hermetic graph. Path-selected pull requests
-also run the advisory AMI compatibility and integration workflows. The
-`Nix prepare` job publishes one versioned JSON plan before evaluating the
-hermetic graph. Its checked-in `ci/lifecycle-targets.json` graph assigns ordered
-path deltas to the controller, worker, and their common ancestor. On a merge
-group, the fail-safe classifier records the exact ancestor comparison and
-selects the controller lifecycle, worker lifecycle, both, or neither. A
-common-node change propagates to both descendants. Unknown paths and
-classification errors select both. Scheduled and manual validation always plan
-both roles.
-Downstream job conditions, cache selection, the human-readable job summary, and
-the stable `required` gate all consume that same plan. GitHub job conditions
-parse the JSON plan directly rather than depending on parallel scalar outputs.
-The gate fails unless prepare succeeds, every planned lifecycle succeeds, and
-every unplanned lifecycle reports `skipped`.
+Pull requests, merge groups, and main pushes run the hermetic graph. Selected
+pull requests also run the separate advisory AMI compatibility and
+controller-worker boot-connect workflows. Full bootc switch, update, and
+rollback guests are not automatic merge gates.
 
-Manual validation accepts `lifecycle_cache=isolated`. That mode bypasses the
-Lucidity Cachix and role-scoped GHCR caches for both lifecycle jobs, providing a
-cold-cache release check. It also skips cache cleanup because no cache login or
-builder was created. The default `warm` mode restores both caches and is used
-for the same-SHA warm comparison.
+The **Validate locked flake** manual dispatch accepts `lifecycle_scope=none`,
+`controller`, `worker`, or `both`; `none` is the safe default. Choose only an
+affected role for role-specific storage or service changes. Choose `worker` as
+the representative full lifecycle for shared bootc mechanics. Choose `both`
+only when shared persistent-state behavior differs by role or when explicitly
+qualifying a release candidate. The controller lifecycle uses the
+connectivity-only fixture, so it proves native Nix, SELinux, OpenBao, storage,
+and deployment transitions without pulling the full Coolify application.
+Full controller bootstrap remains an explicit local qualification test.
+
+The `Nix prepare` job publishes a small versioned plan containing the event,
+manual scope, cache mode, and role targets. Downstream job conditions and the
+stable `required` gate consume that plan. The gate fails unless preparation
+succeeds, each manually planned lifecycle succeeds, and every unplanned
+lifecycle reports `skipped`.
+
+Manual validation also accepts `lifecycle_cache=isolated`. That mode bypasses
+the Lucidity Cachix and role-scoped GHCR cache for each selected lifecycle job,
+providing an explicit cold-cache check. It skips cache cleanup because no cache
+login or builder was created. The default `warm` mode restores the selected
+role caches.
 
 ## Performance reporting
 

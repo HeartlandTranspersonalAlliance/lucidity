@@ -41,8 +41,18 @@
       ../den/aspects
     ];
     manifestsCheck = pkgs.runCommand "lucidity-manifest-check" {} ''
-      ${pkgs.jq}/bin/jq -e '.role == "controller" and .overlayIPv4 == "100.96.0.1"' ${rolePackages.host-manifest-controller} >/dev/null
-      ${pkgs.jq}/bin/jq -e '.role == "worker" and .overlayIPv4 == "100.96.0.2"' ${rolePackages.host-manifest-worker} >/dev/null
+      ${pkgs.jq}/bin/jq -e '
+        .role == "controller" and .overlayIPv4 == "100.96.0.1" and
+        .nixpkgs.url == "https://flakehub.com/f/DeterminateSystems/nixpkgs-weekly/0" and
+        (.nixpkgs.rev | test("^[0-9a-f]{40}$")) and
+        (.nixpkgs.narHash | startswith("sha256-"))
+      ' ${rolePackages.host-manifest-controller} >/dev/null
+      ${pkgs.jq}/bin/jq -e '
+        .role == "worker" and .overlayIPv4 == "100.96.0.2" and
+        .nixpkgs.url == "https://flakehub.com/f/DeterminateSystems/nixpkgs-weekly/0" and
+        (.nixpkgs.rev | test("^[0-9a-f]{40}$")) and
+        (.nixpkgs.narHash | startswith("sha256-"))
+      ' ${rolePackages.host-manifest-worker} >/dev/null
       touch "$out"
     '';
     cloudInitCheck =
@@ -56,21 +66,39 @@
         ADMIN_SSH_PUBLIC_KEY="$admin_key" \
           ${rolePackages.cloud-init-controller}/bin/lucidity-cloud-init-controller user-data 10.0.2.2:5001 > controller.yml
         ADMIN_SSH_PUBLIC_KEY="$admin_key" \
+          LUCIDITY_VM_CONNECTIVITY_ONLY=1 \
+          ${rolePackages.cloud-init-controller}/bin/lucidity-cloud-init-controller user-data 10.0.2.2:5001 > controller-connectivity.yml
+        ADMIN_SSH_PUBLIC_KEY="$admin_key" \
           COOLIFY_WORKER_SSH_PUBLIC_KEY="$admin_key" \
           ${rolePackages.cloud-init-worker}/bin/lucidity-cloud-init-worker user-data 10.0.2.2:5000 > worker.yml
         ${rolePackages.cloud-init-controller}/bin/lucidity-cloud-init-controller meta-data > controller-meta.json
         ${rolePackages.cloud-init-worker}/bin/lucidity-cloud-init-worker meta-data > worker-meta.json
         tail -n +2 controller.yml > controller.json
+        tail -n +2 controller-connectivity.yml > controller-connectivity.json
         tail -n +2 worker.yml > worker.json
         jq -e '
           .hostname == "coolify-controller-test" and
           (.users[1].ssh_authorized_keys | length) == 1 and
           any(.write_files[]; .path == "/etc/lucidity/admin-authorized-key") and
-          any(.write_files[]; .path == "/etc/systemd/system/openbao.service.d/99-lucidity-vm-fixture.conf")
+          any(
+            .write_files[];
+            .path == "/etc/systemd/system/openbao.service.d/99-lucidity-vm-fixture.conf" and
+            (.content | contains("ExecStartPre=\n"))
+          ) and
+          any(.runcmd[]; . == ["systemctl", "daemon-reload"]) and
+          any(.runcmd[]; . == ["systemctl", "restart", "openbao.service"]) and
+          any(.runcmd[]; . == ["systemctl", "reset-failed", "coolify-controller-bootstrap.service"]) and
+          any(.runcmd[]; . == ["systemctl", "start", "--no-block", "coolify-controller-bootstrap.service"]) and
+          all(.write_files[]; .path != "/etc/lucidity/vm-connectivity-only")
         ' controller.json >/dev/null
         jq -e '
+          .hostname == "coolify-controller-test" and
+          any(.write_files[]; .path == "/etc/lucidity/vm-connectivity-only")
+        ' controller-connectivity.json >/dev/null
+        jq -e '
           .hostname == "coolify-worker-test" and
-          any(.write_files[]; .path == "/etc/coolify-worker/authorized_keys")
+          any(.write_files[]; .path == "/etc/coolify-worker/authorized_keys") and
+          .runcmd == []
         ' worker.json >/dev/null
         jq -e '
           ."instance-id" == "coolify-controller-local-1" and
@@ -86,9 +114,20 @@
     policyCheck = pkgs.runCommand "lucidity-policy-check" {} ''
       grep -Fq 'PermitRootLogin no' ${rolePackages.bootc-context-controller}/rootfs/etc/ssh/sshd_config.d/40-lucidity.conf
       grep -Fq 'PermitRootLogin prohibit-password' ${rolePackages.bootc-context-worker}/rootfs/etc/ssh/sshd_config.d/40-lucidity.conf
-      grep -Fq 'nix-store --load-db' ${rolePackages.bootc-context-controller}/rootfs/usr/libexec/lucidity/activate-nix-profile
-      grep -Fq '[[ -e $destination ]] || cp -a' ${rolePackages.bootc-context-controller}/rootfs/usr/libexec/lucidity/activate-nix-profile
-      grep -Fq 'install -d -m 0755 /nix ' ${rolePackages.bootc-context-controller}/Containerfile
+      grep -Fq 'dnf -y install dnf-plugins-core epel-release' ${rolePackages.bootc-context-controller}/Containerfile
+      grep -Fq 'nix nix-daemon rsyslog' ${rolePackages.bootc-context-controller}/Containerfile
+      grep -Fq 'rpm -qf' ${rolePackages.bootc-context-controller}/Containerfile
+      grep -Fq 'nix-installer install linux' ${rolePackages.bootc-context-controller}/Containerfile
+      grep -Fq 'determinate-nix.pp' ${rolePackages.bootc-context-controller}/Containerfile
+      grep -Fq 'nix.fc' ${rolePackages.bootc-context-controller}/Containerfile
+      grep -Fq 'determinate-nix.fc' ${rolePackages.bootc-context-controller}/Containerfile
+      ! grep -Fq 'install -d -m 0755 /nix' ${rolePackages.bootc-context-controller}/Containerfile
+      test -f ${rolePackages.bootc-context-controller}/rootfs/usr/lib/systemd/system/nix.mount
+      test -f ${rolePackages.bootc-context-controller}/rootfs/usr/lib/systemd/system/lucidity-nix-selinux.service
+      test -x ${rolePackages.bootc-context-controller}/rootfs/usr/libexec/lucidity/provision-determinate-nix
+      grep -Fq 'What=/var/lib/nix' ${rolePackages.bootc-context-controller}/rootfs/usr/lib/systemd/system/nix.mount
+      grep -Fq 'semodule -i "$policy"' ${rolePackages.bootc-context-controller}/rootfs/usr/libexec/lucidity/install-determinate-nix-selinux-policy
+      grep -Fq 'NIX_REMOTE=daemon' ${rolePackages.bootc-context-controller}/rootfs/usr/libexec/lucidity/activate-nix-profile
       grep -Fq 'lucidity-admin-authorized-key.service' ${rolePackages.bootc-context-worker}/Containerfile
       test -f ${rolePackages.bootc-context-controller}/rootfs/usr/share/lucidity/nix-smoke/flake.nix
       test -f ${rolePackages.bootc-context-controller}/rootfs/usr/share/lucidity/nix-smoke/flake.lock
@@ -107,6 +146,32 @@
       ! grep -R -E 'GetSecretValue|BatchGetSecretValue' ${rolePackages.bootc-context-controller}/rootfs/usr/libexec
       touch "$out"
     '';
+    monitoringConfigCheck =
+      pkgs.runCommand "lucidity-monitoring-config-check" {
+        nativeBuildInputs = [
+          pkgs.gnused
+          pkgs.jq
+          pkgs.prometheus.cli
+          pkgs.prometheus-alertmanager
+          pkgs.prometheus-blackbox-exporter
+        ];
+      } ''
+        root=${rolePackages.bootc-context-controller}/rootfs
+        sed "s|/etc/prometheus/rules.yml|$root/etc/prometheus/rules.yml|" \
+          "$root/etc/prometheus/prometheus.yml" > prometheus.yml
+        promtool check config prometheus.yml
+        promtool check rules "$root/etc/prometheus/rules.yml"
+        amtool check-config "$root/etc/alertmanager/alertmanager.yml"
+        blackbox_exporter --config.check --config.file="$root/etc/prometheus/blackbox.yml"
+        jq -e '.uid == "lucidity-production" and (.panels | length) == 3' \
+          "$root/etc/grafana/dashboards/lucidity-overview.json" >/dev/null
+        grep -Fq '100.96.0.1:2586' "$root/etc/lucidity/ntfy-traefik.yml"
+        grep -Fq 'LoadCredential=bao-token:/var/lib/openbao/monitoring-token' \
+          "$root/usr/lib/systemd/system/alertmanager-ntfy.service"
+        grep -Fq -- '--web.listen-address=100.96.0.2:9100' \
+          ${rolePackages.bootc-context-worker}/rootfs/usr/lib/systemd/system/prometheus-node-exporter.service
+        touch "$out"
+      '';
     infrastructureCheck =
       pkgs.runCommand "lucidity-infrastructure-check" {
         nativeBuildInputs = [
@@ -124,7 +189,6 @@
           . as $root |
           ([
             "account_cost_budget_notification_email",
-            "node_alarm_notification_email",
             "controller_ami_id",
             "worker_ami_id",
             "cloudflare_zone_id",
@@ -218,6 +282,24 @@
       ${pkgs.jq}/bin/jq -e '
         (.required | sort) == ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "RESTIC_PASSWORD_FILE"]
       ' backup-worker-schema.json >/dev/null
+      ${pkgs.secretspec}/bin/secretspec schema \
+        --file ${secretspecSource}/secretspec.toml --profile monitoring-controller --output monitoring-schema.json
+      ${pkgs.jq}/bin/jq -e '
+        .required == ["NTFY_ALERTMANAGER_TOKEN_FILE"]
+      ' monitoring-schema.json >/dev/null
+      ${pkgs.secretspec}/bin/secretspec schema \
+        --file ${secretspecSource}/secretspec.toml --profile controller-runtime --output controller-runtime-schema.json
+      ${pkgs.jq}/bin/jq -e '
+        (.required | sort) == [
+          "COOLIFY_APP_ID",
+          "COOLIFY_APP_KEY",
+          "COOLIFY_DB_PASSWORD",
+          "COOLIFY_PUSHER_APP_ID",
+          "COOLIFY_PUSHER_APP_KEY",
+          "COOLIFY_PUSHER_APP_SECRET",
+          "COOLIFY_REDIS_PASSWORD"
+        ]
+      ' controller-runtime-schema.json >/dev/null
       touch "$out"
     '';
     repositoryCheck =
@@ -261,14 +343,48 @@
 
         rg -q '^\[profiles\.coolify\]$' secretspec.toml
         rg -q '^aws-production = "awssm://us-east-2?' secretspec.toml
-        rg -q '^COOLIFY_API_TOKEN = \{ required = true \}$' secretspec.toml
+        rg -Fq 'openbao-production = { uri = "openbao://127.0.0.1:8200/secret", credentials = { token = "local-keyring" } }' secretspec.toml
+        rg -Fq 'local-dotenv = "dotenv://.env"' secretspec.toml
+        rg -Fq 'local-keyring = "keyring://lucidity"' secretspec.toml
+        rg -Fq 'onepassword-lucidity = "onepassword://Lucidity"' secretspec.toml
+        rg -Fq 'bitwarden-lucidity = "bw://Lucidity"' secretspec.toml
+        rg -Fq 'ci-environment = "env://"' secretspec.toml
+        rg -Fq 'aws-controller-runtime = "awssm://us-east-2"' secretspec.toml
+        rg -Fq 'COOLIFY_API_TOKEN = { required = true, providers = ["openbao-production"] }' secretspec.toml
         rg -Fq 'RESTIC_PASSWORD_FILE = { description = "Restic repository encryption password materialized as a private temporary file", required = false, as_path = true }' secretspec.toml
         rg -q '^\[scopes\.backup-aws\]$' secretspec.toml
         rg -q '^\[scopes\.backup-s3\]$' secretspec.toml
+        rg -q '^\[scopes\.controller-runtime\]$' secretspec.toml
+        rg -q '^\[scopes\.operator-management\]$' secretspec.toml
+        rg -q '^\[scopes\.openbao-cli\]$' secretspec.toml
+        test "$(rg -c 'providers = \["aws-controller-runtime"\], ref = \{ item = "lucidity/production/controller-runtime"' secretspec.toml)" -eq 7
         rg -q 'coolify-worker-storage.service' nix/den/classes/bootc/image.nix
         rg -q 'Environment=COOLIFY_CURL_BIN=/usr/bin/curl' nix/den/classes/bootc/image.nix
         rg -q 'lucidity-admin-authorized-key.service' nix/den/classes/bootc/image.nix
         rg -Fq 'secretspec run' nix/pkgs/cloud-init-fixture.nix
+        rg -Fq -- '--scope "$scope"' nix/pkgs/lucidity.sh
+        rg -Fqx '.env' .gitignore
+        rg -Fqx '.env.*' .gitignore
+        rg -Fqx '!.env.example' .gitignore
+        ! rg -n 'github:NixOS/nixpkgs' flake.nix nix/smoke/flake.nix
+        rg -Fq 'nixpkgs.url = "https://flakehub.com/f/DeterminateSystems/nixpkgs-weekly/0";' flake.nix
+        rg -Fq 'inputs.nixpkgs.url = "https://flakehub.com/f/DeterminateSystems/nixpkgs-weekly/0";' nix/smoke/flake.nix
+        rg -Fq 'home-manager.url = "https://flakehub.com/f/nix-community/home-manager/0";' flake.nix
+        rg -Fq 'determinate.url = "https://flakehub.com/f/DeterminateSystems/determinate/3";' flake.nix
+        rg -Fq 'inputs.determinate.homeManagerModules.default' nix/flake/project.nix
+        root_nixpkgs=$(jq -r '.nodes.root.inputs.nixpkgs' flake.lock)
+        test "$(jq -r --arg node "$root_nixpkgs" '.nodes[$node].original.url' flake.lock)" = \
+          'https://flakehub.com/f/DeterminateSystems/nixpkgs-weekly/0'
+        test "$(jq -r '.nodes.nixpkgs.original.url' nix/smoke/flake.lock)" = \
+          'https://flakehub.com/f/DeterminateSystems/nixpkgs-weekly/0'
+        test "$(jq -r '.nodes["home-manager"].original.url' flake.lock)" = \
+          'https://flakehub.com/f/nix-community/home-manager/0'
+        test "$(jq -r '.nodes.determinate.original.url' flake.lock)" = \
+          'https://flakehub.com/f/DeterminateSystems/determinate/3'
+        rg -Fq 'LUCIDITY_OPERATOR_PROVIDER:-}' nix/pkgs/lucidity.sh
+        rg -Fq 'LUCIDITY_BOOTSTRAP_PROVIDER:-local-keyring' nix/pkgs/lucidity.sh
+        rg -Fq -- '--argjson schema_version 3' nix/pkgs/lucidity.sh
+        ! grep -Fq '@lucidityNixpkgs' ${lucidity}/bin/lucidity
         rg -Fq 'run: nix run .#ci-hermetic-check' .github/workflows/validate.yml
         ! rg -q 'checks\.x86_64-linux|make |\./scripts/' .github/workflows/validate.yml
         rg -Fq 'run: nix run .#audit-ami-resources' .github/workflows/audit-ami-resources.yml
@@ -279,11 +395,23 @@
           echo "GitHub workflows must invoke flake apps instead of Make or repository scripts" >&2
           exit 1
         fi
+        for workflow in .github/workflows/*.yml; do
+          workflow_name="''${workflow##*/}"
+          rg -Fq "| \`''${workflow_name}\` |" docs/reference/ci-workflow-audit.md || {
+            echo "GitHub workflow is missing from the responsibility map: ''${workflow_name}" >&2
+            exit 1
+          }
+        done
         rg -Fq 'run: nix run .#release -- prepare' .github/workflows/release.yml
+        rg -Fq 'pull_request:' .github/workflows/release.yml
+        rg -Fq 'types:' .github/workflows/release.yml
+        rg -Fq -- '- closed' .github/workflows/release.yml
+        rg -Fq "github.event.pull_request.merged == true && github.event.pull_request.number == 70" .github/workflows/release.yml
         rg -Fq 'target_version:' .github/workflows/release.yml
-        rg -Fq 'RELEASE_TARGET_VERSION: ''${{ inputs.target_version }}' .github/workflows/release.yml
+        rg -Fq "inputs.target_version || '0.3.0'" .github/workflows/release.yml
         ! rg -q 'inputs\.bump|REQUESTED_BUMP' .github/workflows/release.yml
         rg -Fq 'source_sha:' .github/workflows/release.yml
+        rg -Fq 'inputs.source_sha || github.event.pull_request.merge_commit_sha' .github/workflows/release.yml
         rg -Fq 'tooling_sha: ''${{ steps.version.outputs.tooling_sha }}' .github/workflows/release.yml
         test "$(rg -F 'ref: ''${{ needs.prepare.outputs.tooling_sha }}' .github/workflows/release.yml | wc -l)" -eq 3
         ! rg -Fq 'ref: ''${{ needs.prepare.outputs.source_sha }}' .github/workflows/release.yml
@@ -298,6 +426,7 @@
         rg -Fq 'podman pull --authfile "''${REGISTRY_AUTH_FILE}" "''${SOURCE_IMAGE}"' scripts/build-disk.sh
         ! rg -q 'cat .*docker_config|cp .*docker_config' scripts/build-disk.sh
         rg -Fq 'nix/pkgs/lucidity.sh | scripts/build-disk.sh)' nix/pkgs/lucidity.sh
+        rg -Fq 'IMAGE_SIZE_GIB=16' image/image-builder.env
         rg -Fq 'run: nix run .#ci -- timing summarize' .github/workflows/release.yml
         ! rg -Fq 'uses: ./.github/workflows/ami.yml' .github/workflows/release.yml
         ! rg -Fq 'uses: ./.github/workflows/publish.yml' .github/workflows/release.yml
@@ -314,33 +443,33 @@
         rg -Fq 'run: nix run .#ci-workflow-prepare' .github/workflows/validate.yml
         rg -Fq 'run: nix run .#ci-hermetic-check' .github/workflows/validate.yml
         rg -Fq 'run: nix run .#ci-workflow-gate' .github/workflows/validate.yml
-        ! rg -Fq 'ci workflow classify' nix/pkgs/lucidity.sh .github/workflows/validate.yml
+        rg -Fq 'ci workflow plan EVENT [none|controller|worker|both] [warm|isolated]' nix/pkgs/lucidity.sh
         ! rg -q '^        run: \|' .github/workflows/validate.yml
         ! rg -q '^  release:' .github/workflows/validate.yml
         rg -q '^  lifecycle-controller:' .github/workflows/validate.yml
         rg -q '^  lifecycle-worker:' .github/workflows/validate.yml
         rg -Fq 'if: fromJSON(needs.prepare.outputs.plan).targets.controller.run' .github/workflows/validate.yml
         rg -Fq 'if: fromJSON(needs.prepare.outputs.plan).targets.worker.run' .github/workflows/validate.yml
+        test "$(rg -F 'LUCIDITY_VM_CONNECTIVITY_ONLY: "1"' .github/workflows/validate.yml | wc -l)" -eq 2
         test "$(rg -F 'fromJSON(needs.prepare.outputs.plan).cache_mode' .github/workflows/validate.yml | wc -l)" -eq 12
         ! rg -Fq 'needs.prepare.outputs.lifecycle_' .github/workflows/validate.yml
-        rg -Fq 'fetch-depth: ''${{ github.event_name == ' .github/workflows/validate.yml
-        rg -Fq "merge_group' && '0' || '1" .github/workflows/validate.yml
+        ! rg -Fq 'fetch-depth:' .github/workflows/validate.yml
+        rg -Fq 'LIFECYCLE_SCOPE: ''${{ inputs.lifecycle_scope || ' .github/workflows/validate.yml
+        rg -Fq 'default: none' .github/workflows/validate.yml
+        ! rg -Fq 'schedule:' .github/workflows/validate.yml
         rg -Fq 'authToken: ""' .github/workflows/validate.yml
         rg -Fq 'needs: [prepare, lifecycle-controller, lifecycle-worker]' .github/workflows/validate.yml
         rg -Fq 'WORKFLOW_PLAN: ''${{ needs.prepare.outputs.plan }}' .github/workflows/validate.yml
-        rg -Fq 'git merge-base --is-ancestor "''${base_sha}" "''${head_sha}"' scripts/ci-workflow-prepare.sh
-        rg -Fq 'git diff --no-ext-diff --name-status --find-renames -z' scripts/ci-workflow-prepare.sh
-        jq -e '
-          .schema_version == 1 and
-          .match_order == ["controller", "worker", "common"] and
-          .nodes.controller.ancestors == ["common"] and
-          .nodes.worker.ancestors == ["common"] and
-          (.nodes.common.lifecycle | not) and
-          .nodes.controller.lifecycle and
-          .nodes.worker.lifecycle
-        ' ci/lifecycle-targets.json >/dev/null
+        rg -Fq 'schema_version: 3' scripts/ci-workflow-prepare.sh
+        ! rg -Fq 'git diff' scripts/ci-workflow-prepare.sh
+        ! test -e ci/lifecycle-targets.json
+        rg -Fq 'CONTROLLER_EXPECTED_IMAGE: ''${{ env.CONTROLLER_IMAGE }}' .github/workflows/integration.yml
+        rg -Fq 'WORKER_EXPECTED_IMAGE: ''${{ env.IMAGE }}' .github/workflows/integration.yml
+        rg -Fq 'types: [opened, synchronize, reopened, ready_for_review]' .github/workflows/integration.yml
+        rg -Fq "if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false" .github/workflows/integration.yml
+        rg -Fq 'bootc status --booted --format json' scripts/vm-integration.sh
         rg -Fq 'group: lucidity-image-publication-''${{ github.sha }}' .github/workflows/publish.yml
-        rg -Fq 'group: lucidity-image-publication-''${{ inputs.source_sha || github.sha }}' .github/workflows/release.yml
+        rg -Fq 'group: lucidity-image-publication-''${{ inputs.source_sha || github.event.pull_request.merge_commit_sha || github.sha }}' .github/workflows/release.yml
         if rg -n '^\s+(aws (ecr|ec2|ssm|secretsmanager)|podman pull)' .github/workflows; then
           echo "AWS and image policy must live behind flake-owned CI commands" >&2
           exit 1
@@ -378,6 +507,9 @@
         rg -Fq 'BUILD_CACHE_TO="''${BUILD_CACHE_TO}"' .github/workflows/ami.yml
         ! rg -q 'tests/run\.sh|tests/vm-(role|mesh)\.sh|ci/run-with-progress\.sh' \
           nix .github/workflows README.md
+        ! rg -q '^[[:space:]]+mesh-vm[[:space:]]*=' nix/flake/checks.nix
+        rg -Fq 'mesh-vm = meshVmCheck;' nix/flake/outputs.nix
+        rg -Fq '"$root#packages.$system.mesh-vm"' nix/pkgs/lucidity.sh
         test ! -e Containerfile
         test ! -e Makefile
         test ! -e roles
@@ -409,11 +541,24 @@
         ${lucidity.runtimeScripts}/libexec/lucidity/vm-validate-update.sh
       grep -Fq '/usr/share/lucidity/nix-smoke' \
         ${lucidity.runtimeScripts}/libexec/lucidity/vm-validate-update.sh
+      grep -Fq '/etc/lucidity/vm-connectivity-only' \
+        ${lucidity.runtimeScripts}/libexec/lucidity/vm-validate.sh
+      grep -Fq '/etc/lucidity/vm-connectivity-only' \
+        ${lucidity.runtimeScripts}/libexec/lucidity/vm-validate-update.sh
+      grep -Fq '"''${role}" "''${expected_ref}" "''${marker}" "''${connectivity_only}" \' \
+        ${lucidity.runtimeScripts}/libexec/lucidity/vm-validate-update.sh
+      grep -Fq 'connectivity_only=$4' \
+        ${lucidity.runtimeScripts}/libexec/lucidity/vm-validate-update.sh
+      grep -Fq 'expected_env_hash=''${5:-}' \
+        ${lucidity.runtimeScripts}/libexec/lucidity/vm-validate-update.sh
+      remote_command=$(printf '%s\n' "bash -Eeuo pipefail -c 'role=\$1; expected_ref=\$2; expected_marker=\$3; connectivity_only=\$4; expected_env_hash=\''${5:-}; test \"\$role\" = controller; test \"\$expected_ref\" = expected-ref; test \"\$expected_marker\" = expected-marker; test \"\$connectivity_only\" = true; test -z \"\$expected_env_hash\"' -- controller expected-ref expected-marker true")
+      bash -c "$remote_command"
       ! grep -R -Fq '/usr/share/coolify-aws/nix-smoke' \
         ${lucidity.runtimeScripts}/libexec/lucidity
       ! grep -Fq 'IMAGE_NAME: localhost/lucidity-' ${runtimeToolsSource}/.github/workflows/validate.yml
       for script in \
-        audit-ami-validation-resources.sh build-disk.sh check-text-style.sh \
+        audit-ami-validation-resources.sh audit-production-readiness.sh \
+        build-disk.sh check-text-style.sh \
         validate-ami-import.sh validate-deployment.sh validate-disk.sh \
         vm-init.sh vm-integration.sh vm-registry.sh vm-start.sh vm-stop.sh \
         vm-validate-update.sh vm-validate.sh; do
@@ -425,7 +570,7 @@
       general_source_count=$(find ${runtimeToolsSource}/scripts -maxdepth 1 -type f -name '*.sh' ! -name 'ci-*.sh' | wc -l)
       packaged_count=$(find ${lucidity.runtimeScripts}/libexec/lucidity -maxdepth 1 -type f -name '*.sh' | wc -l)
       test "$general_source_count" -eq "$packaged_count"
-      test "$source_count" -eq "$((general_source_count + 4))"
+      test "$source_count" -eq "$((general_source_count + 5))"
       while IFS= read -r source_script; do
         test -x "${lucidity.runtimeScripts}/libexec/lucidity/$(basename "$source_script")"
       done < <(find ${runtimeToolsSource}/scripts -maxdepth 1 -type f -name '*.sh' ! -name 'ci-*.sh' -print)
@@ -433,7 +578,8 @@
         ${lib.getExe ciWorkflow.prepare} \
         ${lib.getExe ciWorkflow.gate} \
         ${lib.getExe ciWorkflow.hermeticCheck} \
-        ${lib.getExe ciWorkflow.requireEnv}; do
+        ${lib.getExe ciWorkflow.requireEnv} \
+        ${lib.getExe ciWorkflow.actionPolicy}; do
         test -x "$ci_program"
       done
       ! grep -Fq '$root/scripts/' ${lib.getExe lucidity}
@@ -442,21 +588,19 @@
     '';
     yamlPolicyCheck =
       pkgs.runCommand "lucidity-yaml-policy-check" {
-        nativeBuildInputs = [pkgs.findutils pkgs.ripgrep pkgs.yq-go];
+        nativeBuildInputs = [pkgs.actionlint pkgs.findutils pkgs.jq pkgs.ripgrep pkgs.yq-go];
       } ''
         cd ${source}
         while IFS= read -r file; do
           yq eval '.' "$file" >/dev/null
         done < <(find .github -type f \( -name '*.yml' -o -name '*.yaml' \) -print | sort)
+        actionlint .github/workflows/*.yml
 
         yq -e '.version == 2 and (.updates | length > 0)' .github/dependabot.yml >/dev/null
         yq -e '.check-for-app-update == false and (.default-catalogers | length > 0)' \
           .github/syft.yaml >/dev/null
-        if rg -n -P '^\s*uses:\s*(?!\./)[^@\s]+@(?![0-9a-f]{40}(?:\s|$))' \
-          .github/workflows; then
-          echo 'external GitHub Actions must be pinned to full commit SHAs' >&2
-          exit 1
-        fi
+        ${lib.getExe ciWorkflow.actionPolicy} \
+          .github/workflows ci/github-actions-allowlist.json
         touch "$out"
       '';
     cacheDocker = pkgs.writeShellScriptBin "docker" ''
@@ -679,11 +823,11 @@
         git add .
         git commit -qm 'docs: prepare v0.1.0'
         git tag v0.1.0
-        printf '0.2.1\n' >VERSION
-        printf 'Current version: **0.2.1**\n' >README.md
-        printf '## [0.2.1] - 2026-08-19\n' >CHANGELOG.md
+        printf '0.3.0\n' >VERSION
+        printf 'Current version: **0.3.0**\n' >README.md
+        printf '## [0.3.0] - 2026-08-20\n' >CHANGELOG.md
         git add .
-        git commit -qm 'docs: prepare exact v0.2.1 target'
+        git commit -qm 'docs: prepare exact v0.3.0 target'
         source_sha=$(git rev-parse HEAD)
         printf 'release tooling\n' >.github/workflows/release.yml
         printf 'release helper\n' >nix/pkgs/lucidity.sh
@@ -696,11 +840,11 @@
           GITHUB_SHA="$tooling_sha" \
           GITHUB_OUTPUT=$PWD/outputs \
           LUCIDITY_REPOSITORY_ROOT=$PWD \
-          ${lib.getExe lucidityRelease} release prepare 0.2.1 "$source_sha"
+          ${lib.getExe lucidityRelease} release prepare 0.3.0 "$source_sha"
         grep -Fxq "source_sha=$source_sha" outputs
         grep -Fxq "tooling_sha=$tooling_sha" outputs
-        grep -Fxq 'tag=v0.2.1' outputs
-        grep -Fxq 'version=0.2.1' outputs
+        grep -Fxq 'tag=v0.3.0' outputs
+        grep -Fxq 'version=0.3.0' outputs
 
         if GITHUB_REF=refs/heads/main \
           GITHUB_SHA="$tooling_sha" \
@@ -717,7 +861,7 @@
         if GITHUB_REF=refs/heads/main \
           GITHUB_SHA=$(git rev-parse HEAD) \
           LUCIDITY_REPOSITORY_ROOT=$PWD \
-          ${lib.getExe lucidityRelease} release prepare 0.2.1 "$source_sha" 2>/dev/null; then
+          ${lib.getExe lucidityRelease} release prepare 0.3.0 "$source_sha" 2>/dev/null; then
           echo 'release resume accepted a non-tooling change' >&2
           exit 1
         fi
@@ -772,6 +916,16 @@
       ];
       nativeBuildInputs = [pkgs.jq];
     };
+    productionReadinessAuditUnitCheck = mkShellTest {
+      name = "production-readiness-audit-unit";
+      script = "tests/test-production-readiness-audit.sh";
+      files = [
+        ../../tests/test-production-readiness-audit.sh
+        ../../tests/fixtures/aws-production-readiness
+        ../../scripts/audit-production-readiness.sh
+      ];
+      nativeBuildInputs = [pkgs.jq pkgs.ripgrep];
+    };
     deploymentUnitCheck = mkShellTest {
       name = "deployment-unit";
       script = "tests/test-deployment-validation.sh";
@@ -792,6 +946,23 @@
         ../../secretspec.toml
       ];
       nativeBuildInputs = [pkgs.findutils pkgs.gnused pkgs.util-linux];
+    };
+    monitoringCollectorUnitCheck = mkShellTest {
+      name = "monitoring-collector-unit";
+      script = "tests/test-monitoring-collector.sh";
+      files = [
+        ../../tests/test-monitoring-collector.sh
+        ../den/classes/bootc/files/monitoring-collector.sh
+      ];
+    };
+    ciNotifyUnitCheck = mkShellTest {
+      name = "ci-notify-unit";
+      script = "tests/test-ci-notify.sh";
+      files = [
+        ../../tests/test-ci-notify.sh
+        ../../.github/actions/notify-ci/notify.sh
+      ];
+      nativeBuildInputs = [pkgs.jq];
     };
     textStyleUnitCheck = mkShellTest {
       name = "text-style-unit";
@@ -819,10 +990,20 @@
           .aggregates[0].median_duration_seconds == 480 and
           .aggregates[1].workflow == "Validate locked flake" and
           .aggregates[1].median_duration_seconds == 180 and
-          .aggregates[1].p95_duration_seconds == 180
+          .aggregates[1].p95_duration_seconds == 180 and
+          .failure_locations == [{
+            run_id: 2,
+            workflow: "Validate locked flake",
+            url: "https://example.invalid/actions/runs/2",
+            jobs: [{
+              name: "lifecycle-controller",
+              failed_steps: ["Run the flake-owned bootc switch and rollback lifecycle"]
+            }]
+          }]
         ' "$TMPDIR/audit.json" >/dev/null
         grep -Fq '| Validate locked flake | `merge_group` | 2 |' "$TMPDIR/audit.md"
         grep -Fq '[run](https://example.invalid/actions/runs/3)' "$TMPDIR/audit.md"
+        grep -Fq '| [2](https://example.invalid/actions/runs/2) | Validate locked flake | lifecycle-controller | Run the flake-owned bootc switch and rollback lifecycle |' "$TMPDIR/audit.md"
         touch "$out"
       '';
     workflowPlannerUnitCheck = mkShellTest {
@@ -830,19 +1011,25 @@
       script = "tests/ci-workflow.sh";
       files = [
         ../../tests/ci-workflow.sh
-        ../../ci/lifecycle-targets.json
       ];
       nativeBuildInputs = [
-        pkgs.gitMinimal
         pkgs.jq
+        lucidity
         ciWorkflow.gate
         ciWorkflow.prepare
       ];
+    };
+    actionPolicyUnitCheck = mkShellTest {
+      name = "action-policy-unit";
+      script = "tests/ci-action-policy.sh";
+      files = [../../tests/ci-action-policy.sh];
+      nativeBuildInputs = [pkgs.jq ciWorkflow.actionPolicy];
     };
     staticChecks = [
       manifestsCheck
       cloudInitCheck
       policyCheck
+      monitoringConfigCheck
       infrastructureCheck
       secretspecCheck
       repositoryCheck
@@ -855,11 +1042,15 @@
       workerUnitCheck
       amiImportUnitCheck
       amiAuditUnitCheck
+      productionReadinessAuditUnitCheck
       deploymentUnitCheck
       backupUnitCheck
+      monitoringCollectorUnitCheck
+      ciNotifyUnitCheck
       textStyleUnitCheck
       workflowAuditUnitCheck
       workflowPlannerUnitCheck
+      actionPolicyUnitCheck
       yamlPolicyCheck
     ];
     staticCheck = pkgs.runCommand "lucidity-static-checks" {} ''
@@ -871,7 +1062,10 @@
   in {
     checks = {
       backup-unit = backupUnitCheck;
+      monitoring-collector-unit = monitoringCollectorUnitCheck;
+      ci-notify-unit = ciNotifyUnitCheck;
       ami-audit-unit = amiAuditUnitCheck;
+      production-readiness-audit-unit = productionReadinessAuditUnitCheck;
       ami-import-unit = amiImportUnitCheck;
       cache-unit = cacheUnitCheck;
       ci-workflow-unit = ciWorkflowUnitCheck;
@@ -881,8 +1075,8 @@
       infrastructure = infrastructureCheck;
       lifecycle-scope = lifecycleScopeCheck;
       manifests = manifestsCheck;
-      mesh-vm = import ../den/classes/bootc/tests/mesh.nix {inherit pkgs;};
       policy = policyCheck;
+      monitoring-config = monitoringConfigCheck;
       repository = repositoryCheck;
       runtime-tools = runtimeToolsCheck;
       release-unit = releaseUnitCheck;
@@ -892,6 +1086,7 @@
       worker-unit = workerUnitCheck;
       workflow-audit-unit = workflowAuditUnitCheck;
       workflow-planner-unit = workflowPlannerUnitCheck;
+      action-policy-unit = actionPolicyUnitCheck;
       yaml-policy = yamlPolicyCheck;
     };
   };

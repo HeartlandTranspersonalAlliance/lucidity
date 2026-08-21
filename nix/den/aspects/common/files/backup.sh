@@ -145,6 +145,7 @@ backup_run() {
     run_restic "apply the $ROLE backup retention policy" forget \
         --host "lucidity-$ROLE" --tag lucidity --tag "$ROLE" \
         --keep-daily 7 --keep-weekly 4 --keep-monthly 6 --prune
+    touch "$STATE_DIRECTORY/last-success"
 }
 
 check_repository() {

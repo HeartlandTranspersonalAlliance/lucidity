@@ -1,10 +1,15 @@
 name: Release bootc appliance
 
 on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - closed
   workflow_dispatch:
     inputs:
       target_version:
-        description: Exact unprefixed SemVer to release, for example 0.2.1
+        description: Exact unprefixed SemVer to release, for example 0.3.0
         required: true
         type: string
       source_sha:
@@ -14,7 +19,7 @@ on:
         default: ""
 
 concurrency:
-  group: lucidity-image-publication-${{ inputs.source_sha || github.sha }}
+  group: lucidity-image-publication-${{ inputs.source_sha || github.event.pull_request.merge_commit_sha || github.sha }}
   cancel-in-progress: false
 
 permissions:
@@ -23,11 +28,12 @@ permissions:
 env:
   AWS_REGION: us-east-2
   GH_TOKEN: ${{ github.token }}
-  NIX_CACHE_WRITE: ${{ github.event_name == 'merge_group' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+  NIX_CACHE_WRITE: ${{ github.event_name == 'merge_group' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.number == 70) }}
 
 jobs:
   prepare:
     name: Select version and require tested images
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.merged == true && github.event.pull_request.number == 70)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -43,7 +49,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
 
       - name: Install locked Nix
         uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
@@ -67,8 +73,8 @@ jobs:
       - name: Calculate and validate the semantic version
         id: version
         env:
-          RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}
-          RELEASE_TARGET_VERSION: ${{ inputs.target_version }}
+          RELEASE_SOURCE_SHA: ${{ inputs.source_sha || github.event.pull_request.merge_commit_sha }}
+          RELEASE_TARGET_VERSION: ${{ inputs.target_version || '0.3.0' }}
         run: nix run .#release -- prepare "${RELEASE_TARGET_VERSION}" "${RELEASE_SOURCE_SHA}"
 
   roles:

@@ -47,7 +47,7 @@ in {
       };
       cloudflare = {
         source = "cloudflare/cloudflare";
-        version = "~> 5.23";
+        version = "~> 5.22";
       };
     };
   };
@@ -80,14 +80,12 @@ in {
     enable_ec2_termination_protection = boolVariable "Protect production nodes from API termination." true;
     enable_cloudflare_dns = boolVariable "Manage Cloudflare DNS records." false;
     enable_node_backups = boolVariable "Create daily AWS Backup recovery points." false;
-    enable_node_monitoring = boolVariable "Create basic-monitoring alarms." false;
     enable_account_security_baseline = boolVariable "Enable regional account security, audit, and posture controls." false;
     enable_account_cost_budget = boolVariable "Create the monitoring-only annual account budget." false;
     enable_openbao = boolVariable "Create OpenBao KMS auto-unseal resources." false;
     account_annual_cost_limit_usd = numberVariable "Annual monitoring-only account budget." 1100;
     account_cost_budget_warning_percentage = numberVariable "Actual-spend early warning percentage." 80;
     account_cost_budget_notification_email = stringVariable "Budget notification email." null;
-    node_alarm_notification_email = stringVariable "Node alarm email." null;
     node_backup_retention_days = numberVariable "Daily backup retention." 7;
     application_backup_bucket_arn = stringVariable "Optional independent AWS S3 bucket ARN for restic." null;
     application_backup_bucket_kms_key_arn = stringVariable "Optional KMS key ARN for the restic S3 bucket." null;
@@ -176,6 +174,10 @@ in {
         };
         matrix = {
           role = "worker";
+          proxied = true;
+        };
+        ntfy = {
+          role = "controller";
           proxied = true;
         };
         mesh = {
@@ -376,16 +378,6 @@ in {
       retention_days = tf "var.node_backup_retention_days";
       tags = tf "var.tags";
     };
-    node_monitoring = {
-      count = tf "var.enable_node_monitoring ? 1 : 0";
-      source = "${moduleRoot}/node-monitoring";
-      aws_region = tf "var.aws_region";
-      environment = tf "var.environment";
-      instance_ids = tf "module.ec2_nodes[0].instance_ids";
-      notification_email = tf "var.node_alarm_notification_email";
-      project_name = tf "var.vpc_name";
-      tags = tf "var.tags";
-    };
   };
 
   output = {
@@ -529,21 +521,6 @@ in {
     };
     nat_gateway_public_ips = {
       value = tf "var.enable_network ? module.network[0].nat_gateway_public_ips : {}";
-    };
-    node_alarm_email_subscription_arn = {
-      value = tf "var.enable_node_monitoring ? module.node_monitoring[0].email_subscription_arn : null";
-    };
-    node_alarm_names = {
-      value = tf "var.enable_node_monitoring ? module.node_monitoring[0].alarm_names : {}";
-    };
-    node_alarm_notification_kms_key_arn = {
-      value = tf "var.enable_node_monitoring ? module.node_monitoring[0].notification_kms_key_arn : null";
-    };
-    node_alarm_notification_topic_arn = {
-      value = tf "var.enable_node_monitoring ? module.node_monitoring[0].notification_topic_arn : null";
-    };
-    node_alarm_settings = {
-      value = tf "var.enable_node_monitoring ? module.node_monitoring[0].settings : null";
     };
     node_backup_plan_id = {
       value = tf "var.enable_node_backups ? module.node_backups[0].plan_id : null";

@@ -49,8 +49,11 @@ without a backend is allowed; applying without an explicit backend fails closed.
 ## Secret resolution fails
 
 Run `nix run .#lucidity -- secrets check PROFILE PROVIDER`. Verify the profile,
-provider, AWS region, and OIDC or local SDK authentication. Never print a value
-to diagnose it. See [secrets and access](../security/secrets-and-access.md).
+provider, and its normal authentication session. For OpenBao, verify `BAO_ADDR`,
+`BAO_CACERT`, and the short-lived authentication method without printing the
+token. For AWS, verify the region and OIDC or local SDK authentication. Never
+print a value to diagnose it. See
+[secrets and access](../security/secrets-and-access.md).
 
 ## GitHub merge queue fails
 

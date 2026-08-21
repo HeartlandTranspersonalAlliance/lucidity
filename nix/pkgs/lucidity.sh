@@ -31,11 +31,14 @@ Usage: lucidity COMMAND [ARGUMENTS]
   ci timing summarize LABEL STARTED_AT [BASELINE_SECONDS]
   ci benchmark resolve|verify-target
   ci workflow audit REPOSITORY [--limit COUNT] [--json PATH] [--markdown PATH]
+  ci workflow plan EVENT [none|controller|worker|both] [warm|isolated]
   ci audit-ami-resources
   ci validate-deployment
   backup init|run|check
   backup restore SNAPSHOT DESTINATION
   infra plan [OpenTofu arguments]
+  infra refresh-plan SAVED_PLAN [OpenTofu arguments]
+  infra audit [--json|--markdown] [--output PATH]
   infra apply SAVED_PLAN [OpenTofu apply arguments]
   infra output [OpenTofu output arguments]
   infra show [OpenTofu show arguments]
@@ -48,7 +51,7 @@ Usage: lucidity COMMAND [ARGUMENTS]
   secrets initialize-controller-runtime [SECRET_ID]
   secrets check PROFILE [PROVIDER]
   secrets set PROFILE KEY [PROVIDER]
-  secrets run PROFILE [PROVIDER] -- COMMAND [ARGUMENTS]
+  secrets run PROFILE [PROVIDER] [--scope SCOPE] -- COMMAND [ARGUMENTS]
   mesh init
   mesh request NAME DIRECTORY
   mesh sign PUBLIC_KEY CERTIFICATE NAME IP GROUPS
@@ -88,7 +91,11 @@ build_path() {
 }
 
 operator_provider() {
-    printf '%s\n' "${LUCIDITY_OPERATOR_PROVIDER:-keyring://lucidity}"
+    printf '%s\n' "${LUCIDITY_OPERATOR_PROVIDER:-}"
+}
+
+bootstrap_provider() {
+    printf '%s\n' "${LUCIDITY_BOOTSTRAP_PROVIDER:-local-keyring}"
 }
 
 secrets_set_admin_key() {
@@ -101,9 +108,10 @@ secrets_set_admin_key() {
     [[ $actual_fingerprint == "$expected_fingerprint" ]] ||
         die "public key fingerprint $actual_fingerprint does not match Den registry fingerprint $expected_fingerprint"
     public_key=$(<"$public_key_file")
+    provider=$(bootstrap_provider)
     secretspec set --reason "register lucidity administrator public key" \
-        --provider "$(operator_provider)" --profile ssh ADMIN_SSH_PUBLIC_KEY "$public_key"
-    echo "Stored ADMIN_SSH_PUBLIC_KEY in $(operator_provider); no key material was written to the repository"
+        --provider "$provider" --profile ssh ADMIN_SSH_PUBLIC_KEY "$public_key"
+    echo "Stored ADMIN_SSH_PUBLIC_KEY in $provider; no key material was written to the repository"
 }
 
 secrets_initialize_controller_runtime() {
@@ -146,6 +154,12 @@ secrets_initialize_controller_runtime() {
         "$secret_file" >/dev/null
     aws secretsmanager put-secret-value --region "$region" --secret-id "$secret_id" \
         --secret-string "file://$secret_file" --query VersionId --output text >/dev/null
+    if [[ $secret_id == lucidity/production/controller-runtime ]]; then
+        secretspec check --reason "verify initialized controller runtime contract" \
+            --file "$(repository_root)/secretspec.toml" --profile controller-runtime \
+            --scope controller-runtime --provider aws-controller-runtime \
+            --no-prompt --json >/dev/null
+    fi
     echo "Initialized $secret_id with a complete runtime bundle; no secret values were printed or persisted outside tmpfs"
 }
 
@@ -153,8 +167,10 @@ secrets_check() {
     profile=${1:-}
     provider=${2:-$(operator_provider)}
     [[ -n $profile && $# -le 2 ]] || die "secrets check requires PROFILE and optional PROVIDER"
-    exec secretspec check --reason "validate lucidity secret contract" \
-        --provider "$provider" --profile "$profile"
+    secretspec_command=(secretspec check --reason "validate lucidity secret contract" \
+        --profile "$profile")
+    [[ -z $provider ]] || secretspec_command+=(--provider "$provider")
+    exec "${secretspec_command[@]}"
 }
 
 secrets_set() {
@@ -163,8 +179,10 @@ secrets_set() {
     provider=${3:-$(operator_provider)}
     [[ -n $profile && -n $key && $# -le 3 ]] ||
         die "secrets set requires PROFILE KEY and optional PROVIDER"
-    exec secretspec set --reason "update lucidity secret" \
-        --provider "$provider" --profile "$profile" "$key"
+    secretspec_command=(secretspec set --reason "update lucidity secret" \
+        --profile "$profile")
+    [[ -z $provider ]] || secretspec_command+=(--provider "$provider")
+    exec "${secretspec_command[@]}" "$key"
 }
 
 secrets_run() {
@@ -172,15 +190,24 @@ secrets_run() {
     shift || true
     [[ -n $profile ]] || die "secrets run requires PROFILE"
     provider=$(operator_provider)
-    if [[ ${1:-} != -- ]]; then
+    if [[ ${1:-} != -- && ${1:-} != --scope ]]; then
         provider=${1:-}
         shift || true
+    fi
+    scope=
+    if [[ ${1:-} == --scope ]]; then
+        scope=${2:-}
+        [[ -n $scope ]] || die "secrets run --scope requires SCOPE"
+        shift 2
     fi
     [[ ${1:-} == -- ]] || die "secrets run requires -- before the command"
     shift
     [[ $# -gt 0 ]] || die "secrets run requires a command"
-    exec secretspec run --reason "run lucidity command with scoped secrets" \
-        --provider "$provider" --profile "$profile" -- "$@"
+    secretspec_command=(secretspec run --reason "run lucidity command with scoped secrets" \
+        --profile "$profile")
+    [[ -z $provider ]] || secretspec_command+=(--provider "$provider")
+    [[ -z $scope ]] || secretspec_command+=(--scope "$scope")
+    exec "${secretspec_command[@]}" -- "$@"
 }
 
 secrets_command() {
@@ -269,6 +296,11 @@ build_role() {
     esac
 
     build_command=("$engine" build)
+    if [[ $engine == podman ]]; then
+        # The generated Containerfile selects Bash with SHELL, which Podman's
+        # default OCI image format cannot encode.
+        build_command+=(--format docker)
+    fi
     if [[ -n ${BUILD_CACHE_FROM:-} || -n ${BUILD_CACHE_TO:-} ]]; then
         case "$engine" in
             docker)
@@ -281,7 +313,7 @@ build_role() {
                 [[ -z ${BUILD_CACHE_TO:-} ]] || build_command+=(--cache-to "type=registry,ref=$BUILD_CACHE_TO,mode=max,image-manifest=true,oci-mediatypes=true")
                 ;;
             podman)
-                build_command=(podman build --layers)
+                build_command=(podman build --format docker --layers)
                 [[ -z ${BUILD_CACHE_FROM:-} ]] || build_command+=(--cache-from "$BUILD_CACHE_FROM" --cache-ttl 168h)
                 [[ -z ${BUILD_CACHE_TO:-} ]] || build_command+=(--cache-to "$BUILD_CACHE_TO")
                 ;;
@@ -316,23 +348,37 @@ validate_role_image() {
     # Expanded by Bash inside the built image.
     # shellcheck disable=SC2016
     "$engine" run --rm --entrypoint /bin/bash "$image" -Eeuo pipefail -c '
-        rpm -q amazon-ssm-agent bootc cloud-init container-selinux docker-ce openssh-server selinux-policy-targeted
+        rpm -q amazon-ssm-agent bootc cloud-init container-selinux docker-ce nix nix-daemon nix-filesystem nix-system openssh-server selinux-policy-targeted
         systemctl is-enabled --quiet amazon-ssm-agent.service
         systemctl is-enabled --quiet bootc-fetch-apply-updates.timer
-        systemctl is-enabled --quiet determinate-nix-install.service
+        systemctl is-enabled --quiet nix.mount
+        systemctl is-enabled --quiet nix-daemon.service
+        systemctl is-enabled --quiet nix-daemon.socket
+        systemctl is-enabled --quiet determinate-nixd.socket
         systemctl is-enabled --quiet lucidity-nix-profile.service
         systemctl is-enabled --quiet lucidity-admin-authorized-key.service
         systemctl is-enabled --quiet docker.service
         systemctl is-enabled --quiet sshd.service
         grep -Eq "^SELINUX=enforcing$" /etc/selinux/config
         grep -Eq "^SELINUXTYPE=targeted$" /etc/selinux/config
-        test -s /usr/lib/lucidity/nix-seed/registration
-        test -n "$(find /usr/lib/lucidity/nix-seed/store -mindepth 1 -maxdepth 1 -print -quit)"
-        test -x /usr/libexec/lucidity/nix-installer
-        test -x /usr/libexec/lucidity/install-determinate-nix
+        test -x /usr/bin/determinate-nixd
+        test -x /usr/lib/lucidity/determinate-nix-seed/nix-installer
+        test -s /usr/lib/lucidity/determinate-nix-seed/receipt.json
+        test -d /usr/lib/lucidity/determinate-nix-seed/store
+        test -d /usr/lib/lucidity/determinate-nix-seed/var/nix
+        test -s /usr/share/selinux/packages/determinate-nix.pp
+        test -s /usr/share/selinux/packages/nix.fc
+        test -s /usr/share/selinux/packages/determinate-nix.fc
+        test -x /usr/libexec/lucidity/install-determinate-nix-selinux-policy
+        test -x /usr/libexec/lucidity/provision-determinate-nix
         test -x /usr/libexec/lucidity/install-admin-authorized-key
         systemd-analyze verify \
-            /usr/lib/systemd/system/determinate-nix-install.service \
+            /usr/lib/systemd/system/lucidity-nix-selinux.service \
+            /usr/lib/systemd/system/lucidity-nix-seed.service \
+            /usr/lib/systemd/system/nix.mount \
+            /usr/lib/systemd/system/nix-daemon.service \
+            /usr/lib/systemd/system/nix-daemon.socket \
+            /usr/lib/systemd/system/determinate-nixd.socket \
             /usr/lib/systemd/system/lucidity-nix-profile.service \
             /usr/lib/systemd/system/lucidity-admin-authorized-key.service
         ssh-keygen -A
@@ -415,7 +461,7 @@ vm_test() {
             ;;
         mesh)
             system=$(nix eval --impure --raw --expr builtins.currentSystem)
-            nix build --no-link "$root#checks.$system.mesh-vm" --print-build-logs
+            nix build --no-link "$root#packages.$system.mesh-vm" --print-build-logs
             ;;
         *) die "vm test requires controller, worker, or mesh" ;;
     esac
@@ -457,19 +503,15 @@ ami_command() {
 }
 
 vm_integration_test() {
-    invoke_repository_script vm-init.sh controller
-    invoke_repository_script vm-init.sh worker
-    VM_HOST_FORWARD_PORT=8000 VM_GUEST_FORWARD_PORT=8000 \
-        invoke_repository_script vm-start.sh controller
-    VM_HOST_FORWARD_PORT=8081 VM_GUEST_FORWARD_PORT=8080 VM_MEMORY_MB=3072 \
-        invoke_repository_script vm-start.sh worker
+    LUCIDITY_VM_CONNECTIVITY_ONLY=1 invoke_repository_script vm-init.sh controller
+    LUCIDITY_VM_CONNECTIVITY_ONLY=1 invoke_repository_script vm-init.sh worker
+    VM_MEMORY_MB=2048 invoke_repository_script vm-start.sh controller
+    VM_MEMORY_MB=2048 invoke_repository_script vm-start.sh worker
     integration_cleanup() {
         invoke_repository_script vm-stop.sh controller || true
         invoke_repository_script vm-stop.sh worker || true
     }
     trap integration_cleanup EXIT
-    invoke_repository_script vm-validate.sh controller
-    invoke_repository_script vm-validate.sh worker
     invoke_repository_script vm-integration.sh
 }
 
@@ -945,17 +987,39 @@ ci_workflow_audit() {
     temporary_directory=$(mktemp -d)
     trap 'rm -rf "$temporary_directory"; trap - RETURN' RETURN
     runs_file=$temporary_directory/runs.json
+    failure_details_file=$temporary_directory/failure-details.json
     report_file=$temporary_directory/report.json
 
     if [[ -n ${LUCIDITY_WORKFLOW_RUNS_FILE:-} ]]; then
         cp "$LUCIDITY_WORKFLOW_RUNS_FILE" "$runs_file"
+        jq '[
+          .[] | select(.conclusion == "failure") |
+          {
+            run_id: .databaseId,
+            workflow: .workflowName,
+            url,
+            jobs: (.jobs // [])
+          }
+        ]' "$runs_file" >"$failure_details_file"
     else
         gh run list --repo "$repository" --limit "$limit" \
             --json databaseId,workflowName,event,status,conclusion,createdAt,startedAt,updatedAt,url,headSha \
             >"$runs_file"
+        failure_details_stream=$temporary_directory/failure-details.ndjson
+        : >"$failure_details_stream"
+        while IFS= read -r run_id; do
+            run=$(jq -c --argjson run_id "$run_id" \
+                '.[] | select(.databaseId == $run_id) | {run_id:.databaseId,workflow:.workflowName,url}' \
+                "$runs_file")
+            jobs=$(gh run view "$run_id" --repo "$repository" --json jobs)
+            jq -cn --argjson run "$run" --argjson jobs "$jobs" \
+                '$run + {jobs:($jobs.jobs // [])}' >>"$failure_details_stream"
+        done < <(jq -r '.[] | select(.conclusion == "failure") | .databaseId' "$runs_file")
+        jq -s '.' "$failure_details_stream" >"$failure_details_file"
     fi
 
-    jq --arg repository "$repository" --argjson limit "$limit" '
+    jq --arg repository "$repository" --argjson limit "$limit" \
+      --slurpfile failure_details "$failure_details_file" '
       def epoch: fromdateiso8601;
       def percentile($fraction):
         sort as $values
@@ -1003,6 +1067,23 @@ ci_workflow_audit() {
               })
             | sort_by(.workflow, .event)
           ),
+          failure_locations: (
+            $failure_details[0]
+            | map({
+                run_id,
+                workflow,
+                url,
+                jobs: [
+                  .jobs[]?
+                  | select(.conclusion == "failure")
+                  | {
+                      name,
+                      failed_steps: [.steps[]? | select(.conclusion == "failure") | .name]
+                    }
+                ]
+              })
+            | sort_by(.run_id)
+          ),
           runs: $runs
         }
     ' "$runs_file" >"$report_file"
@@ -1027,13 +1108,30 @@ ci_workflow_audit() {
           "",
           "| ID | Workflow | Event | Result | Queue | Runtime | Link |",
           "| ---: | --- | --- | --- | ---: | ---: | --- |",
-          (.runs[] | "| \(.id) | \(.workflow) | `\(.event)` | `\(.conclusion)` | \(.queue_seconds)s | \(.duration_seconds)s | [run](\(.url)) |")
+          (.runs[] | "| \(.id) | \(.workflow) | `\(.event)` | `\(.conclusion)` | \(.queue_seconds)s | \(.duration_seconds)s | [run](\(.url)) |"),
+          "",
+          "## Failure locations",
+          "",
+          "| Run | Workflow | Failed job | Failed steps |",
+          "| ---: | --- | --- | --- |",
+          (
+            .failure_locations[] as $run
+            | $run.jobs[]
+            | (.failed_steps | join(", ")) as $failed_steps
+            | "| [\($run.run_id)](\($run.url)) | \($run.workflow) | \(.name) | \($failed_steps) |"
+          )
         ' "$report_file" >"$markdown_output"
     fi
 
     if [[ -z $json_output && -z $markdown_output ]]; then
         cat "$report_file"
     fi
+}
+
+ci_workflow_plan() {
+    [[ $# -ge 1 && $# -le 3 ]] ||
+        die "ci workflow plan requires EVENT and accepts optional SCOPE and CACHE_MODE"
+    lucidity-ci-workflow-prepare "$@"
 }
 
 ci_command() {
@@ -1116,7 +1214,8 @@ ci_command() {
             shift || true
             case "$action" in
                 audit) ci_workflow_audit "$@" ;;
-                *) die "ci workflow requires audit" ;;
+                plan) ci_workflow_plan "$@" ;;
+                *) die "ci workflow requires audit or plan" ;;
             esac
             ;;
         *) die "ci requires cache, ecr, ami, benchmark, timing, workflow, build-tools-image, audit-ami-resources, or validate-deployment" ;;
@@ -1148,7 +1247,17 @@ prepare_infra() {
 infra() {
     action=${1:-}
     shift || true
-    [[ $action =~ ^(plan|apply|output|show)$ ]] || die "infra requires plan, apply, output, or show"
+    [[ $action =~ ^(plan|refresh-plan|audit|apply|output|show)$ ]] ||
+        die "infra requires plan, refresh-plan, audit, apply, output, or show"
+    if [[ $action == audit ]]; then
+        exec "$LUCIDITY_RUNTIME_SCRIPTS/audit-production-readiness.sh" "$@"
+    fi
+    if [[ $action == refresh-plan ]]; then
+        saved_plan=${1:-}
+        [[ -n $saved_plan && $# -ge 1 ]] || die "infra refresh-plan requires a saved-plan path"
+        saved_plan=$(realpath -m "$saved_plan")
+        shift
+    fi
     if [[ $action == apply ]]; then
         saved_plan=${1:-}
         [[ -f $saved_plan ]] || die "infra apply requires an existing saved plan as its first argument"
@@ -1164,6 +1273,12 @@ infra() {
         die "infra apply requires the production remote-backend input"
     fi
     tofu -chdir="$workdir" init -reconfigure "${backend_args[@]}"
+    if [[ $action == refresh-plan ]]; then
+        [[ $remote_backend == true ]] || die "infra refresh-plan requires the production remote-backend input"
+        tofu -chdir="$workdir" plan -refresh-only -out="$saved_plan" "$@"
+        echo "Saved the review-only refresh plan to $saved_plan; inspect it with lucidity infra show $saved_plan"
+        return
+    fi
     if [[ $action == plan ]]; then
         tofu -chdir="$workdir" plan "$@"
         return
@@ -1608,11 +1723,13 @@ release_manifest() {
             '{ami_id:$ami_id,name:$name,created_at:$created_at,snapshot_id:$snapshot_id,snapshot_kms_key_arn:$snapshot_kms_key_arn,snapshot_volume_size_gib:$snapshot_volume_size_gib,source_image_digest:$source_image_digest,sbom_sha256:$sbom_sha256,validation_run:$validation_run}')
         amis=$(jq -cn --argjson current "$amis" --arg role "$role" --argjson record "$ami_record" '$current + {($role):$record}')
     done
-    jq -n --argjson schema_version 2 --arg version "$version" --arg tag "$release_tag" --arg source_commit "$source_sha" \
+    jq -n --argjson schema_version 3 --arg version "$version" --arg tag "$release_tag" --arg source_commit "$source_sha" \
         --arg created_at "$(date --utc +%Y-%m-%dT%H:%M:%SZ)" --arg region "$region" \
         --arg repository "$GITHUB_REPOSITORY" --arg release_run "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+        --arg nixpkgs_url "@lucidityNixpkgsUrl@" --arg nixpkgs_rev "@lucidityNixpkgsRev@" \
+        --arg nixpkgs_nar_hash "@lucidityNixpkgsNarHash@" \
         --argjson images "$images" --argjson amis "$amis" \
-        '{schema_version:$schema_version,version:$version,tag:$tag,source_commit:$source_commit,created_at:$created_at,repository:$repository,release_run:$release_run,images:$images,aws:{region:$region,amis:$amis}}' \
+        '{schema_version:$schema_version,version:$version,tag:$tag,source_commit:$source_commit,created_at:$created_at,repository:$repository,release_run:$release_run,nixpkgs:{url:$nixpkgs_url,rev:$nixpkgs_rev,nar_hash:$nixpkgs_nar_hash},images:$images,aws:{region:$region,amis:$amis}}' \
         >"$release_dir/release-manifest.json"
     (cd "$release_dir" && sha256sum release-manifest.json >release-manifest.json.sha256)
 }

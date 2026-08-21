@@ -17,6 +17,27 @@
     "databaseId": 2,
     "event": "merge_group",
     "headSha": "2222222222222222222222222222222222222222",
+    "jobs": [
+      {
+        "conclusion": "failure",
+        "name": "lifecycle-controller",
+        "steps": [
+          {
+            "conclusion": "success",
+            "name": "Install locked Nix"
+          },
+          {
+            "conclusion": "failure",
+            "name": "Run the flake-owned bootc switch and rollback lifecycle"
+          }
+        ]
+      },
+      {
+        "conclusion": "skipped",
+        "name": "lifecycle-worker",
+        "steps": []
+      }
+    ],
     "startedAt": "2026-08-19T01:00:10Z",
     "status": "completed",
     "updatedAt": "2026-08-19T01:03:10Z",

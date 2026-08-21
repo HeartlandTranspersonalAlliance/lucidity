@@ -14,25 +14,18 @@ fail() {
 [[ -n ${plan} ]] || fail "the Nix prepare job did not publish a workflow plan"
 jq -e '
     type == "object" and
-    .schema_version == 2 and
-    .target_graph_schema_version == 1 and
-    (.event | type == "string" and length > 0) and
-    (.comparison | type == "object") and
-    (.comparison.base_sha | type == "string") and
-    (.comparison.head_sha | type == "string") and
-    (.comparison.relationship |
-        . == "not-applicable" or . == "ancestor" or . == "invalid" or
-        . == "non-ancestor" or . == "diff-error") and
+    .schema_version == 3 and
+    (.event == "pull_request" or .event == "merge_group" or
+        .event == "push" or .event == "workflow_dispatch") and
     (.targets | type == "object" and keys == ["controller", "worker"]) and
     all(.targets[];
         type == "object" and
-        (.run | type == "boolean") and
-        (.matched_paths | type == "array" and all(.[]; type == "string")) and
-        (.via | type == "array" and all(.[]; type == "string"))) and
+        (keys == ["run"]) and
+        (.run | type == "boolean")) and
     (.cache_mode == "warm" or .cache_mode == "isolated") and
-    (.fallback | type == "boolean") and
-    (.reason | type == "string" and length > 0) and
-    (.changed_paths | type == "array" and all(.[]; type == "string"))
+    (.lifecycle_scope == "none" or .lifecycle_scope == "controller" or
+        .lifecycle_scope == "worker" or .lifecycle_scope == "both") and
+    (.reason | type == "string" and length > 0)
 ' <<<"${plan}" >/dev/null || fail "the Nix prepare job published an invalid workflow plan"
 
 [[ ${prepare_result} == success ]] || fail "Nix prepare concluded ${prepare_result:-without a result}"

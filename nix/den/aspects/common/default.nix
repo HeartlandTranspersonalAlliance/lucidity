@@ -12,6 +12,7 @@
         nebula
         openbao
         openssh
+        prometheus-node-exporter
         ripgrep
         restic
         secretspec
@@ -28,6 +29,7 @@
         "/var/lib/docker"
         "/var/lib/nebula"
         "/var/lib/nix"
+        "/var/lib/lucidity-monitoring"
         "/var/usrlocal"
       ];
       files = {

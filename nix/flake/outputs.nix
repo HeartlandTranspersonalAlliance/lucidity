@@ -13,6 +13,7 @@
       ciWorkflow
       lucidity
       lucidityRelease
+      meshVmCheck
       mkLucidityApp
       mkLucidityAppWith
       openbaoKmsPlugin
@@ -35,6 +36,7 @@
         ci-require-env = ciWorkflow.requireEnv;
         ci-workflow-gate = ciWorkflow.gate;
         ci-workflow-prepare = ciWorkflow.prepare;
+        mesh-vm = meshVmCheck;
         default = lucidity;
       };
     apps = {

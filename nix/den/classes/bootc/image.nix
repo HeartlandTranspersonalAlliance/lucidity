@@ -22,9 +22,14 @@
   nebulaConfig = import ./nebula.nix {
     inherit lib role;
   };
+  monitoring = import ./monitoring.nix {
+    inherit lib pkgs isController systemProfile;
+    overlayIPv4 = cfg.overlayIPv4;
+  };
 
   generatedFiles =
     cfg.files
+    // monitoring.files
     // {
       "etc/nebula/config.yml.in" = nebulaConfig;
       "etc/ssh/sshd_config.d/40-lucidity.conf" = ''
@@ -47,12 +52,54 @@
       "usr/lib/sysusers.d/lucidity.conf" = ''
         g docker - -
         u admin - "Lucidity administrator" /var/home/admin /bin/bash
+        u lucidity-metrics - "Lucidity metrics reader" /var/lib/lucidity-monitoring /sbin/nologin
         ${lib.optionalString isController ''
           g aws-wcp-token - -
           u aws-wcp - "AWS Workload Credentials Provider" /var/lib/aws-workload-credentials-provider /sbin/nologin
           m aws-wcp aws-wcp-token
+          u prometheus - "Prometheus service" /var/lib/prometheus /sbin/nologin
+          u alertmanager - "Alertmanager service" /var/lib/alertmanager /sbin/nologin
+          u blackbox-exporter - "Blackbox exporter service" /var/empty /sbin/nologin
+          u grafana - "Grafana service" /var/lib/grafana /sbin/nologin
+          u ntfy - "ntfy service" /var/lib/ntfy /sbin/nologin
+          u alertmanager-ntfy - "Alertmanager ntfy forwarder" /var/empty /sbin/nologin
         ''}
         ${lib.optionalString isController ''u openbao - "OpenBao service" /var/lib/openbao /sbin/nologin''}
+      '';
+      "usr/lib/sysusers.d/nix.conf" = ''
+        # Keep EPEL's nix-system identities deterministic and compatible with
+        # the Determinate Nix Installer migration planner.
+        g nixbld 30000
+        g nixbld-1 31001
+        g nixbld-2 31002
+        g nixbld-3 31003
+        g nixbld-4 31004
+        g nixbld-5 31005
+        g nixbld-6 31006
+        g nixbld-7 31007
+        g nixbld-8 31008
+        g nixbld-9 31009
+        g nixbld-10 31010
+        u nixbld-1 30001:30000 "Nix build user 1" /var/empty /sbin/nologin
+        u nixbld-2 30002:30000 "Nix build user 2" /var/empty /sbin/nologin
+        u nixbld-3 30003:30000 "Nix build user 3" /var/empty /sbin/nologin
+        u nixbld-4 30004:30000 "Nix build user 4" /var/empty /sbin/nologin
+        u nixbld-5 30005:30000 "Nix build user 5" /var/empty /sbin/nologin
+        u nixbld-6 30006:30000 "Nix build user 6" /var/empty /sbin/nologin
+        u nixbld-7 30007:30000 "Nix build user 7" /var/empty /sbin/nologin
+        u nixbld-8 30008:30000 "Nix build user 8" /var/empty /sbin/nologin
+        u nixbld-9 30009:30000 "Nix build user 9" /var/empty /sbin/nologin
+        u nixbld-10 30010:30000 "Nix build user 10" /var/empty /sbin/nologin
+        m nixbld-1 nixbld
+        m nixbld-2 nixbld
+        m nixbld-3 nixbld
+        m nixbld-4 nixbld
+        m nixbld-5 nixbld
+        m nixbld-6 nixbld
+        m nixbld-7 nixbld
+        m nixbld-8 nixbld
+        m nixbld-9 nixbld
+        m nixbld-10 nixbld
       '';
       "usr/lib/tmpfiles.d/lucidity.conf" = ''
         d /var/lib/docker 0710 root docker -
@@ -66,6 +113,8 @@
         d /var/lib/lucidity-backup 0700 root root -
         d /var/lib/lucidity-backup/staging 0700 root root -
         d /var/lib/lucidity-restore 0700 root root -
+        d /var/lib/lucidity-monitoring 0755 root root -
+        d /var/lib/lucidity-monitoring/textfile 0755 root lucidity-metrics -
         d /etc/lucidity/backup.d 0700 root root -
         d /var/usrlocal 0755 root root -
         d /var/usrlocal/bin 0755 root root -
@@ -79,6 +128,8 @@
           d /var/lib/openbao/tls 0700 openbao openbao -
           d /var/lib/openbao/plugins 0700 openbao openbao -
           d /var/lib/openbao/snapshots 0700 openbao openbao -
+          d /var/lib/ntfy 0700 ntfy ntfy -
+          d /var/lib/ntfy/attachments 0700 ntfy ntfy -
         ''}
       '';
       "usr/libexec/lucidity/activate-nix-profile" = ''
@@ -86,22 +137,60 @@
         set -Eeuo pipefail
         profile=$(< /usr/lib/lucidity/profile-path)
         activation=$(< /usr/lib/lucidity/home-activation-path)
-        install -d -m 0755 /nix/store
-        for seed_path in /usr/lib/lucidity/nix-seed/store/*; do
-          destination=/nix/store/''${seed_path##*/}
-          [[ -e $destination ]] || cp -a "$seed_path" /nix/store/
-        done
-        /nix/var/nix/profiles/default/bin/nix-store --load-db < /usr/lib/lucidity/nix-seed/registration
-        /nix/var/nix/profiles/default/bin/nix-store --verify-path "$profile"
-        /nix/var/nix/profiles/default/bin/nix-env --profile /nix/var/nix/profiles/lucidity --set "$profile"
+        nix_profile=/nix/var/nix/profiles/default/bin
+        "$nix_profile/nix-store" --verify-path "$profile"
+        "$nix_profile/nix-env" --profile /nix/var/nix/profiles/lucidity --set "$profile"
         install -d -m 0755 /var/usrlocal/bin
         ln -sfn /nix/var/nix/profiles/lucidity/bin/lucidity /var/usrlocal/bin/lucidity
         runuser -u admin -- env \
           HOME=/var/home/admin \
           USER=admin \
           LOGNAME=admin \
+          NIX_REMOTE=daemon \
           PATH=/nix/var/nix/profiles/default/bin:${systemProfile}/bin:/usr/bin:/bin \
           "$activation/activate"
+      '';
+      "usr/libexec/lucidity/install-determinate-nix-selinux-policy" = ''
+        #!/usr/bin/env bash
+        set -Eeuo pipefail
+        policy=/usr/share/selinux/packages/determinate-nix.pp
+        [[ -s $policy ]]
+        if ! semodule -l | awk '$1 == "nix" { found = 1 } END { exit !found }'; then
+          semodule -i "$policy"
+        fi
+      '';
+      "usr/libexec/lucidity/provision-determinate-nix" = ''
+        #!/usr/bin/env bash
+        set -Eeuo pipefail
+        seed=/usr/lib/lucidity/determinate-nix-seed
+        state=/var/lib/nix
+        parent=''${state%/*}
+
+        valid_installation() {
+          [[ -x $1/nix-installer && -f $1/receipt.json && -d $1/store && -d $1/var/nix ]]
+        }
+
+        valid_installation "$seed" || {
+          echo "The immutable Determinate Nix seed is incomplete: $seed" >&2
+          exit 1
+        }
+        install -d -m 0755 "$parent" "$state"
+        if find "$state" -mindepth 1 -print -quit | grep -q .; then
+          valid_installation "$state" || {
+            echo "Refusing to replace malformed Determinate Nix state: $state" >&2
+            exit 1
+          }
+        else
+          stage="$parent/.nix-seed.$$"
+          trap 'rm -rf -- "''${stage:-}"' EXIT
+          install -d -m 0755 "$stage"
+          cp -a --reflink=auto "$seed/." "$stage/"
+          valid_installation "$stage"
+          rmdir "$state"
+          mv "$stage" "$state"
+          trap - EXIT
+        fi
+        restorecon -RF "$state"
       '';
       "usr/libexec/lucidity/install-admin-authorized-key" = ''
         #!/usr/bin/env bash
@@ -133,23 +222,6 @@
         install -d -o admin -g admin -m 0700 /var/home/admin/.ssh
         install -o admin -g admin -m 0600 "$source_file" "$destination"
         restorecon -RF /var/home/admin/.ssh
-      '';
-      "usr/libexec/lucidity/install-determinate-nix" = ''
-        #!/usr/bin/env bash
-        set -Eeuo pipefail
-        installer=/usr/libexec/lucidity/nix-installer
-        receipt=/nix/receipt.json
-        if [[ -e $receipt ]]; then
-          systemctl daemon-reload
-          systemctl start nix.mount nix-daemon.socket nix-daemon.service
-          exit 0
-        fi
-        [[ $(getenforce) == Enforcing ]] || {
-          echo "Determinate Nix installation requires SELinux enforcing mode" >&2
-          exit 1
-        }
-        exec "$installer" install ostree --no-confirm --determinate \
-          --persistence /var/lib/nix --diagnostic-endpoint ""
       '';
       "usr/libexec/lucidity/prepare-nebula" = ''
         #!/usr/bin/env bash
@@ -189,8 +261,8 @@
       "usr/lib/systemd/system/lucidity-nix-profile.service" = ''
         [Unit]
         Description=Activate the locked Lucidity Nix and Home Manager profiles
-        Requires=determinate-nix-install.service
-        After=determinate-nix-install.service
+        Requires=nix-daemon.service
+        After=nix-daemon.service
 
         [Service]
         Type=oneshot
@@ -200,24 +272,96 @@
         [Install]
         WantedBy=multi-user.target
       '';
-      "usr/lib/systemd/system/determinate-nix-install.service" = ''
+      "usr/lib/systemd/system/lucidity-nix-selinux.service" = ''
         [Unit]
-        Description=Install Determinate Nix with the native OSTree planner
-        After=network-online.target
-        Wants=network-online.target
-        StartLimitIntervalSec=15min
-        StartLimitBurst=3
+        Description=Install the Determinate Nix SELinux policy
+        ConditionSecurity=selinux
+        Before=lucidity-nix-seed.service
 
         [Service]
         Type=oneshot
-        ExecStart=/usr/libexec/lucidity/install-determinate-nix
+        ExecStart=/usr/libexec/lucidity/install-determinate-nix-selinux-policy
         RemainAfterExit=yes
-        TimeoutStartSec=30min
-        Restart=on-failure
-        RestartSec=1min
+      '';
+      "usr/lib/systemd/system/lucidity-nix-seed.service" = ''
+        [Unit]
+        Description=Provision persistent Determinate Nix state
+        Requires=lucidity-nix-selinux.service
+        After=lucidity-nix-selinux.service
+        Before=nix.mount
+        RequiresMountsFor=/var/lib
+
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/libexec/lucidity/provision-determinate-nix
+        RemainAfterExit=yes
+      '';
+      "usr/lib/systemd/system/nix.mount" = ''
+        [Unit]
+        Description=Mount persistent Determinate Nix state on /nix
+        Requires=lucidity-nix-seed.service
+        After=lucidity-nix-seed.service
+        PropagatesStopTo=nix-daemon.service
+        ConditionPathIsDirectory=/nix
+        DefaultDependencies=no
+
+        [Mount]
+        What=/var/lib/nix
+        Where=/nix
+        Type=none
+        DirectoryMode=0755
+        Options=bind
+
+        [Install]
+        RequiredBy=nix-daemon.service
+        RequiredBy=nix-daemon.socket
+        RequiredBy=determinate-nixd.socket
+      '';
+      "usr/lib/systemd/system/nix-daemon.service" = ''
+        [Unit]
+        Description=Nix Daemon, with Determinate Nix superpowers
+        Documentation=man:nix-daemon https://determinate.systems
+        RequiresMountsFor=/nix/store /nix/var /nix/var/nix/db
+        ConditionPathIsReadWrite=/nix/var/nix/daemon-socket
+
+        [Service]
+        ExecStart=@/usr/bin/determinate-nixd determinate-nixd daemon
+        KillMode=process
+        LimitNOFILE=1048576
+        LimitSTACK=64M
+        TasksMax=1048576
 
         [Install]
         WantedBy=multi-user.target
+      '';
+      "usr/lib/systemd/system/nix-daemon.socket" = ''
+        [Unit]
+        Description=Determinate Nix Daemon Socket
+        Before=multi-user.target
+        RequiresMountsFor=/nix/store /nix/var /nix/var/nix/db
+        ConditionPathIsReadWrite=/nix/var/nix/daemon-socket
+
+        [Socket]
+        FileDescriptorName=nix-daemon.socket
+        ListenStream=/nix/var/nix/daemon-socket/socket
+
+        [Install]
+        WantedBy=sockets.target
+      '';
+      "usr/lib/systemd/system/determinate-nixd.socket" = ''
+        [Unit]
+        Description=Determinate Nixd Daemon Socket
+        Before=multi-user.target
+        RequiresMountsFor=/nix/store /nix/var/determinate
+
+        [Socket]
+        FileDescriptorName=determinate-nixd.socket
+        DirectoryMode=0755
+        ListenStream=/nix/var/determinate/determinate-nixd.socket
+        Service=nix-daemon.service
+
+        [Install]
+        WantedBy=sockets.target
       '';
       "usr/lib/systemd/system/lucidity-admin-authorized-key.service" = ''
         [Unit]
@@ -482,6 +626,7 @@
         Requires=coolify-controller-storage.service docker.service openbao.service
         After=coolify-controller-storage.service docker.service openbao.service network-online.target cloud-final.service aws-workload-credentials-provider-sm.service
         Wants=network-online.target aws-workload-credentials-provider-sm.service
+        ConditionPathExists=!/etc/lucidity/vm-connectivity-only
 
         [Service]
         Type=oneshot
@@ -669,13 +814,17 @@
 
   enabledUnits =
     [
-      "determinate-nix-install.service"
+      "nix.mount"
+      "nix-daemon.service"
+      "nix-daemon.socket"
+      "determinate-nixd.socket"
       "lucidity-nix-profile.service"
       "lucidity-admin-authorized-key.service"
       "nebula.service"
       "lucidity-nebula-expiry.timer"
       "lucidity-backup.timer"
     ]
+    ++ monitoring.enabledUnits
     ++ lib.optionals isController [
       "openbao.service"
       "openbao-snapshot.timer"
@@ -691,33 +840,106 @@
 
   containerfile = pkgs.writeText "Containerfile-${role}" ''
     ARG BASE_IMAGE=quay.io/almalinuxorg/almalinux-bootc:10
+
+    FROM scratch AS lucidity-nix-closure
+    COPY nix-closure /nix-closure
+
     FROM ''${BASE_IMAGE}
+    SHELL ["/bin/bash", "-Eeuo", "pipefail", "-c"]
 
     ARG SSM_AGENT_RPM_URL=https://s3.us-east-2.amazonaws.com/amazon-ssm-us-east-2/3.3.5068.0/linux_amd64/amazon-ssm-agent.rpm
-    ARG NIX_INSTALLER_VERSION=3.21.0
-    ARG NIX_INSTALLER_SHA256=b9911496659f0c35c642353d592926c024c205b597e8094bf73a42908a75e462
+    ARG NIX_INSTALLER_VERSION=3.21.9
+    ARG NIX_INSTALLER_SHA256=58cf15422853e95187405d66b0cdb306e66f602218ee0032386c46b1b776a6d1
+    ARG NIX_SELINUX_POLICY_SHA256=44a7427c40825b1fb3b331c480d55569296b619c7c50ff27ee2e237eb1bdcd8d
+    ARG NIX_SELINUX_FILE_CONTEXTS_SHA256=668726761299f1c51b74aa5c6cc1a8196e206bb6ccf04eeecd944eadc13713c9
+    ARG DETERMINATE_NIX_SELINUX_FILE_CONTEXTS_SHA256=28591de36f73fc2560b022e003552a195785d2c1a78ec53e88148ffd2271d31b
     ARG IMAGE_VERSION=dev
 
-    RUN dnf -y install dnf-plugins-core && \
+    RUN dnf -y install dnf-plugins-core epel-release && \
         dnf config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo && \
+        dnf clean all
+
+    COPY rootfs/usr/lib/sysusers.d/nix.conf /tmp/lucidity-nix-sysusers.conf
+
+    RUN systemd-sysusers /tmp/lucidity-nix-sysusers.conf && \
         dnf -y install ca-certificates cloud-init container-selinux curl \
           docker-buildx-plugin docker-ce docker-ce-cli docker-compose-plugin \
           NetworkManager openssh-server policycoreutils policycoreutils-python-utils \
-          rsyslog selinux-policy-targeted sudo && \
+          nix nix-daemon rsyslog selinux-policy-targeted sudo && \
+        rpm -q nix nix-daemon nix-filesystem nix-system && \
+        [[ $(rpm -qf --qf '%{NAME}\n' /nix) == nix-filesystem ]] && \
         dnf -y install "''${SSM_AGENT_RPM_URL}" && \
         dnf clean all && \
+        rm -f /tmp/lucidity-nix-sysusers.conf && \
         rm -rf /run/cloud-init /var/cache/* /var/lib/cloud /var/lib/dnf /var/log/*
 
     COPY rootfs/ /
 
-    RUN rm -rf /usr/local && ln -s ../var/usrlocal /usr/local && \
-        install -d -m 0755 /nix /usr/libexec/lucidity /var/lib/nix && \
+    # The installer migration preflight rejects any PATH-visible nix-env.
+    # The build hides only EPEL's binary for planning, then restores the RPM-owned file.
+    # Install the pinned Determinate policy explicitly because builders on
+    # non-SELinux hosts make the installer skip its SELinux action.
+    RUN --mount=type=bind,from=lucidity-nix-closure,source=/nix-closure,target=/run/lucidity-nix-closure,ro \
+        printf '%s\n' "''${IMAGE_VERSION}" > /usr/lib/lucidity/image-version && \
+        rm -rf /usr/local && ln -s ../var/usrlocal /usr/local && \
+        install -d -m 0755 /var/usrlocal/bin /usr/libexec/lucidity /var/lib/nix && \
         install -d -m 0700 /data/coolify /var/lib/coolify && \
         semanage fcontext -a -t container_file_t '/data/coolify(/.*)?' && \
         curl --fail --location --silent --show-error \
           --output /usr/libexec/lucidity/nix-installer \
           "https://github.com/DeterminateSystems/nix-installer/releases/download/v''${NIX_INSTALLER_VERSION}/nix-installer-x86_64-linux" && \
         echo "''${NIX_INSTALLER_SHA256}  /usr/libexec/lucidity/nix-installer" | sha256sum --check --strict && \
+        chmod 0755 /usr/libexec/lucidity/nix-installer && \
+        curl --fail --location --silent --show-error \
+          --output /usr/share/selinux/packages/determinate-nix.pp \
+          "https://raw.githubusercontent.com/DeterminateSystems/nix-installer/v''${NIX_INSTALLER_VERSION}/src/action/linux/selinux/determinate-nix.pp" && \
+        echo "''${NIX_SELINUX_POLICY_SHA256}  /usr/share/selinux/packages/determinate-nix.pp" | sha256sum --check --strict && \
+        curl --fail --location --silent --show-error \
+          --output /usr/share/selinux/packages/nix.fc \
+          "https://raw.githubusercontent.com/DeterminateSystems/nix-installer/v''${NIX_INSTALLER_VERSION}/src/action/linux/selinux/nix.fc" && \
+        echo "''${NIX_SELINUX_FILE_CONTEXTS_SHA256}  /usr/share/selinux/packages/nix.fc" | sha256sum --check --strict && \
+        curl --fail --location --silent --show-error \
+          --output /usr/share/selinux/packages/determinate-nix.fc \
+          "https://raw.githubusercontent.com/DeterminateSystems/nix-installer/v''${NIX_INSTALLER_VERSION}/src/action/linux/selinux/determinate-nix.fc" && \
+        echo "''${DETERMINATE_NIX_SELINUX_FILE_CONTEXTS_SHA256}  /usr/share/selinux/packages/determinate-nix.fc" | sha256sum --check --strict && \
+        semodule -i /usr/share/selinux/packages/determinate-nix.pp && \
+        mv /usr/bin/nix-env /usr/bin/nix-env.epel && \
+        HOME=/var/roothome /usr/libexec/lucidity/nix-installer install linux \
+          --determinate \
+          --diagnostic-endpoint "" \
+          --force \
+          --nix-build-group-id 30000 \
+          --nix-build-user-count 10 \
+          --nix-build-user-id-base 30000 \
+          --nix-build-user-prefix nixbld- \
+          --no-confirm \
+          --no-modify-profile \
+          --no-start-daemon && \
+        mv /usr/bin/nix-env.epel /usr/bin/nix-env && \
+        install -D -m 0555 /usr/local/bin/determinate-nixd /usr/bin/determinate-nixd && \
+        rm -f /usr/local/bin/determinate-nixd \
+          /etc/tmpfiles.d/nix-daemon.conf \
+          /etc/systemd/system/determinate-nixd.socket \
+          /etc/systemd/system/nix-daemon.service \
+          /etc/systemd/system/nix-daemon.socket && \
+        find /etc/systemd/system -type l \( \
+          -lname '/etc/systemd/system/determinate-nixd.socket' -o \
+          -lname '/etc/systemd/system/nix-daemon.service' -o \
+          -lname '/etc/systemd/system/nix-daemon.socket' \
+        \) -delete && \
+        for seed_path in /run/lucidity-nix-closure/store/*; do \
+          destination=/nix/store/''${seed_path##*/}; \
+          [[ -e $destination ]] || cp -a "$seed_path" /nix/store/; \
+        done && \
+        /nix/var/nix/profiles/default/bin/nix-store --load-db < /run/lucidity-nix-closure/registration && \
+        /nix/var/nix/profiles/default/bin/nix-store --verify-path ${systemProfile} && \
+        /nix/var/nix/profiles/default/bin/nix-store --verify-path ${homeActivation} && \
+        /nix/var/nix/profiles/default/bin/nix-env \
+          --profile /nix/var/nix/profiles/lucidity --set ${systemProfile} && \
+        install -d -m 0755 /usr/lib/lucidity/determinate-nix-seed && \
+        mv /nix/* /usr/lib/lucidity/determinate-nix-seed/ && \
+        rm -rf /var/roothome && \
+        semodule -l | awk '$1 == "nix" { found = 1 } END { exit !found }' && \
         chmod 0755 /usr/libexec/lucidity/* && \
         systemctl enable ${lib.concatStringsSep " " enabledUnits} \
           amazon-ssm-agent.service bootc-fetch-apply-updates.timer \
@@ -734,13 +956,11 @@
   '';
 in
   pkgs.runCommand "lucidity-${role}-bootc-context" {} ''
-    mkdir -p "$out/rootfs/usr/lib/lucidity/nix-seed/store"
+    mkdir -p "$out/rootfs" "$out/nix-closure/store"
     ${installFiles}
     install -m 0644 ${containerfile} "$out/Containerfile"
-    install -m 0644 ${closure}/registration "$out/rootfs/usr/lib/lucidity/nix-seed/registration"
+    install -m 0644 ${closure}/registration "$out/nix-closure/registration"
     while IFS= read -r store_path; do
-      cp -a "$store_path" "$out/rootfs/usr/lib/lucidity/nix-seed/store/"
+      cp -a "$store_path" "$out/nix-closure/store/"
     done < ${closure}/store-paths
-    ln -s ${systemProfile} "$out/system-profile"
-    ln -s ${homeActivation} "$out/home-activation"
   ''

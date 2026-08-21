@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "actions": {
+    "DeterminateSystems/determinate-nix-action": {
+      "category": "bootstrap",
+      "reason": "Install the trusted Nix runtime before invoking flake-owned CI commands."
+    },
+    "DeterminateSystems/update-flake-lock": {
+      "category": "platform-automation",
+      "reason": "Create the reviewable branch, commit, and pull request for flake lock updates."
+    },
+    "actions/attest": {
+      "category": "platform-io",
+      "reason": "Publish GitHub-native artifact attestations for release evidence."
+    },
+    "actions/checkout": {
+      "category": "source",
+      "reason": "Materialize the exact GitHub source revision selected by the workflow."
+    },
+    "actions/download-artifact": {
+      "category": "platform-io",
+      "reason": "Download GitHub-native artifacts shared between jobs in one workflow run."
+    },
+    "actions/upload-artifact": {
+      "category": "platform-io",
+      "reason": "Upload GitHub-native plan and release evidence for later jobs and review."
+    },
+    "aws-actions/configure-aws-credentials": {
+      "category": "cloud-identity",
+      "reason": "Exchange the GitHub OIDC token for short-lived, scoped AWS credentials."
+    },
+    "cachix/cachix-action": {
+      "category": "cache",
+      "reason": "Connect the Nix store to the repository's remote binary cache."
+    }
+  }
+}
