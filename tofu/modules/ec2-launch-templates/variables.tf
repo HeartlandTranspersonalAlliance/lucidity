@@ -34,6 +34,37 @@ variable "controller_runtime_secret_name" {
   }
 }
 
+variable "deployment_contract" {
+  description = "Non-secret deployment contract rendered as a root-only JSON file on both roles."
+  type        = any
+
+  validation {
+    condition = (
+      try(var.deployment_contract.schema_version, 0) == 1 &&
+      contains(["production", "test"], try(var.deployment_contract.environment, "")) &&
+      can(regex("^[a-z]{2}-[a-z]+-[0-9]+$", try(var.deployment_contract.region, ""))) &&
+      can(regex("^v[0-9]+\\.[0-9]+\\.[0-9]+$", try(var.deployment_contract.release, ""))) &&
+      can(regex("^[A-Za-z0-9/_+=.@-]{1,512}$", try(var.deployment_contract.runtime.controller_secret_id, ""))) &&
+      can(regex("^alias/[A-Za-z0-9/_-]+$", try(var.deployment_contract.runtime.openbao_kms_alias, ""))) &&
+      can(regex("^sha256:[0-9a-f]{64}$", try(var.deployment_contract.workloads.continuwuity.digest, "")))
+    )
+    error_message = "The deployment contract must be schema v1 with a supported environment, region, release, runtime identifiers, and pinned Continuwuity digest."
+  }
+}
+
+variable "runtime_secret_names" {
+  description = "Secrets Manager container names used only to build runtime dynamic references."
+  type        = map(string)
+
+  validation {
+    condition = alltrue([
+      for profile in ["controller_runtime", "monitoring", "restic_controller", "restic_worker"] :
+      can(regex("^[A-Za-z0-9/_+=.@-]{1,512}$", var.runtime_secret_names[profile]))
+    ])
+    error_message = "Runtime secret names must include all controller, monitoring, and Restic profiles."
+  }
+}
+
 variable "ami_ids" {
   description = "Explicit retained AMI IDs for the controller and worker roles."
   type        = map(string)

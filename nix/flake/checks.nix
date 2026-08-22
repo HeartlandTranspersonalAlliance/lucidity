@@ -9,6 +9,7 @@
       (lucidityProject)
       awsConfig
       awsProductionVars
+      awsTestVars
       ciWorkflow
       lucidity
       lucidityRelease
@@ -139,8 +140,18 @@
       test -f ${rolePackages.bootc-context-worker}/rootfs/usr/share/lucidity/nix-smoke/flake.lock
       grep -Fq 'Environment=COOLIFY_CURL_BIN=/usr/bin/curl' ${rolePackages.bootc-context-controller}/rootfs/usr/lib/systemd/system/coolify-controller-bootstrap.service
       ! grep -Fq 'Requires=lucidity-nix-profile.service' ${rolePackages.bootc-context-worker}/rootfs/usr/lib/systemd/system/lucidity-admin-authorized-key.service
-      grep -Fq '100.96.0.1' ${rolePackages.bootc-context-worker}/rootfs/etc/nebula/config.yml.in
+      grep -Fq '@MESH_HOSTNAME@' ${rolePackages.bootc-context-worker}/rootfs/etc/nebula/config.yml.in
+      grep -Fq '@VPC_CIDR@' ${rolePackages.bootc-context-worker}/rootfs/etc/nebula/config.yml.in
       grep -Fq 'address = "127.0.0.1:8200"' ${rolePackages.bootc-context-controller}/rootfs/etc/openbao/openbao.hcl.in
+      grep -Fq '@OVERLAY_LISTENER@' ${rolePackages.bootc-context-controller}/rootfs/etc/openbao/openbao.hcl.in
+      test -x ${rolePackages.bootc-context-controller}/rootfs/usr/libexec/lucidity/render-deployment-contract
+      test -x ${rolePackages.bootc-context-controller}/rootfs/usr/libexec/lucidity/register-openbao-aws-auth
+      test -x ${rolePackages.bootc-context-controller}/rootfs/usr/libexec/lucidity/enable-openbao-overlay
+      test -f ${rolePackages.bootc-context-controller}/rootfs/usr/lib/lucidity/openbao-auth-plugin-path
+      sed 's/@ENVIRONMENT@/test/g' \
+        ${rolePackages.bootc-context-controller}/rootfs/etc/lucidity/secretspec.toml.in \
+        > "$TMPDIR/test-secretspec.toml"
+      ! grep -E 'production|lucidity/prod|alias/lucidity-prod|Environment=prod' "$TMPDIR/test-secretspec.toml"
       test -f ${rolePackages.bootc-context-controller}/rootfs/usr/lib/systemd/system/lucidity-backup.service
       test -f ${rolePackages.bootc-context-controller}/rootfs/usr/lib/systemd/system/lucidity-backup.timer
       test -f ${rolePackages.bootc-context-worker}/rootfs/usr/lib/systemd/system/lucidity-backup.service
@@ -151,6 +162,9 @@
       test -x ${rolePackages.system-profile-worker}/bin/ooye
       test -f ${rolePackages.bootc-context-worker}/rootfs/usr/share/lucidity/workloads/continuwuity/compose.yaml
       grep -Fq 'CONTINUWUITY_IMAGE_DIGEST' ${rolePackages.bootc-context-worker}/rootfs/usr/share/lucidity/workloads/continuwuity/compose.yaml
+      grep -Fq 'CONTINUWUITY_REGISTRATION_TOKEN_FILE' ${rolePackages.bootc-context-worker}/rootfs/usr/libexec/lucidity/register-matrix-bootstrap-admin
+      grep -Fq 'm.login.registration_token' ${rolePackages.bootc-context-worker}/rootfs/usr/libexec/lucidity/register-matrix-bootstrap-admin
+      grep -Fq -- '--arg session "$session"' ${rolePackages.bootc-context-worker}/rootfs/usr/libexec/lucidity/register-matrix-bootstrap-admin
       grep -Fq 'name: lucidity-continuwuity-data' ${rolePackages.bootc-context-worker}/rootfs/usr/share/lucidity/workloads/continuwuity/compose.yaml
       grep -Fq 'host.docker.internal:host-gateway' ${rolePackages.bootc-context-worker}/rootfs/usr/share/lucidity/workloads/continuwuity/compose.yaml
       test -f ${rolePackages.bootc-context-worker}/rootfs/usr/lib/systemd/system/openbao-agent-worker.service
@@ -177,8 +191,16 @@
         ];
       } ''
         root=${rolePackages.bootc-context-controller}/rootfs
-        sed "s|/etc/prometheus/rules.yml|$root/etc/prometheus/rules.yml|" \
-          "$root/etc/prometheus/prometheus.yml" > prometheus.yml
+        printf '%s\n' '                - "https://test.heartlandta.org"' >blackbox-targets.yml
+        awk -v targets=blackbox-targets.yml '
+          $0 == "@BLACKBOX_TARGETS@" {
+            while ((getline line < targets) > 0) print line
+            close(targets)
+            next
+          }
+          { print }
+        ' "$root/etc/prometheus/prometheus.yml.in" |
+          sed "s|/etc/prometheus/rules.yml|$root/etc/prometheus/rules.yml|" >prometheus.yml
         promtool check config prometheus.yml
         promtool check rules "$root/etc/prometheus/rules.yml"
         amtool check-config "$root/etc/alertmanager/alertmanager.yml"
@@ -186,14 +208,14 @@
         alloy validate "$root/etc/alloy/config.alloy"
         loki -verify-config -config.file="$root/etc/loki/config.yml"
         alloy validate ${rolePackages.bootc-context-worker}/rootfs/etc/alloy/config.alloy
-        jq -e '.uid == "lucidity-production" and (.panels | length) == 5' \
+        jq -e '.uid == "lucidity-overview" and (.panels | length) == 5' \
           "$root/etc/grafana/dashboards/lucidity-overview.json" >/dev/null
         grep -Fq 'uid: lucidity-loki' "$root/etc/grafana/provisioning/datasources/prometheus.yml"
         grep -Fq 'retention_period: 168h' "$root/etc/loki/config.yml"
         grep -Fq '100.96.0.1:3100/loki/api/v1/push' \
           ${rolePackages.bootc-context-worker}/rootfs/etc/alloy/config.alloy
         grep -Fq 'json-file' ${rolePackages.bootc-context-worker}/rootfs/etc/docker/daemon.json
-        grep -Fq '100.96.0.1:2586' "$root/etc/lucidity/ntfy-traefik.yml"
+        grep -Fq '@NTFY_HOSTNAME@' "$root/etc/lucidity/ntfy-traefik.yml.in"
         grep -Fq 'LoadCredential=bao-token:/var/lib/openbao/monitoring-token' \
           "$root/usr/lib/systemd/system/alertmanager-ntfy.service"
         grep -Fq -- '--web.listen-address=100.96.0.2:9100' \
@@ -212,6 +234,7 @@
       } ''
         aws=${awsConfig}
         production_vars=${awsProductionVars}
+        test_vars=${awsTestVars}
         state=${config.terranix.terranixConfigurations.state.result.terraformConfiguration}
         ${pkgs.jq}/bin/jq -e '
           . as $root |
@@ -243,8 +266,24 @@
           .enable_openbao and
           .enable_runtime_secrets and
           .flow_log_retention_days == 90 and
-          (keys | length == 7)
+          .deployment_contract.environment == "production" and
+          .deployment_contract.state.key == "lucidity/production/terraform.tfstate" and
+          .deployment_stage == null and
+          (keys | length == 9)
         ' "$production_vars" >/dev/null
+        ${pkgs.jq}/bin/jq -e '
+          .environment == "test" and
+          .deployment_stage == "foundation" and
+          .vpc_name == "lucidity-test" and
+          .deployment_contract.environment == "test" and
+          .deployment_contract.region == "us-east-2" and
+          .deployment_contract.release == "v0.4.0" and
+          .deployment_contract.state.key == "lucidity/test/terraform.tfstate" and
+          .deployment_contract.review_after == "2026-09-05" and
+          .deployment_contract.matrix.server_name == "test.heartlandta.org" and
+          .deployment_contract.workloads.continuwuity.digest == "sha256:55397612f3e78150f8bfce2413c6912b3046e05cd30c895644fd5df4eb4f96db" and
+          (.deployment_contract.features | all(.[]; . == true))
+        ' "$test_vars" >/dev/null
         network=$(${pkgs.jq}/bin/jq -r '.module.network.source' "$aws")
         ${pkgs.gnugrep}/bin/grep -Rq 'from_port[[:space:]]*=[[:space:]]*var.nebula_udp_port' "$network"
         ${pkgs.gnugrep}/bin/grep -Fq 'resource "aws_flow_log" "rejected"' "$network/main.tf"
@@ -264,9 +303,13 @@
         ${pkgs.jq}/bin/jq 'del(.terraform.backend)' "$aws" >generated-aws/main.tf.json
         mkdir generated-aws/tests
         cp ${infrastructureTestSource}/nix/infra/tests/aws.tftest.hcl generated-aws/tests/aws.tftest.hcl
+        cp ${infrastructureTestSource}/nix/infra/tests/aws-test-stages.tftest.hcl generated-aws/tests/aws-test-stages.tftest.hcl
+        ${pkgs.jq}/bin/jq '{deployment_contract, deployment_stage}' "$production_vars" \
+          >generated-aws/test.auto.tfvars.json
         tofu -chdir=generated-aws init -backend=false -input=false >/dev/null
         tofu -chdir=generated-aws validate
-        tofu -chdir=generated-aws test
+        tofu -chdir=generated-aws test -filter=tests/aws.tftest.hcl -var-file=test.auto.tfvars.json
+        tofu -chdir=generated-aws test -filter=tests/aws-test-stages.tftest.hcl -var-file="$test_vars"
         ${pkgs.jq}/bin/jq -e '
           .terraform.backend.s3 == {} and
           (.moved | length) == 13 and
@@ -333,6 +376,41 @@
           "COOLIFY_REDIS_PASSWORD"
         ]
       ' controller-runtime-schema.json >/dev/null
+      ${pkgs.secretspec}/bin/secretspec schema \
+        --file ${secretspecSource}/secretspec.toml --profile test-controller-runtime --output test-controller-runtime-schema.json
+      ${pkgs.jq}/bin/jq -e '
+        (.required | sort) == [
+          "COOLIFY_APP_ID",
+          "COOLIFY_APP_KEY",
+          "COOLIFY_DB_PASSWORD",
+          "COOLIFY_PUSHER_APP_ID",
+          "COOLIFY_PUSHER_APP_KEY",
+          "COOLIFY_PUSHER_APP_SECRET",
+          "COOLIFY_REDIS_PASSWORD"
+        ]
+      ' test-controller-runtime-schema.json >/dev/null
+      ${pkgs.secretspec}/bin/secretspec schema \
+        --file ${secretspecSource}/secretspec.toml --profile test-monitoring-controller --output test-monitoring-schema.json
+      ${pkgs.jq}/bin/jq -e '
+        .required == ["NTFY_ALERTMANAGER_TOKEN_FILE"]
+      ' test-monitoring-schema.json >/dev/null
+      ${pkgs.secretspec}/bin/secretspec schema \
+        --file ${secretspecSource}/secretspec.toml --profile test-matrix-bootstrap --output test-matrix-schema.json
+      ${pkgs.jq}/bin/jq -e '
+        (.required | sort) == ["MATRIX_ADMIN_PASSWORD_FILE", "MATRIX_REGISTRATION_TOKEN_FILE"]
+      ' test-matrix-schema.json >/dev/null
+      ${pkgs.secretspec}/bin/secretspec schema \
+        --file ${secretspecSource}/secretspec.toml --profile test-ooye-worker --output test-ooye-schema.json
+      ${pkgs.jq}/bin/jq -e '
+        (.required | sort) == ["OOYE_DISCORD_BOT_TOKEN_FILE", "OOYE_REGISTRATION_FILE"]
+      ' test-ooye-schema.json >/dev/null
+      for profile in test-backup-controller test-backup-worker; do
+        ${pkgs.secretspec}/bin/secretspec schema \
+          --file ${secretspecSource}/secretspec.toml --profile "$profile" --output "$profile-schema.json"
+        ${pkgs.jq}/bin/jq -e '
+          .required == ["RESTIC_PASSWORD_FILE"]
+        ' "$profile-schema.json" >/dev/null
+      done
       touch "$out"
     '';
     repositoryCheck =

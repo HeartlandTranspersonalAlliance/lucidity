@@ -51,6 +51,9 @@ in {
     openbaoKmsPlugin = pkgs.callPackage ../pkgs/openbao-kms-aws.nix {
       openbaoPluginsSrc = inputs.openbao-plugins;
     };
+    openbaoAuthPlugin = pkgs.callPackage ../pkgs/openbao-auth-aws.nix {
+      openbaoPluginsSrc = inputs.openbao-plugins;
+    };
     ooye = pkgs.callPackage ../pkgs/ooye.nix {
       ooyeSrc = inputs.ooye;
     };
@@ -66,13 +69,18 @@ in {
           .variable.cloudflare_zone_id.default = null |
           .variable.github_oidc_provider_arn.default = null |
           .variable.root_volume_kms_key_arn.default = null
+          | .variable.shared_snapshot_kms_key_arn.default = null
+          | .variable.state_bucket_name.default = null
           | .variable.application_backup_bucket_arn.default = null
           | .variable.application_backup_bucket_kms_key_arn.default = null
           | .variable.application_backup_secret_kms_key_arn.default = null
         ' ${config.terranix.terranixConfigurations.aws.result.terraformConfiguration} > "$out"
       '';
+    productionDeployment = builtins.fromJSON (builtins.readFile ../../deployments/production.json);
     awsProductionVars = pkgs.writeText "lucidity-production.auto.tfvars.json" (
       builtins.toJSON {
+        deployment_contract = productionDeployment;
+        deployment_stage = null;
         enable_account_security_baseline = true;
         enable_ami_launch_validation = true;
         enable_instance_management = true;
@@ -80,6 +88,66 @@ in {
         enable_openbao = true;
         enable_runtime_secrets = true;
         flow_log_retention_days = 90;
+      }
+    );
+    testDeployment = builtins.fromJSON (builtins.readFile ../../deployments/test.json);
+    awsTestVars = pkgs.writeText "lucidity-test.auto.tfvars.json" (
+      builtins.toJSON {
+        environment = testDeployment.environment;
+        deployment_stage = "foundation";
+        deployment_contract = testDeployment;
+        vpc_name = "lucidity-test";
+        vpc_cidr = "10.21.0.0/16";
+        availability_zone_count = 2;
+        enable_account_security_baseline = false;
+        enable_account_cost_budget = false;
+        enable_shared_release_resources = false;
+        enable_ami_launch_validation = false;
+        enable_instance_management = true;
+        enable_network = true;
+        enable_openbao = true;
+        enable_runtime_secrets = true;
+        flow_log_retention_days = 30;
+        ec2_node_names = {
+          controller = "lucidity-test-controller";
+          worker = "lucidity-test-worker";
+        };
+        cloudflare_zone_name = "heartlandta.org";
+        cloudflare_dns_records = {
+          "coolify.test" = {
+            role = "controller";
+            proxied = true;
+          };
+          "apps.test" = {
+            role = "worker";
+            proxied = true;
+          };
+          "*.apps.test" = {
+            role = "worker";
+            proxied = true;
+          };
+          test = {
+            role = "worker";
+            proxied = true;
+          };
+          "matrix.test" = {
+            role = "worker";
+            proxied = true;
+          };
+          "ntfy.test" = {
+            role = "controller";
+            proxied = true;
+          };
+          "mesh.test" = {
+            role = "controller";
+            proxied = false;
+          };
+        };
+        tags = {
+          Environment = "test";
+          ReviewAfter = testDeployment.review_after;
+          DataPolicy = "synthetic-only";
+        };
       }
     );
     mkRoleOutputs = role: let
@@ -93,10 +161,10 @@ in {
         name = "lucidity-${role}-system-profile";
         paths =
           profileConfig.lucidity.packages
-          ++ [lucidity]
+          ++ [lucidity asmExec]
           ++ lib.optionals (role == "controller") [
-            asmExec
             awsWorkloadCredentialsProvider
+            openbaoAuthPlugin
           ]
           ++ lib.optional (role == "worker") ooye;
         pathsToLink = [
@@ -113,6 +181,7 @@ in {
           systemProfile
           homeActivation
           openbaoKmsPlugin
+          openbaoAuthPlugin
           asmExec
           awsWorkloadCredentialsProvider
           ;
@@ -201,6 +270,7 @@ in {
         asmExec
         awsConfig
         awsProductionVars
+        awsTestVars
         awsWorkloadCredentialsProvider
         ciWorkflow
         lucidity
@@ -212,6 +282,7 @@ in {
         mkShellTest
         mkSource
         openbaoKmsPlugin
+        openbaoAuthPlugin
         rolePackages
         source
         ;

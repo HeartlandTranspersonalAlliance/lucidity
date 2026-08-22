@@ -7,6 +7,11 @@ locals {
     },
     var.tags,
   )
+  additional_profiles = {
+    monitoring        = "monitoring-tokens"
+    restic_controller = "restic-controller"
+    restic_worker     = "restic-worker"
+  }
 }
 
 resource "aws_kms_key" "controller_runtime" {
@@ -31,6 +36,20 @@ resource "aws_secretsmanager_secret" "controller_runtime" {
   tags = merge(local.common_tags, { Name = "${local.resource_prefix}-controller-runtime" })
 }
 
+resource "aws_secretsmanager_secret" "runtime" {
+  for_each = local.additional_profiles
+
+  name                    = "${var.project_name}/${var.environment}/${each.value}"
+  description             = "Empty SecretSpec-managed ${each.value} container for ${var.project_name} ${var.environment}"
+  kms_key_id              = aws_kms_key.controller_runtime.arn
+  recovery_window_in_days = var.recovery_window_in_days
+
+  tags = merge(local.common_tags, {
+    Name    = "${local.resource_prefix}-${each.value}"
+    Profile = each.key
+  })
+}
+
 data "aws_iam_policy_document" "controller_secrets" {
   statement {
     sid    = "ReadControllerRuntimeSecret"
@@ -39,7 +58,10 @@ data "aws_iam_policy_document" "controller_secrets" {
       "secretsmanager:DescribeSecret",
       "secretsmanager:GetSecretValue",
     ]
-    resources = [aws_secretsmanager_secret.controller_runtime.arn]
+    resources = concat(
+      [aws_secretsmanager_secret.controller_runtime.arn],
+      [for profile in ["monitoring", "restic_controller"] : aws_secretsmanager_secret.runtime[profile].arn],
+    )
 
     condition {
       test     = "Bool"
@@ -70,4 +92,41 @@ resource "aws_iam_policy" "controller_secrets" {
   policy      = data.aws_iam_policy_document.controller_secrets.json
 
   tags = local.common_tags
+}
+
+data "aws_iam_policy_document" "worker_secrets" {
+  statement {
+    sid     = "ReadWorkerResticSecret"
+    effect  = "Allow"
+    actions = ["secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue"]
+    resources = [
+      aws_secretsmanager_secret.runtime["restic_worker"].arn,
+    ]
+
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["true"]
+    }
+  }
+
+  statement {
+    sid       = "DecryptWorkerResticSecret"
+    effect    = "Allow"
+    actions   = ["kms:Decrypt"]
+    resources = [aws_kms_key.controller_runtime.arn]
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["secretsmanager.${data.aws_region.current.region}.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_policy" "worker_secrets" {
+  name        = "${local.resource_prefix}-worker-secrets"
+  description = "Read-only access to the ${var.project_name} ${var.environment} worker restic secret"
+  policy      = data.aws_iam_policy_document.worker_secrets.json
+  tags        = local.common_tags
 }

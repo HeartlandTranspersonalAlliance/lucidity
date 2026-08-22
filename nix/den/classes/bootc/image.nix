@@ -5,6 +5,7 @@
   systemProfile,
   homeActivation,
   openbaoKmsPlugin,
+  openbaoAuthPlugin,
   asmExec,
   awsWorkloadCredentialsProvider,
 }: let
@@ -17,7 +18,8 @@
         systemProfile
         homeActivation
       ]
-      ++ lib.optional isController openbaoKmsPlugin;
+      ++ lib.optional isController openbaoKmsPlugin
+      ++ lib.optional isController openbaoAuthPlugin;
   };
   nebulaConfig = import ./nebula.nix {
     inherit lib role;
@@ -25,7 +27,6 @@
   monitoring = import ./monitoring.nix {
     inherit lib pkgs isController systemProfile;
     overlayIPv4 = cfg.overlayIPv4;
-    httpsTargets = cfg.monitoring.httpsTargets;
   };
 
   generatedFiles =
@@ -270,9 +271,80 @@
         if [[ -s /var/lib/nebula/blocklist ]]; then
           blocklist=$(${pkgs.jq}/bin/jq -Rsc 'split("\n") | map(select(length > 0))' /var/lib/nebula/blocklist)
         fi
-        ${pkgs.gnused}/bin/sed "s|\"@BLOCKLIST@\"|$blocklist|" \
+        contract=/etc/lucidity/deployment.json
+        [[ -s $contract ]] || { echo "deployment contract is unavailable" >&2; exit 1; }
+        mesh_hostname=$(${pkgs.jq}/bin/jq -er '.runtime.mesh_hostname | select(test("^[A-Za-z0-9.-]+$"))' "$contract")
+        vpc_cidr=$(${pkgs.jq}/bin/jq -er '.runtime.vpc_cidr | select(test("^[0-9./]+$"))' "$contract")
+        ${pkgs.gnused}/bin/sed \
+          -e "s|\"@BLOCKLIST@\"|$blocklist|" \
+          -e "s|@MESH_HOSTNAME@|$mesh_hostname|g" \
+          -e "s|@VPC_CIDR@|$vpc_cidr|g" \
           /etc/nebula/config.yml.in > /run/nebula/config.yml
         chmod 0600 /run/nebula/config.yml
+      '';
+      "usr/libexec/lucidity/render-deployment-contract" = ''
+        #!/usr/bin/env bash
+        set -Eeuo pipefail
+        contract=/etc/lucidity/deployment.json
+        [[ -f $contract && $(stat -c %U:%G:%a "$contract") == root:root:600 ]] || {
+          echo "deployment contract must be root-owned with mode 0600" >&2
+          exit 1
+        }
+        ${pkgs.jq}/bin/jq -e '
+          .schema_version == 1 and
+          (.environment == "production" or .environment == "test") and
+          (.region | test("^[a-z]{2}-[a-z]+-[0-9]+$")) and
+          (.release | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) and
+          (.runtime.controller_secret_id | test("^[A-Za-z0-9/_+=.@-]+$")) and
+          (.runtime.openbao_kms_alias | test("^alias/[A-Za-z0-9/_-]+$")) and
+          (.runtime.mesh_hostname | test("^[A-Za-z0-9.-]+$")) and
+          (.runtime.ntfy_url | test("^https://[A-Za-z0-9.-]+$")) and
+          (.runtime.blackbox_targets | type == "array" and length > 0) and
+          (.matrix.server_name | test("^[A-Za-z0-9.-]+$")) and
+          (.matrix.service_hostname | test("^[A-Za-z0-9.-]+$")) and
+          (.workloads.continuwuity.digest | test("^sha256:[0-9a-f]{64}$"))
+        ' "$contract" >/dev/null
+        install -d -m 0700 /run/lucidity
+        umask 077
+        environment=$(${pkgs.jq}/bin/jq -r '.environment' "$contract")
+        ${pkgs.gnused}/bin/sed "s|@ENVIRONMENT@|$environment|g" \
+          /etc/lucidity/secretspec.toml.in > /etc/lucidity/secretspec.toml
+        chown root:root /etc/lucidity/secretspec.toml
+        chmod 0600 /etc/lucidity/secretspec.toml
+        ${pkgs.jq}/bin/jq -r '
+          [
+            "LUCIDITY_ENVIRONMENT=" + (.environment | @sh),
+            "LUCIDITY_RELEASE=" + (.release | @sh),
+            "MATRIX_SERVER_NAME=" + (.matrix.server_name | @sh),
+            "MATRIX_SERVICE_HOSTNAME=" + (.matrix.service_hostname | @sh),
+            "CONTINUWUITY_REPOSITORY=" + (.workloads.continuwuity.repository | @sh),
+            "CONTINUWUITY_VERSION=" + (.workloads.continuwuity.version | @sh),
+            "CONTINUWUITY_IMAGE_DIGEST=" + (.workloads.continuwuity.digest | @sh)
+          ] | .[]
+        ' "$contract" > /run/lucidity/deployment.env
+        ${lib.optionalString isController ''
+          ntfy_url=$(${pkgs.jq}/bin/jq -r '.runtime.ntfy_url' "$contract")
+          ntfy_hostname=$(${pkgs.jq}/bin/jq -r '.dns.ntfy' "$contract")
+          ${pkgs.jq}/bin/jq -r '.runtime.blackbox_targets[] | "                - " + @json' \
+            "$contract" > /run/lucidity/blackbox-targets.yml
+          ${pkgs.gawk}/bin/awk -v targets=/run/lucidity/blackbox-targets.yml '
+            $0 == "@BLACKBOX_TARGETS@" {
+              while ((getline line < targets) > 0) print line
+              close(targets)
+              next
+            }
+            { print }
+          ' /etc/prometheus/prometheus.yml.in > /run/lucidity/prometheus.yml
+          ${pkgs.gnused}/bin/sed \
+            -e "s|@NTFY_URL@|$ntfy_url|g" \
+            /etc/alertmanager-ntfy/config.yml.in > /run/lucidity/alertmanager-ntfy.yml
+          ${pkgs.gnused}/bin/sed \
+            -e "s|@NTFY_URL@|$ntfy_url|g" \
+            /etc/ntfy/server.yml.in > /run/lucidity/ntfy-server.yml
+          ${pkgs.gnused}/bin/sed \
+            -e "s|@NTFY_HOSTNAME@|$ntfy_hostname|g" \
+            /etc/lucidity/ntfy-traefik.yml.in > /run/lucidity/ntfy-traefik.yml
+        ''}
       '';
       "usr/libexec/lucidity/check-nebula-expiry" = ''
         #!/usr/bin/env bash
@@ -304,6 +376,20 @@
 
         [Install]
         WantedBy=multi-user.target
+      '';
+      "usr/lib/systemd/system/lucidity-render-deployment.service" = ''
+        [Unit]
+        Description=Validate and render the non-secret Lucidity deployment contract
+        After=cloud-final.service
+        ConditionPathExists=/etc/lucidity/deployment.json
+
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/libexec/lucidity/render-deployment-contract
+        RemainAfterExit=yes
+
+        [Install]
+        WantedBy=cloud-init.target
       '';
       "usr/lib/systemd/system/lucidity-bootc-ecr-auth.service" = ''
         [Unit]
@@ -433,8 +519,8 @@
       "usr/lib/systemd/system/nebula.service" = ''
         [Unit]
         Description=Lucidity Nebula mesh
-        Requires=lucidity-nix-profile.service
-        After=lucidity-nix-profile.service network-online.target
+        Requires=lucidity-nix-profile.service lucidity-render-deployment.service
+        After=lucidity-nix-profile.service lucidity-render-deployment.service network-online.target
         Wants=network-online.target
         ConditionPathExists=/var/lib/nebula/ca.crt
         ConditionPathExists=/var/lib/nebula/host.crt
@@ -538,14 +624,8 @@
     }
     // lib.optionalAttrs isController {
       "etc/coolify-controller/runtime-secrets.env.example" = ''
-        # Provision this reference-only file as runtime-secrets.env through SSM.
-        COOLIFY_APP_ID={{resolve:secretsmanager:lucidity/production/controller-runtime:SecretString:APP_ID}}
-        COOLIFY_APP_KEY={{resolve:secretsmanager:lucidity/production/controller-runtime:SecretString:APP_KEY}}
-        COOLIFY_DB_PASSWORD={{resolve:secretsmanager:lucidity/production/controller-runtime:SecretString:DB_PASSWORD}}
-        COOLIFY_REDIS_PASSWORD={{resolve:secretsmanager:lucidity/production/controller-runtime:SecretString:REDIS_PASSWORD}}
-        COOLIFY_PUSHER_APP_ID={{resolve:secretsmanager:lucidity/production/controller-runtime:SecretString:PUSHER_APP_ID}}
-        COOLIFY_PUSHER_APP_KEY={{resolve:secretsmanager:lucidity/production/controller-runtime:SecretString:PUSHER_APP_KEY}}
-        COOLIFY_PUSHER_APP_SECRET={{resolve:secretsmanager:lucidity/production/controller-runtime:SecretString:PUSHER_APP_SECRET}}
+        # The launch template writes runtime-secrets.env from the deployment-specific
+        # Secrets Manager identifier. Do not copy static references into this image.
       '';
       "usr/libexec/lucidity/bootstrap-controller" =
         builtins.readFile ../../aspects/controller/files/bootstrap-controller.sh;
@@ -694,6 +774,7 @@
         WantedBy=cloud-init.target
       '';
       "usr/lib/lucidity/openbao-kms-plugin-path" = "${openbaoKmsPlugin}/bin/openbao-plugin-kms-aws\n";
+      "usr/lib/lucidity/openbao-auth-plugin-path" = "${openbaoAuthPlugin}/bin/openbao-plugin-auth-aws\n";
       "usr/libexec/lucidity/prepare-openbao" = ''
         #!/usr/bin/env bash
         set -Eeuo pipefail
@@ -711,12 +792,63 @@
         plugin=$(< /usr/lib/lucidity/openbao-kms-plugin-path)
         install -m 0500 -o openbao -g openbao "$plugin" /var/lib/openbao/plugins/openbao-plugin-kms-aws
         sha=$(${pkgs.coreutils}/bin/sha256sum /var/lib/openbao/plugins/openbao-plugin-kms-aws | ${pkgs.coreutils}/bin/cut -d' ' -f1)
+        auth_plugin=$(< /usr/lib/lucidity/openbao-auth-plugin-path)
+        install -m 0500 -o openbao -g openbao "$auth_plugin" /var/lib/openbao/plugins/openbao-plugin-auth-aws
+        auth_sha=$(${pkgs.coreutils}/bin/sha256sum /var/lib/openbao/plugins/openbao-plugin-auth-aws | ${pkgs.coreutils}/bin/cut -d' ' -f1)
+        printf '%s\n' "$auth_sha" > /var/lib/openbao/plugins/openbao-plugin-auth-aws.sha256
+        chown openbao:openbao /var/lib/openbao/plugins/openbao-plugin-auth-aws.sha256
+        chmod 0400 /var/lib/openbao/plugins/openbao-plugin-auth-aws.sha256
+        contract=/etc/lucidity/deployment.json
+        [[ -s $contract ]] || { echo "deployment contract is unavailable" >&2; exit 1; }
+        kms_alias=$(${pkgs.jq}/bin/jq -er '.runtime.openbao_kms_alias | select(test("^alias/[A-Za-z0-9/_-]+$"))' "$contract")
+        overlay_listener=
+        if [[ -e /var/lib/openbao/overlay-listener.enabled ]]; then
+          overlay_listener='listener "tcp" { address = "100.96.0.1:8200"; tls_disable = false; tls_cert_file = "/var/lib/openbao/tls/server.crt"; tls_key_file = "/var/lib/openbao/tls/server.key" }'
+        fi
         ${pkgs.gnused}/bin/sed \
           -e "s|@AWS_KMS_PLUGIN@|/var/lib/openbao/plugins/openbao-plugin-kms-aws|" \
           -e "s|@AWS_KMS_PLUGIN_SHA256@|$sha|" \
+          -e "s|@OPENBAO_KMS_ALIAS@|$kms_alias|" \
+          -e "s|@OVERLAY_LISTENER@|$overlay_listener|" \
           /etc/openbao/openbao.hcl.in > /run/openbao.hcl
         chown openbao:openbao /run/openbao.hcl
         chmod 0600 /run/openbao.hcl
+      '';
+      "usr/libexec/lucidity/register-openbao-aws-auth" = ''
+        #!/usr/bin/env bash
+        set -Eeuo pipefail
+        worker_role_arn=''${1:-}
+        [[ $worker_role_arn =~ ^arn:aws[a-z-]*:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_-]+$ ]] || {
+          echo "register-openbao-aws-auth requires the exact worker IAM role ARN" >&2
+          exit 2
+        }
+        export BAO_ADDR=''${BAO_ADDR:-https://127.0.0.1:8200}
+        export BAO_CACERT=''${BAO_CACERT:-/var/lib/openbao/tls/server.crt}
+        environment=$(${pkgs.jq}/bin/jq -er '.environment | select(. == "production" or . == "test")' /etc/lucidity/deployment.json)
+        sha=$(< /var/lib/openbao/plugins/openbao-plugin-auth-aws.sha256)
+        ${pkgs.openbao}/bin/bao plugin register -sha256="$sha" auth openbao-plugin-auth-aws
+        if ! ${pkgs.openbao}/bin/bao auth list -format=json | ${pkgs.jq}/bin/jq -e 'has("aws/")' >/dev/null; then
+          ${pkgs.openbao}/bin/bao auth enable -path=aws openbao-plugin-auth-aws
+        fi
+        ${pkgs.openbao}/bin/bao policy write lucidity-worker - <<POLICY
+        path "secret/data/lucidity/$environment/worker-ooye" {
+          capabilities = ["read"]
+        }
+        POLICY
+        ${pkgs.openbao}/bin/bao write auth/aws/role/lucidity-worker \
+          auth_type=iam bound_iam_principal_arn="$worker_role_arn" \
+          policies=lucidity-worker resolve_aws_unique_ids=true
+      '';
+      "usr/libexec/lucidity/enable-openbao-overlay" = ''
+        #!/usr/bin/env bash
+        set -Eeuo pipefail
+        [[ -s /var/lib/nebula/ca.crt && -s /var/lib/nebula/host.crt && -s /var/lib/nebula/host.key ]] || {
+          echo "install the controller Nebula identity before enabling the OpenBao overlay listener" >&2
+          exit 1
+        }
+        systemctl is-active --quiet nebula.service
+        install -o openbao -g openbao -m 0600 /dev/null /var/lib/openbao/overlay-listener.enabled
+        systemctl restart openbao.service
       '';
       "usr/libexec/lucidity/openbao-snapshot" = ''
         #!/usr/bin/env bash
@@ -739,8 +871,8 @@
       "usr/lib/systemd/system/openbao.service" = ''
         [Unit]
         Description=Lucidity OpenBao CA custody service
-        Requires=lucidity-nix-profile.service
-        After=lucidity-nix-profile.service nebula.service
+        Requires=lucidity-nix-profile.service lucidity-render-deployment.service
+        After=lucidity-nix-profile.service lucidity-render-deployment.service network-online.target
 
         [Service]
         User=openbao
@@ -872,6 +1004,7 @@
       "nix-daemon.socket"
       "determinate-nixd.socket"
       "lucidity-nix-profile.service"
+      "lucidity-render-deployment.service"
       "lucidity-bootc-ecr-auth.service"
       "lucidity-admin-authorized-key.service"
       "nebula.service"

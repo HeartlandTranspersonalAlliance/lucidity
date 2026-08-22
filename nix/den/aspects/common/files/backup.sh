@@ -9,6 +9,9 @@ readonly RESTIC_BIN="${LUCIDITY_RESTIC_BIN:-restic}"
 readonly SECRETSPEC_BIN="${LUCIDITY_SECRETSPEC_BIN:-secretspec}"
 readonly STATE_DIRECTORY="${LUCIDITY_BACKUP_STATE_DIRECTORY:-/var/lib/lucidity-backup}"
 readonly RESTORE_DIRECTORY="${LUCIDITY_RESTORE_DIRECTORY:-/var/lib/lucidity-restore}"
+readonly DEPLOYMENT_CONTRACT="${LUCIDITY_DEPLOYMENT_CONTRACT:-/etc/lucidity/deployment.json}"
+readonly RUNTIME_REFERENCES="${LUCIDITY_RUNTIME_REFERENCES:-/etc/lucidity/runtime-references.env}"
+readonly ASM_EXEC_BIN="${LUCIDITY_ASM_EXEC_BIN:-asm-exec}"
 
 die() {
     echo "lucidity backup: $*" >&2
@@ -50,6 +53,9 @@ read_config() {
     [[ -r $ROLE_FILE ]] || die "node role is unavailable: $ROLE_FILE"
     IFS= read -r ROLE <"$ROLE_FILE"
     [[ $ROLE == controller || $ROLE == worker ]] || die "invalid node role: $ROLE"
+    if [[ -r $DEPLOYMENT_CONTRACT ]]; then
+        jq -e '.environment | select(. == "production" or . == "test")' "$DEPLOYMENT_CONTRACT" >/dev/null
+    fi
     [[ $REPOSITORY == */"$ROLE" || $REPOSITORY == */"$ROLE"/ ]] ||
         die "the repository must end in the isolated $ROLE prefix"
 
@@ -95,6 +101,21 @@ run_restic() {
         if [[ -n ${CREDENTIALS_DIRECTORY:-} && -s $CREDENTIALS_DIRECTORY/bao-token ]]; then
             environment+=(BAO_TOKEN_PATH="$CREDENTIALS_DIRECTORY/bao-token")
         fi
+    fi
+    if [[ $BACKEND == aws-s3 && -r $RUNTIME_REFERENCES ]]; then
+        while IFS='=' read -r key value; do
+            [[ -z $key || $key == \#* ]] && continue
+            [[ $value =~ ^\{\{resolve:secretsmanager:.+:SecretString:[^}:]+(:AWSCURRENT)?\}\}$ ]] ||
+                die "runtime backup references must contain only Secrets Manager dynamic references"
+            case "$key" in
+                RESTIC_PASSWORD) export "$key=$value" ;;
+                NTFY_ALERTMANAGER_TOKEN|MATRIX_REGISTRATION_TOKEN|MATRIX_ADMIN_PASSWORD) ;;
+                *) die "unsupported runtime backup reference: $key" ;;
+            esac
+        done <"$RUNTIME_REFERENCES"
+        [[ -n ${RESTIC_PASSWORD:-} ]] || die "RESTIC_PASSWORD reference is unavailable"
+        env "${environment[@]}" "$ASM_EXEC_BIN" -- "$RESTIC_BIN" "$@"
+        return
     fi
     env "${environment[@]}" "$SECRETSPEC_BIN" run \
         --file "$SECRETSPEC_FILE" \

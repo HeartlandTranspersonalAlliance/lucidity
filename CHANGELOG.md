@@ -7,6 +7,31 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-21
+
+### Added
+
+- An isolated `test` deployment contract for `us-east-2`, the
+  `test.heartlandta.org` namespace, synthetic-only data, and a September 5
+  review checkpoint.
+- Saved-plan rollout stages for foundation, compute, edge, and quarantine,
+  with dedicated test planning, apply, and deployment-validation identities.
+- Environment-neutral first-boot rendering for OpenBao, Nebula, Matrix,
+  Continuwuity, ntfy, and blackbox targets.
+- Empty KMS-encrypted test secret containers, test SecretSpec profiles, an
+  externally packaged AWS auth plugin for OpenBao, and exact worker-role
+  identity binding.
+- Full-stack controller and worker observability, workload, backup, staged
+  restore, and deployment-validation contracts.
+
+### Changed
+
+- OpenBao starts on loopback before Nebula enrollment and enables its overlay
+  listener only through an explicit post-enrollment transition.
+- Continuwuity v26.7.3 is pinned to its resolved Linux AMD64 image digest.
+- Test infrastructure references shared release ECR, OIDC, AMI-validation, and
+  snapshot-KMS resources without managing them.
+
 ### Fixed
 
 - Resumable releases now normalize volatile SPDX and gzip metadata so repeated

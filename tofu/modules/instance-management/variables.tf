@@ -14,6 +14,12 @@ variable "controller_policies" {
   default     = {}
 }
 
+variable "worker_policies" {
+  description = "Additional least-privilege policies attached only to the worker role, keyed by a stable purpose name."
+  type        = map(string)
+  default     = {}
+}
+
 variable "application_backup_bucket_arn" {
   description = "Optional independent AWS S3 bucket ARN used by restic. The policy isolates each node to lucidity/<role>."
   type        = string

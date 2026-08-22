@@ -112,6 +112,32 @@ in
                   content: "true\n"
                 },
                 {
+                  path: "/etc/lucidity/deployment.json",
+                  owner: "root:root",
+                  permissions: "0600",
+                  content: ({
+                    schema_version: 1,
+                    environment: "test",
+                    region: "us-east-2",
+                    release: "v0.0.0",
+                    dns: {ntfy: "ntfy.test.invalid"},
+                    matrix: {server_name: "test.invalid", service_hostname: "matrix.test.invalid"},
+                    runtime: {
+                      controller_secret_id: "lucidity/test/controller-runtime",
+                      openbao_kms_alias: "alias/lucidity-test-openbao-unseal",
+                      mesh_hostname: "mesh.test.invalid",
+                      vpc_cidr: "10.21.0.0/16",
+                      ntfy_url: "https://ntfy.test.invalid",
+                      blackbox_targets: ["https://test.invalid/health"]
+                    },
+                    workloads: {continuwuity: {
+                      repository: "registry.test.invalid/continuwuity",
+                      version: "v0.0.0",
+                      digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                    }}
+                  } | tojson)
+                },
+                {
                   path: "/etc/lucidity/admin-authorized-key.fingerprint",
                   owner: "root:root",
                   permissions: "0600",

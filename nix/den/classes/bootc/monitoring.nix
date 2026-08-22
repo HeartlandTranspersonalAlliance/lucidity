@@ -3,13 +3,11 @@
   pkgs,
   isController,
   overlayIPv4,
-  httpsTargets,
   systemProfile,
 }: let
-  httpsTargetLines = lib.concatMapStringsSep "\n" (target: "                - ${builtins.toJSON target}") httpsTargets;
   lokiEndpoint = "http://100.96.0.1:3100/loki/api/v1/push";
   controllerFiles = lib.optionalAttrs isController {
-    "etc/prometheus/prometheus.yml" = ''
+    "etc/prometheus/prometheus.yml.in" = ''
             global:
               scrape_interval: 30s
               evaluation_interval: 30s
@@ -48,7 +46,7 @@
                   module: [https_2xx]
                 static_configs:
                   - targets:
-      ${httpsTargetLines}
+      @BLACKBOX_TARGETS@
                 relabel_configs:
                   - source_labels: [__address__]
                     target_label: __param_target
@@ -124,7 +122,7 @@
                 severity: warning
               annotations:
                 summary: "Controller and worker release versions differ"
-                description: "The two production roles do not report the same bootc image version."
+                description: "The two deployment roles do not report the same bootc image version."
             - alert: LucidityAlloyUnavailable
               expr: up{job="lucidity-alloy"} == 0
               for: 5m
@@ -193,11 +191,11 @@
             - url: http://127.0.0.1:8000/hook
               send_resolved: true
     '';
-    "etc/alertmanager-ntfy/config.yml" = ''
+    "etc/alertmanager-ntfy/config.yml.in" = ''
       http:
         addr: 127.0.0.1:8000
       ntfy:
-        baseurl: https://ntfy.heartlandta.org
+        baseurl: @NTFY_URL@
         notification:
           topic: lucidity-alerts
           priority: 'status == "firing" ? "high" : "default"'
@@ -211,8 +209,8 @@
             description: '{{ index .Annotations "description" }}'
         async: false
     '';
-    "etc/ntfy/server.yml" = ''
-      base-url: https://ntfy.heartlandta.org
+    "etc/ntfy/server.yml.in" = ''
+      base-url: @NTFY_URL@
       listen-http: 100.96.0.1:2586
       cache-file: /var/lib/ntfy/cache.db
       auth-file: /var/lib/ntfy/user.db
@@ -267,8 +265,8 @@
             path: /etc/grafana/dashboards
     '';
     "etc/grafana/dashboards/lucidity-overview.json" = builtins.toJSON {
-      title = "Lucidity production overview";
-      uid = "lucidity-production";
+      title = "Lucidity deployment overview";
+      uid = "lucidity-overview";
       schemaVersion = 41;
       refresh = "30s";
       time = {
@@ -397,20 +395,20 @@
       umask 077
       install -d -m 0700 /run/alertmanager-ntfy/state
       ${pkgs.jq}/bin/jq -n --rawfile token "$credential" '{ntfy:{auth:{token:($token | rtrimstr("\n"))}}}' > /run/alertmanager-ntfy/auth.yml
-      exec ${pkgs.alertmanager-ntfy}/bin/alertmanager-ntfy --configs /etc/alertmanager-ntfy/config.yml,/run/alertmanager-ntfy/auth.yml
+      exec ${pkgs.alertmanager-ntfy}/bin/alertmanager-ntfy --configs /run/lucidity/alertmanager-ntfy.yml,/run/alertmanager-ntfy/auth.yml
     '';
     "usr/libexec/lucidity/install-ntfy-route" = ''
       #!/usr/bin/env bash
       set -Eeuo pipefail
       install -d -m 0700 /data/coolify/proxy/dynamic
-      install -m 0600 /etc/lucidity/ntfy-traefik.yml /data/coolify/proxy/dynamic/lucidity-ntfy.yml
+      install -m 0600 /run/lucidity/ntfy-traefik.yml /data/coolify/proxy/dynamic/lucidity-ntfy.yml
       restorecon -F /data/coolify/proxy/dynamic/lucidity-ntfy.yml
     '';
-    "etc/lucidity/ntfy-traefik.yml" = ''
+    "etc/lucidity/ntfy-traefik.yml.in" = ''
       http:
         routers:
           lucidity-ntfy:
-            rule: Host(`ntfy.heartlandta.org`)
+            rule: Host(`@NTFY_HOSTNAME@`)
             entryPoints: [https]
             service: lucidity-ntfy
             tls:
@@ -424,13 +422,13 @@
     "usr/lib/systemd/system/prometheus.service" = ''
       [Unit]
       Description=Lucidity Prometheus
-      Requires=lucidity-nix-profile.service nebula.service
-      After=lucidity-nix-profile.service nebula.service network-online.target
+      Requires=lucidity-nix-profile.service lucidity-render-deployment.service nebula.service
+      After=lucidity-nix-profile.service lucidity-render-deployment.service nebula.service network-online.target
       [Service]
       User=prometheus
       Group=prometheus
       StateDirectory=prometheus
-      ExecStart=${pkgs.prometheus}/bin/prometheus --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/var/lib/prometheus --storage.tsdb.retention.time=30d --web.listen-address=127.0.0.1:9090
+      ExecStart=${pkgs.prometheus}/bin/prometheus --config.file=/run/lucidity/prometheus.yml --storage.tsdb.path=/var/lib/prometheus --storage.tsdb.retention.time=30d --web.listen-address=127.0.0.1:9090
       Restart=on-failure
       NoNewPrivileges=yes
       PrivateTmp=yes
@@ -518,13 +516,13 @@
     "usr/lib/systemd/system/ntfy.service" = ''
       [Unit]
       Description=Lucidity self-hosted ntfy
-      Requires=lucidity-nix-profile.service nebula.service
-      After=lucidity-nix-profile.service nebula.service network-online.target
+      Requires=lucidity-nix-profile.service lucidity-render-deployment.service nebula.service
+      After=lucidity-nix-profile.service lucidity-render-deployment.service nebula.service network-online.target
       [Service]
       User=ntfy
       Group=ntfy
       StateDirectory=ntfy
-      ExecStart=${pkgs.ntfy-sh}/bin/ntfy serve --config /etc/ntfy/server.yml
+      ExecStart=${pkgs.ntfy-sh}/bin/ntfy serve --config /run/lucidity/ntfy-server.yml
       Restart=on-failure
       NoNewPrivileges=yes
       PrivateTmp=yes
@@ -559,8 +557,8 @@
     "usr/lib/systemd/system/lucidity-ntfy-route.service" = ''
       [Unit]
       Description=Install the ntfy route in Coolify's Traefik configuration
-      Requires=coolify-controller-storage.service
-      After=coolify-controller-storage.service
+      Requires=coolify-controller-storage.service lucidity-render-deployment.service
+      After=coolify-controller-storage.service lucidity-render-deployment.service
       Before=coolify-controller-bootstrap.service
       [Service]
       Type=oneshot

@@ -1,8 +1,14 @@
-name: Validate production deployment
+name: Validate isolated deployment
 
 on:
   workflow_dispatch:
     inputs:
+      environment:
+        description: Deployment environment
+        required: true
+        type: choice
+        default: test
+        options: [test, production]
       enroll_worker:
         description: Enroll the controller public key on the worker before validation
         required: true
@@ -20,7 +26,7 @@ on:
         default: ""
 
 concurrency:
-  group: production-deployment-validation
+  group: ${{ inputs.environment }}-deployment-validation
   cancel-in-progress: false
 
 permissions:
@@ -32,6 +38,7 @@ env:
 
 jobs:
   validate:
+    environment: ${{ inputs.environment }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -63,22 +70,22 @@ jobs:
         with:
           allowed-account-ids: 467590374785
           aws-region: us-east-2
-          role-to-assume: ${{ vars.AWS_DEPLOYMENT_VALIDATION_ROLE_ARN }}
+          role-to-assume: ${{ inputs.environment == 'test' && vars.AWS_TEST_DEPLOYMENT_VALIDATION_ROLE_ARN || vars.AWS_DEPLOYMENT_VALIDATION_ROLE_ARN }}
           role-duration-seconds: 1800
           role-session-name: lucidity-deployment-${{ github.run_id }}
 
-      - name: Enroll and validate production nodes
+      - name: Enroll and validate isolated nodes
         env:
           AWS_REGION: us-east-2
           DEPLOYMENT_CONTROLLER_URL: ${{ inputs.controller_url }}
-          DEPLOYMENT_CONTROLLER_AMI_ID: ${{ vars.PRODUCTION_CONTROLLER_AMI_ID }}
-          DEPLOYMENT_CONTROLLER_IMAGE_DIGEST: ${{ vars.PRODUCTION_CONTROLLER_IMAGE_DIGEST }}
+          DEPLOYMENT_CONTROLLER_AMI_ID: ${{ inputs.environment == 'test' && vars.TEST_CONTROLLER_AMI_ID || vars.PRODUCTION_CONTROLLER_AMI_ID }}
+          DEPLOYMENT_CONTROLLER_IMAGE_DIGEST: ${{ inputs.environment == 'test' && vars.TEST_CONTROLLER_IMAGE_DIGEST || vars.PRODUCTION_CONTROLLER_IMAGE_DIGEST }}
           DEPLOYMENT_ENROLL_WORKER: ${{ inputs.enroll_worker }}
-          DEPLOYMENT_ENVIRONMENT: production
+          DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
           DEPLOYMENT_PROJECT: lucidity
           DEPLOYMENT_REQUIRE_HTTPS: "true"
           DEPLOYMENT_REQUIRE_RELEASE_IDENTITY: "true"
-          DEPLOYMENT_WORKER_AMI_ID: ${{ vars.PRODUCTION_WORKER_AMI_ID }}
-          DEPLOYMENT_WORKER_IMAGE_DIGEST: ${{ vars.PRODUCTION_WORKER_IMAGE_DIGEST }}
+          DEPLOYMENT_WORKER_AMI_ID: ${{ inputs.environment == 'test' && vars.TEST_WORKER_AMI_ID || vars.PRODUCTION_WORKER_AMI_ID }}
+          DEPLOYMENT_WORKER_IMAGE_DIGEST: ${{ inputs.environment == 'test' && vars.TEST_WORKER_IMAGE_DIGEST || vars.PRODUCTION_WORKER_IMAGE_DIGEST }}
           DEPLOYMENT_WORKER_URL: ${{ inputs.worker_url }}
         run: nix run .#validate-deployment

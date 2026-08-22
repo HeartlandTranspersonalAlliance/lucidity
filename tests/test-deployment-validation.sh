@@ -82,6 +82,6 @@ ssh_output=$(AWS_CLI="${mock_aws}" \
 ssh_status=$?
 set -e
 [[ ${ssh_status} -eq 1 ]]
-grep -Fq 'TCP/22 must not be reachable through VPC security groups' <<< "${ssh_output}"
+grep -Fq 'administrative and raw service ports must not be publicly reachable through VPC security groups' <<< "${ssh_output}"
 
-echo "Production deployment validation assertions passed"
+echo "Deployment validation assertions passed"

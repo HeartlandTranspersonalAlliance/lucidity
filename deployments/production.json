@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "environment": "production",
+  "region": "us-east-2",
+  "release": "v0.4.0",
+  "state": {"key": "lucidity/production/terraform.tfstate"},
+  "dns": {
+    "coolify": "coolify.heartlandta.org",
+    "apps": "apps.heartlandta.org",
+    "apps_wildcard": "*.apps.heartlandta.org",
+    "apex": "heartlandta.org",
+    "matrix": "matrix.heartlandta.org",
+    "ntfy": "ntfy.heartlandta.org",
+    "mesh": "mesh.heartlandta.org"
+  },
+  "matrix": {
+    "server_name": "heartlandta.org",
+    "service_hostname": "matrix.heartlandta.org",
+    "registration_secret_path": "secret/lucidity/production/matrix-bootstrap"
+  },
+  "runtime": {
+    "controller_secret_id": "lucidity/production/controller-runtime",
+    "openbao_kms_alias": "alias/lucidity-production-openbao-unseal",
+    "mesh_hostname": "mesh.heartlandta.org",
+    "vpc_cidr": "10.20.0.0/16",
+    "ntfy_url": "https://ntfy.heartlandta.org",
+    "ooye_secret_path": "secret/lucidity/production/worker-ooye",
+    "blackbox_targets": [
+      "https://coolify.heartlandta.org/api/health",
+      "https://matrix.heartlandta.org/_matrix/client/versions",
+      "https://ntfy.heartlandta.org"
+    ]
+  },
+  "workloads": {
+    "continuwuity": {
+      "repository": "docker.io/jadedblueeyes/continuwuity",
+      "version": "v26.7.3",
+      "platform": "linux/amd64",
+      "digest": "sha256:55397612f3e78150f8bfce2413c6912b3046e05cd30c895644fd5df4eb4f96db"
+    }
+  },
+  "features": {
+    "coolify": true,
+    "continuwuity": true,
+    "ooye": true,
+    "openbao": true,
+    "observability": true,
+    "backups": true
+  },
+  "review_after": null,
+  "data_policy": "production"
+}

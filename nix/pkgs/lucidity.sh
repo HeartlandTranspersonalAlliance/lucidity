@@ -1232,7 +1232,13 @@ prepare_infra() {
     workdir="$root/.lucidity/tofu/aws"
     mkdir -p "$workdir"
     config=$(build_path "$root#awsConfig")
-    production_vars=$(build_path "$root#awsProductionVars")
+    environment=${LUCIDITY_ENVIRONMENT:-production}
+    [[ $environment == production || $environment == test ]] || die "LUCIDITY_ENVIRONMENT must be production or test"
+    if [[ $environment == test ]]; then
+        environment_vars=$(build_path "$root#awsTestVars")
+    else
+        environment_vars=$(build_path "$root#awsProductionVars")
+    fi
     backend_config=${LUCIDITY_BACKEND_CONFIG:-$root/.lucidity/backend.aws.s3.tfbackend}
     remote_backend=false
     if [[ -f $backend_config ]]; then
@@ -1246,7 +1252,8 @@ prepare_infra() {
         jq 'del(.terraform.backend)' "$config" >"$workdir/config.tf.json"
         backend_args=(-backend=false)
     fi
-    ln -sfn "$production_vars" "$workdir/production.auto.tfvars.json"
+    rm -f "$workdir/production.auto.tfvars.json" "$workdir/test.auto.tfvars.json"
+    ln -sfn "$environment_vars" "$workdir/$environment.auto.tfvars.json"
 }
 
 infra() {
@@ -1275,11 +1282,11 @@ infra() {
         return
     fi
     if [[ $action == apply && $remote_backend != true ]]; then
-        die "infra apply requires the production remote-backend input"
+        die "infra apply requires the selected environment remote-backend input"
     fi
     tofu -chdir="$workdir" init -reconfigure "${backend_args[@]}"
     if [[ $action == refresh-plan ]]; then
-        [[ $remote_backend == true ]] || die "infra refresh-plan requires the production remote-backend input"
+        [[ $remote_backend == true ]] || die "infra refresh-plan requires the selected environment remote-backend input"
         tofu -chdir="$workdir" plan -refresh-only -out="$saved_plan" "$@"
         echo "Saved the review-only refresh plan to $saved_plan; inspect it with lucidity infra show $saved_plan"
         return
@@ -1298,6 +1305,18 @@ infra() {
     tofu -chdir="$workdir" show -json "$saved_plan" >"$plan_json"
     replacements=$(jq '[.resource_changes[].change.actions | select(. == ["delete", "create"] or . == ["create", "delete"])] | length' "$plan_json")
     deletions=$(jq '[.resource_changes[].change.actions | select(. == ["delete"])] | length' "$plan_json")
+    if [[ ${LUCIDITY_ENVIRONMENT:-production} == test ]]; then
+        production_touches=$(jq '[
+          .resource_changes[]? |
+          select(
+            (.change.before.tags.Environment? == "production") or
+            (.change.after.tags.Environment? == "production") or
+            (.change.before.tags_all.Environment? == "production") or
+            (.change.after.tags_all.Environment? == "production")
+          )
+        ] | length' "$plan_json")
+        ((production_touches == 0)) || die "refusing a test plan that touches $production_touches production-tagged resource(s)"
+    fi
     ((replacements == 0)) || die "refusing a plan containing $replacements resource replacement(s)"
     if ((deletions > 0)) && [[ ${LUCIDITY_ALLOW_DELETIONS:-0} != 1 ]]; then
         die "plan contains $deletions deletion(s); review the mesh and ingress cutover, then set LUCIDITY_ALLOW_DELETIONS=1"

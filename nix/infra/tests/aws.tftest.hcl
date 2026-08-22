@@ -157,10 +157,10 @@ run "default_registry_and_oidc_contract" {
   command = plan
 
   assert {
-    condition = output.ecr_repository_names == {
+    condition = output.ecr_repository_names == tomap({
       controller = "lucidity/bootc/controller"
       worker     = "lucidity/bootc/worker"
-    }
+    })
     error_message = "The default controller and worker repository names changed unexpectedly."
   }
 

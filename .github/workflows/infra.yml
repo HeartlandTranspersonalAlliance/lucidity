@@ -1,9 +1,10 @@
-name: Plan and apply production infrastructure
+name: Plan and apply isolated infrastructure
 
 on:
   pull_request:
     paths:
       - ".github/workflows/infra.yml"
+      - "deployments/**"
       - "flake.lock"
       - "flake.nix"
       - "nix/infra/**"
@@ -11,9 +12,27 @@ on:
       - "nix/pkgs/lucidity.sh"
       - "tofu/**"
   workflow_dispatch:
+    inputs:
+      environment:
+        description: Isolated deployment environment
+        required: true
+        type: choice
+        default: test
+        options: [test, production]
+      stage:
+        description: Saved-plan rollout stage
+        required: true
+        type: choice
+        default: foundation
+        options: [foundation, compute, edge, quarantine]
+      release:
+        description: Immutable release supplying both AMIs and image digests
+        required: true
+        type: string
+        default: v0.4.0
 
 concurrency:
-  group: lucidity-production-infra-${{ github.event_name == 'workflow_dispatch' && 'apply' || github.ref }}
+  group: lucidity-${{ inputs.environment || 'production' }}-infra-${{ github.event_name == 'workflow_dispatch' && inputs.stage || github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -22,14 +41,23 @@ permissions:
 
 env:
   AWS_REGION: us-east-2
+  DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment || 'production' }}
+  DEPLOYMENT_STAGE: ${{ inputs.stage || 'foundation' }}
+  RELEASE_TAG: ${{ inputs.release || 'v0.4.0' }}
   NIX_CACHE_WRITE: ${{ github.event_name == 'merge_group' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
 
 jobs:
   plan:
     name: Create reviewable saved plan
-    if: vars.AWS_INFRA_PLAN_ROLE_ARN != '' && vars.AWS_STATE_BUCKET_NAME != ''
+    if: github.event_name == 'workflow_dispatch' || (vars.AWS_INFRA_PLAN_ROLE_ARN != '' && vars.AWS_STATE_BUCKET_NAME != '')
+    environment: ${{ inputs.environment || 'production' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    outputs:
+      controller_ami_id: ${{ steps.release.outputs.controller_ami_id }}
+      controller_image_digest: ${{ steps.release.outputs.controller_image_digest }}
+      worker_ami_id: ${{ steps.release.outputs.worker_ami_id }}
+      worker_image_digest: ${{ steps.release.outputs.worker_image_digest }}
     steps:
       - name: Checkout the exact plan source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -60,45 +88,94 @@ jobs:
         with:
           allowed-account-ids: 467590374785
           aws-region: ${{ env.AWS_REGION }}
-          role-to-assume: ${{ vars.AWS_INFRA_PLAN_ROLE_ARN }}
+          role-to-assume: ${{ inputs.environment == 'test' && vars.AWS_TEST_INFRA_PLAN_ROLE_ARN || vars.AWS_INFRA_PLAN_ROLE_ARN }}
           role-duration-seconds: 1800
-          role-session-name: lucidity-infra-plan-${{ github.run_id }}
+          role-session-name: lucidity-${{ inputs.environment || 'production' }}-plan-${{ github.run_id }}
 
-      - name: Write the non-secret remote-state coordinates
+      - name: Download and verify the single release manifest
+        id: release
         env:
-          STATE_BUCKET: ${{ vars.AWS_STATE_BUCKET_NAME }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          install -d -m 0700 .lucidity/release
+          gh release download "${RELEASE_TAG}" --dir .lucidity/release --pattern release-manifest.json --pattern release-manifest.json.sha256
+          (cd .lucidity/release && sha256sum --check release-manifest.json.sha256)
+          manifest=.lucidity/release/release-manifest.json
+          jq -e --arg release "${RELEASE_TAG}" --arg region "${AWS_REGION}" '
+            .schema_version == 3 and .tag == $release and .aws.region == $region and
+            ([.images[].role] | sort) == ["controller", "worker"] and
+            (.aws.amis.controller.source_image_digest == (.images[] | select(.role == "controller").digest)) and
+            (.aws.amis.worker.source_image_digest == (.images[] | select(.role == "worker").digest))
+          ' "${manifest}" >/dev/null
+          printf 'controller_ami_id=%s\ncontroller_image_digest=%s\nworker_ami_id=%s\nworker_image_digest=%s\n' \
+            "$(jq -r '.aws.amis.controller.ami_id' "${manifest}")" "$(jq -r '.aws.amis.controller.source_image_digest' "${manifest}")" \
+            "$(jq -r '.aws.amis.worker.ami_id' "${manifest}")" "$(jq -r '.aws.amis.worker.source_image_digest' "${manifest}")" >>"${GITHUB_OUTPUT}"
+
+      - name: Write isolated backend and immutable release variables
+        env:
+          EXISTING_GITHUB_OIDC_PROVIDER_ARN: ${{ vars.EXISTING_GITHUB_OIDC_PROVIDER_ARN }}
+          STATE_BUCKET: ${{ inputs.environment == 'test' && vars.AWS_TEST_STATE_BUCKET_NAME || vars.AWS_STATE_BUCKET_NAME }}
         run: |
           install -d -m 0700 .lucidity
-          printf 'bucket = "%s"\nkey = "lucidity/production/terraform.tfstate"\nregion = "us-east-2"\nencrypt = true\nuse_lockfile = true\n' "${STATE_BUCKET}" >.lucidity/backend.aws.s3.tfbackend
+          state_key="lucidity/${DEPLOYMENT_ENVIRONMENT}/terraform.tfstate"
+          printf 'bucket = "%s"\nkey = "%s"\nregion = "%s"\nencrypt = true\nuse_lockfile = true\n' \
+            "${STATE_BUCKET}" "${state_key}" "${AWS_REGION}" >.lucidity/backend.aws.s3.tfbackend
+          manifest=.lucidity/release/release-manifest.json
+          jq -n --arg environment "${DEPLOYMENT_ENVIRONMENT}" --arg stage "${DEPLOYMENT_STAGE}" \
+            --arg state_bucket "${STATE_BUCKET}" --arg oidc "${EXISTING_GITHUB_OIDC_PROVIDER_ARN}" \
+            --arg account_id "467590374785" --arg region "${AWS_REGION}" --slurpfile release "${manifest}" '
+            ($release[0]) as $m |
+            ($m.images | map({key:.role,value:.repository}) | from_entries) as $urls |
+            ($urls | with_entries(.value |= sub("^[^/]+/"; ""))) as $names |
+            {
+              environment:$environment,
+              deployment_stage:$stage,
+              state_bucket_name:$state_bucket,
+              github_oidc_provider_arn:$oidc,
+              controller_ami_id:$m.aws.amis.controller.ami_id,
+              worker_ami_id:$m.aws.amis.worker.ami_id,
+              shared_snapshot_kms_key_arn:$m.aws.amis.controller.snapshot_kms_key_arn,
+              shared_ecr_repository_urls:$urls,
+              shared_ecr_repository_names:$names,
+              shared_ecr_repository_arns:($names | with_entries(.value = "arn:aws:ecr:" + $region + ":" + $account_id + ":repository/" + .value))
+            }
+          ' >.lucidity/release.auto.tfvars.json
 
-      - name: Create the saved production plan
-        run: nix run .#infra -- plan -input=false -lock-timeout=5m -out=production.tfplan
+      - name: Create the exact saved plan
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          LUCIDITY_ENVIRONMENT: ${{ env.DEPLOYMENT_ENVIRONMENT }}
+        run: nix run .#infra -- plan -input=false -lock-timeout=5m -var-file="$PWD/.lucidity/release.auto.tfvars.json" -out="${DEPLOYMENT_ENVIRONMENT}-${DEPLOYMENT_STAGE}.tfplan"
 
-      - name: Produce an integrity record and redacted review summary
+      - name: Produce the integrity record and approval summary
         run: |
-          plan=.lucidity/tofu/aws/production.tfplan
-          sha256sum "${plan}" >production.tfplan.sha256
+          plan=".lucidity/tofu/aws/${DEPLOYMENT_ENVIRONMENT}-${DEPLOYMENT_STAGE}.tfplan"
+          sha256sum "${plan}" >saved-plan.sha256
           nix run .#infra -- show -json "${plan}" |
-            jq '{format_version,terraform_version,resource_changes:[.resource_changes[] | {address,module_address,mode,type,name,change:{actions:.change.actions}}]}' \
-              >production-plan-summary.json
-          jq -r '.resource_changes[] | "- `\(.address)`: `\(.change.actions | join(", "))`"' production-plan-summary.json >>"${GITHUB_STEP_SUMMARY}"
+            jq --arg environment "${DEPLOYMENT_ENVIRONMENT}" --arg stage "${DEPLOYMENT_STAGE}" --arg release "${RELEASE_TAG}" \
+              '{environment:$environment,stage:$stage,release:$release,format_version,terraform_version,resource_changes:[.resource_changes[]? | {address,module_address,mode,type,name,change:{actions:.change.actions}}]}' \
+              >approval-summary.json
+          jq -r '"Environment: `\(.environment)`  Stage: `\(.stage)`  Release: `\(.release)`", "", (.resource_changes[] | "- `\(.address)`: `\(.change.actions | join(", "))`")' approval-summary.json >>"${GITHUB_STEP_SUMMARY}"
 
-      - name: Upload the exact plan and redacted summary
+      - name: Upload the exact plan and review evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: production-plan-${{ github.sha }}
+          name: ${{ inputs.environment || 'production' }}-${{ inputs.stage || 'foundation' }}-plan-${{ github.sha }}
           if-no-files-found: error
           path: |
-            .lucidity/tofu/aws/production.tfplan
-            production.tfplan.sha256
-            production-plan-summary.json
-          retention-days: 1
+            .lucidity/tofu/aws/${{ inputs.environment || 'production' }}-${{ inputs.stage || 'foundation' }}.tfplan
+            .lucidity/release/release-manifest.json
+            .lucidity/release/release-manifest.json.sha256
+            .lucidity/release.auto.tfvars.json
+            saved-plan.sha256
+            approval-summary.json
+          retention-days: 7
 
   apply:
     name: Apply the approved saved plan
     needs: plan
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
-    environment: production
+    environment: ${{ inputs.environment }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -121,8 +198,8 @@ jobs:
         uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71
         with:
           name: lucidity
-          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
-          skipPush: false
+          authToken: ${{ env.NIX_CACHE_WRITE == 'true' && secrets.CACHIX_AUTH_TOKEN || '' }}
+          skipPush: ${{ env.NIX_CACHE_WRITE != 'true' }}
           pushFilter: lucidity-(controller|worker)-bootc-context
 
       - name: Configure protected apply credentials
@@ -130,37 +207,44 @@ jobs:
         with:
           allowed-account-ids: 467590374785
           aws-region: ${{ env.AWS_REGION }}
-          role-to-assume: ${{ vars.AWS_INFRA_APPLY_ROLE_ARN }}
+          role-to-assume: ${{ inputs.environment == 'test' && vars.AWS_TEST_INFRA_APPLY_ROLE_ARN || vars.AWS_INFRA_APPLY_ROLE_ARN }}
           role-duration-seconds: 2700
-          role-session-name: lucidity-infra-apply-${{ github.run_id }}
+          role-session-name: lucidity-${{ inputs.environment }}-apply-${{ github.run_id }}
 
       - name: Download the exact saved plan
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: production-plan-${{ github.sha }}
+          name: ${{ inputs.environment }}-${{ inputs.stage }}-plan-${{ github.sha }}
           path: .
 
-      - name: Verify plan integrity and configure remote state
+      - name: Verify plan and release integrity and configure isolated state
         env:
-          STATE_BUCKET: ${{ vars.AWS_STATE_BUCKET_NAME }}
+          STATE_BUCKET: ${{ inputs.environment == 'test' && vars.AWS_TEST_STATE_BUCKET_NAME || vars.AWS_STATE_BUCKET_NAME }}
         run: |
-          sha256sum --check production.tfplan.sha256
-          install -d -m 0700 .lucidity
-          printf 'bucket = "%s"\nkey = "lucidity/production/terraform.tfstate"\nregion = "us-east-2"\nencrypt = true\nuse_lockfile = true\n' "${STATE_BUCKET}" >.lucidity/backend.aws.s3.tfbackend
+          sha256sum --check saved-plan.sha256
+          (cd .lucidity/release && sha256sum --check release-manifest.json.sha256)
+          state_key="lucidity/${DEPLOYMENT_ENVIRONMENT}/terraform.tfstate"
+          printf 'bucket = "%s"\nkey = "%s"\nregion = "%s"\nencrypt = true\nuse_lockfile = true\n' \
+            "${STATE_BUCKET}" "${state_key}" "${AWS_REGION}" >.lucidity/backend.aws.s3.tfbackend
 
       - name: Apply only the approved saved plan
-        run: nix run .#infra -- apply "$PWD/.lucidity/tofu/aws/production.tfplan" -input=false -auto-approve
-
-      - name: Validate the deployed singleton
         env:
-          DEPLOYMENT_CONTROLLER_URL: ${{ vars.PRODUCTION_CONTROLLER_URL }}
-          DEPLOYMENT_CONTROLLER_AMI_ID: ${{ vars.PRODUCTION_CONTROLLER_AMI_ID }}
-          DEPLOYMENT_CONTROLLER_IMAGE_DIGEST: ${{ vars.PRODUCTION_CONTROLLER_IMAGE_DIGEST }}
-          DEPLOYMENT_ENVIRONMENT: production
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          LUCIDITY_ENVIRONMENT: ${{ env.DEPLOYMENT_ENVIRONMENT }}
+          LUCIDITY_ALLOW_DELETIONS: ${{ inputs.environment == 'test' && inputs.stage == 'quarantine' && '1' || '0' }}
+        run: nix run .#infra -- apply "$PWD/.lucidity/tofu/aws/${DEPLOYMENT_ENVIRONMENT}-${DEPLOYMENT_STAGE}.tfplan" -input=false -auto-approve
+
+      - name: Validate the deployed singleton before public DNS acceptance
+        if: inputs.stage == 'compute' || inputs.stage == 'edge'
+        env:
+          DEPLOYMENT_CONTROLLER_URL: ${{ vars.TEST_CONTROLLER_URL }}
+          DEPLOYMENT_CONTROLLER_AMI_ID: ${{ needs.plan.outputs.controller_ami_id }}
+          DEPLOYMENT_CONTROLLER_IMAGE_DIGEST: ${{ needs.plan.outputs.controller_image_digest }}
+          DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
           DEPLOYMENT_PROJECT: lucidity
-          DEPLOYMENT_REQUIRE_HTTPS: "true"
+          DEPLOYMENT_REQUIRE_HTTPS: ${{ inputs.stage == 'edge' && 'true' || 'false' }}
           DEPLOYMENT_REQUIRE_RELEASE_IDENTITY: "true"
-          DEPLOYMENT_WORKER_AMI_ID: ${{ vars.PRODUCTION_WORKER_AMI_ID }}
-          DEPLOYMENT_WORKER_IMAGE_DIGEST: ${{ vars.PRODUCTION_WORKER_IMAGE_DIGEST }}
-          DEPLOYMENT_WORKER_URL: ${{ vars.PRODUCTION_WORKER_URL }}
+          DEPLOYMENT_WORKER_AMI_ID: ${{ needs.plan.outputs.worker_ami_id }}
+          DEPLOYMENT_WORKER_IMAGE_DIGEST: ${{ needs.plan.outputs.worker_image_digest }}
+          DEPLOYMENT_WORKER_URL: ${{ vars.TEST_WORKER_URL }}
         run: nix run .#validate-deployment
