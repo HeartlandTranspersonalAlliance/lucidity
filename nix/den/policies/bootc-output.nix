@@ -19,6 +19,7 @@ in {
     nebulaGroups,
     instanceType,
     rootVolumeGiB,
+    monitoring ? {httpsTargets = [];},
     admin,
   }: {
     class = "bootc";
@@ -27,7 +28,7 @@ in {
     intoAttr = ["denConfigurations" name];
     users.admin = admin;
     lucidity = {
-      inherit role overlayIPv4 nebulaGroups instanceType rootVolumeGiB;
+      inherit role overlayIPv4 nebulaGroups instanceType rootVolumeGiB monitoring;
       admin = {
         inherit (admin.lucidity) sshPublicKeySecret sshFingerprint;
       };

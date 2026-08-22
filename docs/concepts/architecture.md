@@ -5,8 +5,11 @@ infrastructure, tests, operator tools, and CI entrypoints.
 
 ## System shape
 
-The controller runs the Coolify control plane, Nebula lighthouse and relay, and
-OpenBao. The worker runs application workloads. Both are AMD64 AlmaLinux bootc
+The controller runs the Coolify control plane, Nebula lighthouse and relay,
+OpenBao, Prometheus, Loki, Grafana, Alertmanager, blackbox exporter, and ntfy.
+The worker runs application workloads, including the optional native OOYE bridge.
+Grafana Alloy forwards bounded logs from both roles to controller Loki. Both are
+AMD64 AlmaLinux bootc
 systems on EC2 with Docker, AWS Systems Manager, SELinux enforcing mode, a Nix
 system profile, and an administrator Home Manager profile.
 
@@ -37,7 +40,8 @@ recovery path.
 
 ### Test the deployment model
 
-Default checks validate generated files, policies, and role boot/connectivity.
+Default checks validate generated files, policies, and only the changed role's
+boot/connectivity when that is sufficient.
 The four-node NixOS mesh test validates detailed network rules only when run
 explicitly for networking, firewall, or relay changes. Disposable bootc VMs can
 validate first boot, persistent storage, upgrades, rollback, services, Docker,

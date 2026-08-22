@@ -18,6 +18,10 @@ in {
       ];
       instanceType = "t3a.small";
       rootVolumeGiB = 40;
+      monitoring.httpsTargets = [
+        "https://coolify.heartlandta.org/api/health"
+        "https://matrix.heartlandta.org/_matrix/client/versions"
+      ];
       inherit admin;
     };
 

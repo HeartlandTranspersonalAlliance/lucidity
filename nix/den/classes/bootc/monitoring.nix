@@ -3,46 +3,59 @@
   pkgs,
   isController,
   overlayIPv4,
+  httpsTargets,
   systemProfile,
 }: let
+  httpsTargetLines = lib.concatMapStringsSep "\n" (target: "                - ${builtins.toJSON target}") httpsTargets;
+  lokiEndpoint = "http://100.96.0.1:3100/loki/api/v1/push";
   controllerFiles = lib.optionalAttrs isController {
     "etc/prometheus/prometheus.yml" = ''
-      global:
-        scrape_interval: 30s
-        evaluation_interval: 30s
-      rule_files:
-        - /etc/prometheus/rules.yml
-      alerting:
-        alertmanagers:
-          - static_configs:
-              - targets: ["127.0.0.1:9093"]
-      scrape_configs:
-        - job_name: prometheus
-          static_configs:
-            - targets: ["127.0.0.1:9090"]
-        - job_name: lucidity-nodes
-          static_configs:
-            - targets: ["100.96.0.1:9100"]
-              labels:
-                role: controller
-            - targets: ["100.96.0.2:9100"]
-              labels:
-                role: worker
-        - job_name: https-canaries
-          metrics_path: /probe
-          params:
-            module: [https_2xx]
-          static_configs:
-            - targets:
-                - https://coolify.heartlandta.org/api/health
-                - https://matrix.heartlandta.org/_matrix/client/versions
-          relabel_configs:
-            - source_labels: [__address__]
-              target_label: __param_target
-            - source_labels: [__param_target]
-              target_label: instance
-            - target_label: __address__
-              replacement: 127.0.0.1:9115
+            global:
+              scrape_interval: 30s
+              evaluation_interval: 30s
+            rule_files:
+              - /etc/prometheus/rules.yml
+            alerting:
+              alertmanagers:
+                - static_configs:
+                    - targets: ["127.0.0.1:9093"]
+            scrape_configs:
+              - job_name: prometheus
+                static_configs:
+                  - targets: ["127.0.0.1:9090"]
+              - job_name: lucidity-nodes
+                static_configs:
+                  - targets: ["100.96.0.1:9100"]
+                    labels:
+                      role: controller
+                  - targets: ["100.96.0.2:9100"]
+                    labels:
+                      role: worker
+              - job_name: lucidity-alloy
+                static_configs:
+                  - targets: ["100.96.0.1:12345"]
+                    labels:
+                      role: controller
+                  - targets: ["100.96.0.2:12345"]
+                    labels:
+                      role: worker
+              - job_name: loki
+                static_configs:
+                  - targets: ["100.96.0.1:3100"]
+              - job_name: https-canaries
+                metrics_path: /probe
+                params:
+                  module: [https_2xx]
+                static_configs:
+                  - targets:
+      ${httpsTargetLines}
+                relabel_configs:
+                  - source_labels: [__address__]
+                    target_label: __param_target
+                  - source_labels: [__param_target]
+                    target_label: instance
+                  - target_label: __address__
+                    replacement: 127.0.0.1:9115
     '';
     "etc/prometheus/rules.yml" = ''
       groups:
@@ -112,6 +125,45 @@
               annotations:
                 summary: "Controller and worker release versions differ"
                 description: "The two production roles do not report the same bootc image version."
+            - alert: LucidityAlloyUnavailable
+              expr: up{job="lucidity-alloy"} == 0
+              for: 5m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Grafana Alloy is unavailable on {{ $labels.role }}"
+                description: "The controller cannot scrape the node's Alloy health endpoint over Nebula."
+            - alert: LucidityLokiUnavailable
+              expr: up{job="loki"} == 0
+              for: 5m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Controller Loki is unavailable"
+                description: "Prometheus cannot scrape the controller-hosted Loki service."
+            - alert: LucidityAlloyDroppedLogs
+              expr: sum by(instance) (rate(loki_write_dropped_entries_total[5m])) > 0
+              for: 5m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Grafana Alloy is dropping logs on {{ $labels.instance }}"
+                description: "The Alloy Loki writer has dropped log entries for five minutes."
+            - alert: LucidityControllerObservabilityDiskLow
+              expr: node_filesystem_avail_bytes{instance="100.96.0.1:9100",mountpoint="/"} / node_filesystem_size_bytes{instance="100.96.0.1:9100",mountpoint="/"} < 0.20
+              for: 15m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Controller observability disk has less than 20 percent free"
+                description: "Reduce log selection or retention before resizing the controller volume."
+            - alert: LucidityControllerHeartbeat
+              expr: vector(1)
+              labels:
+                severity: info
+              annotations:
+                summary: "Lucidity controller daily heartbeat"
+                description: "Monitoring, Alertmanager, and self-hosted ntfy are alive. Treat a missing daily heartbeat as an incident."
     '';
     "etc/prometheus/blackbox.yml" = ''
       modules:
@@ -130,6 +182,11 @@
         group_wait: 30s
         group_interval: 5m
         repeat_interval: 4h
+        routes:
+          - receiver: ntfy
+            matchers:
+              - alertname="LucidityControllerHeartbeat"
+            repeat_interval: 24h
       receivers:
         - name: ntfy
           webhook_configs:
@@ -192,6 +249,12 @@
           url: http://127.0.0.1:9090
           isDefault: true
           editable: false
+        - name: Loki
+          uid: lucidity-loki
+          type: loki
+          access: proxy
+          url: http://100.96.0.1:3100
+          editable: false
     '';
     "etc/grafana/provisioning/dashboards/lucidity.yml" = ''
       apiVersion: 1
@@ -249,8 +312,69 @@
           };
           targets = [{expr = ''100 * node_filesystem_avail_bytes{fstype!~="tmpfs|overlay|squashfs"} / node_filesystem_size_bytes{fstype!~="tmpfs|overlay|squashfs"}'';}];
         }
+        {
+          id = 4;
+          title = "Alloy and Loki scrape health";
+          type = "stat";
+          gridPos = {
+            x = 16;
+            y = 0;
+            w = 8;
+            h = 5;
+          };
+          targets = [{expr = ''up{job=~"lucidity-alloy|loki"}'';}];
+        }
+        {
+          id = 5;
+          title = "Recent service logs";
+          type = "logs";
+          datasource = {
+            type = "loki";
+            uid = "lucidity-loki";
+          };
+          gridPos = {
+            x = 0;
+            y = 13;
+            w = 24;
+            h = 10;
+          };
+          targets = [{expr = ''{role=~"controller|worker"}'';}];
+        }
       ];
     };
+    "etc/loki/config.yml" = ''
+      auth_enabled: false
+      server:
+        http_listen_address: 100.96.0.1
+        http_listen_port: 3100
+      common:
+        path_prefix: /var/lib/loki
+        replication_factor: 1
+        ring:
+          kvstore:
+            store: inmemory
+        storage:
+          filesystem:
+            chunks_directory: /var/lib/loki/chunks
+            rules_directory: /var/lib/loki/rules
+      schema_config:
+        configs:
+          - from: 2024-01-01
+            store: tsdb
+            object_store: filesystem
+            schema: v13
+            index:
+              prefix: index_
+              period: 24h
+      limits_config:
+        retention_period: 168h
+        ingestion_rate_mb: 2
+        ingestion_burst_size_mb: 4
+      compactor:
+        working_directory: /var/lib/loki/compactor
+        retention_enabled: true
+        delete_request_store: filesystem
+    '';
     "usr/libexec/lucidity/alertmanager-ntfy" = ''
       #!/usr/bin/env bash
       set -Eeuo pipefail
@@ -313,6 +437,25 @@
       ProtectHome=yes
       ProtectSystem=strict
       ReadWritePaths=/var/lib/prometheus
+      [Install]
+      WantedBy=multi-user.target
+    '';
+    "usr/lib/systemd/system/loki.service" = ''
+      [Unit]
+      Description=Lucidity Loki log store
+      Requires=lucidity-nix-profile.service nebula.service
+      After=lucidity-nix-profile.service nebula.service
+      [Service]
+      User=loki
+      Group=loki
+      StateDirectory=loki
+      ExecStart=${pkgs.grafana-loki}/bin/loki -config.file=/etc/loki/config.yml
+      Restart=on-failure
+      NoNewPrivileges=yes
+      PrivateTmp=yes
+      ProtectHome=yes
+      ProtectSystem=strict
+      ReadWritePaths=/var/lib/loki
       [Install]
       WantedBy=multi-user.target
     '';
@@ -430,6 +573,75 @@
 in {
   files =
     {
+      "etc/alloy/config.alloy" = ''
+        logging {
+          level = "info"
+        }
+
+        loki.write "controller" {
+          endpoint {
+            url = "${lokiEndpoint}"
+          }
+        }
+
+        loki.process "local" {
+          stage.static_labels {
+            values = {
+              role = "${
+          if isController
+          then "controller"
+          else "worker"
+        }",
+              host = "${
+          if isController
+          then "controller"
+          else "worker"
+        }",
+            }
+          }
+          forward_to = [loki.write.controller.receiver]
+        }
+
+        loki.source.journal "systemd" {
+          max_age = "12h"
+          labels = {
+            job = "systemd-journal",
+          }
+          forward_to = [loki.process.local.receiver]
+        }
+
+        local.file_match "docker" {
+          path_targets = [{
+            __path__ = "/var/lib/docker/containers/*/*-json.log",
+            job = "docker",
+          }]
+        }
+
+        loki.source.file "docker" {
+          targets = local.file_match.docker.targets
+          forward_to = [loki.process.local.receiver]
+        }
+      '';
+      "usr/lib/systemd/system/alloy.service" = ''
+        [Unit]
+        Description=Lucidity Grafana Alloy log collector
+        Requires=lucidity-nix-profile.service nebula.service
+        After=lucidity-nix-profile.service nebula.service
+        ${lib.optionalString isController "Requires=loki.service\nAfter=loki.service"}
+        [Service]
+        User=root
+        StateDirectory=alloy
+        ExecStart=${pkgs.grafana-alloy}/bin/alloy run --server.http.listen-addr=${overlayIPv4}:12345 --storage.path=/var/lib/alloy /etc/alloy/config.alloy
+        Restart=on-failure
+        NoNewPrivileges=yes
+        PrivateTmp=yes
+        ProtectHome=yes
+        ProtectSystem=strict
+        ReadWritePaths=/var/lib/alloy
+        ReadOnlyPaths=/var/log/journal /run/log/journal /var/lib/docker/containers
+        [Install]
+        WantedBy=multi-user.target
+      '';
       "usr/libexec/lucidity/monitoring-collector" = builtins.readFile ./files/monitoring-collector.sh;
       "usr/lib/systemd/system/prometheus-node-exporter.service" = ''
         [Unit]
@@ -478,9 +690,10 @@ in {
     }
     // controllerFiles;
   enabledUnits =
-    ["prometheus-node-exporter.service" "lucidity-monitoring-collector.timer"]
+    ["prometheus-node-exporter.service" "lucidity-monitoring-collector.timer" "alloy.service"]
     ++ lib.optionals isController [
       "prometheus.service"
+      "loki.service"
       "prometheus-alertmanager.service"
       "prometheus-blackbox-exporter.service"
       "grafana.service"

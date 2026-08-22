@@ -9,6 +9,7 @@
         btop
         curl
         git
+        grafana-alloy
         jq
         nebula
         openbao
@@ -46,8 +47,17 @@
         "etc/docker/daemon.json" = builtins.toJSON {
           data-root = "/var/lib/docker";
           live-restore = true;
-          log-driver = "local";
+          log-driver = "json-file";
+          log-opts = {
+            max-file = "3";
+            max-size = "10m";
+          };
         };
+        "etc/systemd/journald.conf.d/50-lucidity-retention.conf" = ''
+          [Journal]
+          SystemMaxUse=1G
+          MaxRetentionSec=7day
+        '';
         "etc/selinux/config" = ''
           SELINUX=enforcing
           SELINUXTYPE=targeted

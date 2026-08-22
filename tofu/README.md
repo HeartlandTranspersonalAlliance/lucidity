@@ -302,8 +302,10 @@ restore times until a stronger failure model requires them. Follow
 [`docs/node-recovery.md`](../docs/node-recovery.md) for verification and drills.
 
 Node and application monitoring is part of the locked bootc images rather than AWS
-infrastructure. Prometheus scrapes both roles over Nebula, Grafana and Alertmanager
-remain controller-local, and ntfy is published through the existing Coolify proxy.
+infrastructure. Prometheus and Loki run on the controller, Alloy forwards bounded
+logs from both roles over Nebula, Grafana and Alertmanager remain controller-local,
+and ntfy is published through the existing Coolify proxy. The deployment creates no
+CloudWatch alarms, AWS Synthetics canaries, or monitoring SNS topic.
 See [`docs/node-monitoring.md`](../docs/node-monitoring.md) for provisioning and access.
 
 After apply, use `ec2_instance_ids` for Session Manager, `ec2_private_ips.worker` when

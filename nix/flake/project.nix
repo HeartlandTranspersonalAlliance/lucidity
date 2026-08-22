@@ -51,6 +51,9 @@ in {
     openbaoKmsPlugin = pkgs.callPackage ../pkgs/openbao-kms-aws.nix {
       openbaoPluginsSrc = inputs.openbao-plugins;
     };
+    ooye = pkgs.callPackage ../pkgs/ooye.nix {
+      ooyeSrc = inputs.ooye;
+    };
     meshVmCheck = import ../den/classes/bootc/tests/mesh.nix {inherit pkgs;};
     awsConfig =
       pkgs.runCommand "lucidity-aws-config.tf.json" {
@@ -94,7 +97,8 @@ in {
           ++ lib.optionals (role == "controller") [
             asmExec
             awsWorkloadCredentialsProvider
-          ];
+          ]
+          ++ lib.optional (role == "worker") ooye;
         pathsToLink = [
           "/bin"
           "/share"

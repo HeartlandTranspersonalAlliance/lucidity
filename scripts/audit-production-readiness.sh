@@ -150,9 +150,12 @@ api_check account.snapshot_public_access block-all-sharing \
     '{observed:{state:(.State//"unknown")}} | . + {ok:(.observed.state == "block-all-sharing")}' \
     ec2 get-snapshot-block-public-access-state --region "${region}"
 
-api_check observability.cloudwatch_alarms 'one or more project alarms' \
-    '{observed:{count:(.MetricAlarms|length)}} | . + {ok:(.observed.count > 0)}' \
-    cloudwatch describe-alarms --region "${region}" --alarm-name-prefix "${project}-"
+# Runtime metrics, logs, probes, dashboards, and alert delivery are deliberately
+# self-hosted on the controller. This AWS inventory therefore does not require or
+# query CloudWatch alarms or Synthetics canaries.
+record observability.self_hosted declared \
+    'Prometheus, Loki, Grafana, Alloy, blackbox exporter, Alertmanager, and ntfy in the bootc images' \
+    '{"provider":"controller","aws_paid_canaries":false,"cloudwatch_alarms":false}'
 
 trails_file=${audit_dir}/trails.json
 if aws_call "${trails_file}" cloudtrail describe-trails --region "${region}" --include-shadow-trails false; then

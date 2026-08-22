@@ -88,8 +88,10 @@ unrecoverable.
 
 Default controller inputs are Coolify state, Nebula identity, and atomic
 OpenBao Raft snapshots. Default worker inputs are Coolify state and Nebula
-identity. Lucidity deliberately refuses `/`, `/var/lib/docker`, and
-`/var/lib/nix` as direct backup roots.
+identity. A worker hook briefly stops OOYE and the labeled Continuwuity
+container, then stages OOYE's registration and SQLite files plus the explicit
+`lucidity-continuwuity-data` volume. Lucidity deliberately refuses `/`,
+`/var/lib/docker`, and `/var/lib/nix` as direct backup roots.
 
 Put executable, root-owned dump hooks in `/etc/lucidity/backup.d`. Each hook
 receives a private staging directory as its only argument. Use hooks for
@@ -107,8 +109,10 @@ sudo systemctl enable --now lucidity-backup.timer
 
 The timer runs daily before the AWS Backup window. Controller runs also create
 an atomic OpenBao snapshot first. Repository checks read a rotating 5 percent
-of stored data. AWS Backup failures, aborts, expirations, and partial jobs are
-sent through the encrypted node-alarm topic.
+of stored data. The self-hosted Prometheus collector alerts through Alertmanager
+and ntfy when a configured application backup is more than 30 hours old. Review
+AWS Backup job status during the production audit; Lucidity does not create a
+CloudWatch or SNS notification path.
 
 Stage a restore without changing live data:
 

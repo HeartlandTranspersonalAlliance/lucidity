@@ -19,6 +19,10 @@
     hostName = lib.mkOption {type = lib.types.str;};
     overlayIPv4 = lib.mkOption {type = lib.types.str;};
     nebulaGroups = lib.mkOption {type = lib.types.listOf lib.types.str;};
+    monitoring.httpsTargets = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [];
+    };
     packages = lib.mkOption {
       type = lib.types.listOf lib.types.package;
       default = [];

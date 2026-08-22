@@ -29,6 +29,16 @@
         proto = "icmp";
         groups = ["admin"];
       }
+      {
+        port = 3100;
+        proto = "tcp";
+        groups = ["worker"];
+      }
+      {
+        port = 8200;
+        proto = "tcp";
+        groups = ["worker"];
+      }
     ]
     else [
       {
@@ -38,6 +48,16 @@
       }
       {
         port = 22;
+        proto = "tcp";
+        groups = ["controller"];
+      }
+      {
+        port = 9100;
+        proto = "tcp";
+        groups = ["controller"];
+      }
+      {
+        port = 12345;
         proto = "tcp";
         groups = ["controller"];
       }
