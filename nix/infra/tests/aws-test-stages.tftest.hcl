@@ -181,7 +181,8 @@ run "test_foundation_is_isolated" {
     condition = (
       output.controller_runtime_secret_name == "lucidity/test/controller-runtime" &&
       output.runtime_secret_names.monitoring == "lucidity/test/monitoring-tokens" &&
-      output.runtime_secret_names.restic == "lucidity/test/restic" &&
+      output.runtime_secret_names.restic_controller == "lucidity/test/restic-controller" &&
+      output.runtime_secret_names.restic_worker == "lucidity/test/restic-worker" &&
       output.github_infra_plan_role_arn == "arn:aws:iam::123456789012:role/lucidity-test-mock-role" &&
       output.github_infra_apply_role_arn == "arn:aws:iam::123456789012:role/lucidity-test-mock-role"
     )
