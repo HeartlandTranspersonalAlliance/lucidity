@@ -87,7 +87,7 @@
             (.content | contains("ExecStartPre=\n"))
           ) and
           any(.runcmd[]; . == ["systemctl", "daemon-reload"]) and
-          any(.runcmd[]; . == ["systemctl", "restart", "openbao.service"]) and
+          all(.runcmd[]; . != ["systemctl", "restart", "openbao.service"]) and
           any(.runcmd[]; . == ["systemctl", "reset-failed", "coolify-controller-bootstrap.service"]) and
           any(.runcmd[]; . == ["systemctl", "start", "--no-block", "coolify-controller-bootstrap.service"]) and
           all(.write_files[]; .path != "/etc/lucidity/vm-connectivity-only")

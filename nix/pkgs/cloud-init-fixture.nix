@@ -184,7 +184,6 @@ in
               runcmd: (
                 if $role == "controller" then [
                   ["systemctl", "daemon-reload"],
-                  ["systemctl", "restart", "openbao.service"],
                   ["systemctl", "reset-failed", "coolify-controller-bootstrap.service"],
                   ["systemctl", "start", "--no-block", "coolify-controller-bootstrap.service"]
                 ] else [] end
