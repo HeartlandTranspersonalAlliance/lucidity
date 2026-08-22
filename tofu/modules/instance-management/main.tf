@@ -72,6 +72,21 @@ resource "aws_iam_role_policy" "ecr_pull" {
   policy = data.aws_iam_policy_document.ecr_pull[each.key].json
 }
 
+data "aws_iam_policy_document" "controller_openbao_worker_identity" {
+  statement {
+    sid       = "ResolveExactWorkerRoleIdentity"
+    effect    = "Allow"
+    actions   = ["iam:GetRole"]
+    resources = [aws_iam_role.node["worker"].arn]
+  }
+}
+
+resource "aws_iam_role_policy" "controller_openbao_worker_identity" {
+  name   = "${local.resource_prefix}-controller-openbao-worker-identity"
+  role   = aws_iam_role.node["controller"].id
+  policy = data.aws_iam_policy_document.controller_openbao_worker_identity.json
+}
+
 data "aws_iam_policy_document" "application_backup" {
   for_each = var.application_backup_bucket_arn == null ? toset([]) : local.node_roles
 
@@ -177,6 +192,13 @@ resource "aws_iam_role_policy_attachment" "controller_additional" {
 
   policy_arn = each.value
   role       = aws_iam_role.node["controller"].name
+}
+
+resource "aws_iam_role_policy_attachment" "worker_additional" {
+  for_each = var.worker_policies
+
+  policy_arn = each.value
+  role       = aws_iam_role.node["worker"].name
 }
 
 resource "aws_iam_instance_profile" "node" {

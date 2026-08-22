@@ -84,7 +84,7 @@ in
       if controller
       then {}
       else {
-        "100.96.0.1" = ["mesh.heartlandta.org:4242"];
+        "100.96.0.1" = ["@MESH_HOSTNAME@:4242"];
       };
     lighthouse = {
       am_lighthouse = controller;
@@ -95,7 +95,7 @@ in
       host = "0.0.0.0";
       port = 4242;
     };
-    preferred_ranges = ["10.20.0.0/16"];
+    preferred_ranges = ["@VPC_CIDR@"];
     punchy = {
       punch = true;
       respond = true;

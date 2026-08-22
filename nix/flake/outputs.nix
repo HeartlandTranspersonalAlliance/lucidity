@@ -9,6 +9,7 @@
       asmExec
       awsConfig
       awsProductionVars
+      awsTestVars
       awsWorkloadCredentialsProvider
       ciWorkflow
       lucidity
@@ -17,6 +18,7 @@
       mkLucidityApp
       mkLucidityAppWith
       openbaoKmsPlugin
+      openbaoAuthPlugin
       rolePackages
       ;
   in {
@@ -27,10 +29,12 @@
           asmExec
           awsConfig
           awsProductionVars
+          awsTestVars
           awsWorkloadCredentialsProvider
           lucidity
           lucidityRelease
           openbaoKmsPlugin
+          openbaoAuthPlugin
           ;
         ci-hermetic-check = ciWorkflow.hermeticCheck;
         ci-integration-classify = ciWorkflow.classify;

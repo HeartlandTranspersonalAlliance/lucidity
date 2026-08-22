@@ -21,7 +21,7 @@
         "usr/share/lucidity/workloads/continuwuity/compose.yaml" = ''
           services:
             continuwuity:
-              image: forgejo.ellis.link/continuwuation/continuwuity:''${CONTINUWUITY_VERSION:?}@''${CONTINUWUITY_IMAGE_DIGEST:?}
+              image: ''${CONTINUWUITY_REPOSITORY:?}@''${CONTINUWUITY_IMAGE_DIGEST:?}
               restart: unless-stopped
               labels:
                 lucidity.workload: continuwuity
@@ -32,7 +32,8 @@
                 CONTINUWUITY_ADDRESS: 0.0.0.0
                 CONTINUWUITY_PORT: "8008"
                 CONTINUWUITY_ALLOW_FEDERATION: "true"
-                CONTINUWUITY_ALLOW_REGISTRATION: "false"
+                CONTINUWUITY_ALLOW_REGISTRATION: ''${MATRIX_ALLOW_REGISTRATION:-false}
+                CONTINUWUITY_REGISTRATION_TOKEN: ''${MATRIX_REGISTRATION_TOKEN:-}
                 CONTINUWUITY_WELL_KNOWN__CLIENT: https://''${MATRIX_SERVICE_HOSTNAME:?}
                 CONTINUWUITY_WELL_KNOWN__SERVER: ''${MATRIX_SERVICE_HOSTNAME:?}:443
               volumes:
@@ -48,12 +49,13 @@
               name: lucidity-continuwuity-data
         '';
         "usr/share/lucidity/workloads/continuwuity/env.example" = ''
+          # Rendered at launch from /etc/lucidity/deployment.json.
           # MATRIX_SERVER_NAME is permanent after initialization.
-          MATRIX_SERVER_NAME=heartlandta.org
-          MATRIX_SERVICE_HOSTNAME=matrix.heartlandta.org
-          CONTINUWUITY_VERSION=v26.7.3
-          # Resolve once from the tested version and retain the sha256 digest.
-          CONTINUWUITY_IMAGE_DIGEST=sha256:replace-with-tested-registry-digest
+          MATRIX_SERVER_NAME=example.invalid
+          MATRIX_SERVICE_HOSTNAME=matrix.example.invalid
+          CONTINUWUITY_REPOSITORY=registry.example.invalid/continuwuity
+          CONTINUWUITY_VERSION=v0.0.0
+          CONTINUWUITY_IMAGE_DIGEST=sha256:replace-with-deployment-contract-digest
         '';
         "etc/openbao/worker-agent.hcl" = ''
           vault {
@@ -186,6 +188,91 @@
           SystemCallArchitectures=native
           [Install]
           WantedBy=multi-user.target
+        '';
+        "usr/libexec/lucidity/register-matrix-bootstrap-admin" = ''
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          username=''${1:-}
+          [[ $username =~ ^[a-z0-9._=-]{1,64}$ ]] || {
+            echo "register-matrix-bootstrap-admin requires a lowercase Matrix localpart" >&2
+            exit 2
+          }
+          if [[ ''${LUCIDITY_MATRIX_BOOTSTRAP_RESOLVED:-0} != 1 ]]; then
+            operator_token_path="''${BAO_TOKEN_PATH:-}"
+            [[ -s $operator_token_path ]] || {
+              echo "BAO_TOKEN_PATH must name a private, scoped Matrix-bootstrap operator token file" >&2
+              exit 1
+            }
+            environment=$(/nix/var/nix/profiles/lucidity/bin/jq -er \
+              '.environment | select(. == "production" or . == "test")' /etc/lucidity/deployment.json)
+            profile=matrix-bootstrap
+            [[ $environment != test ]] || profile=test-matrix-bootstrap
+            exec env \
+              BAO_ADDR=https://100.96.0.1:8200 \
+              BAO_CACERT=/etc/lucidity/openbao-ca.crt \
+              BAO_TOKEN_PATH="$operator_token_path" \
+              LUCIDITY_MATRIX_BOOTSTRAP_RESOLVED=1 \
+              /nix/var/nix/profiles/lucidity/bin/secretspec run \
+                --file /etc/lucidity/secretspec.toml \
+                --profile "$profile" \
+                --scope matrix-bootstrap \
+                --reason "register the first Matrix administrator" \
+                -- "$0" "$username"
+          fi
+          registration_token_file="''${MATRIX_REGISTRATION_TOKEN_FILE:?}"
+          admin_password_file="''${MATRIX_ADMIN_PASSWORD_FILE:?}"
+          [[ -s $registration_token_file && -s $admin_password_file ]] || {
+            echo "Matrix bootstrap files were not materialized" >&2; exit 1;
+          }
+          [[ $registration_token_file =~ ^/[^[:space:]]+$ ]] || {
+            echo "Matrix registration token path is invalid" >&2; exit 1;
+          }
+          workdir=/usr/share/lucidity/workloads/continuwuity
+          runtime=/run/lucidity/deployment.env
+          [[ -s $runtime ]] || { echo "rendered deployment environment is unavailable" >&2; exit 1; }
+          temporary=$(mktemp -d /dev/shm/lucidity-matrix-bootstrap.XXXXXX)
+          trap 'find "$temporary" -type f -exec shred -u {} + 2>/dev/null || true; rmdir "$temporary" 2>/dev/null || true' EXIT
+          chmod 0700 "$temporary"
+          printf '%s\n' \
+            'services:' \
+            '  continuwuity:' \
+            '    environment:' \
+            '      CONTINUWUITY_ALLOW_REGISTRATION: "true"' \
+            '      CONTINUWUITY_REGISTRATION_TOKEN: ""' \
+            '      CONTINUWUITY_REGISTRATION_TOKEN_FILE: /run/secrets/matrix-registration-token' \
+            '    volumes:' \
+            "      - $registration_token_file:/run/secrets/matrix-registration-token:ro" \
+            > "$temporary/bootstrap-compose.yaml"
+          chmod 0600 "$temporary/bootstrap-compose.yaml"
+          docker compose --env-file "$runtime" --file "$workdir/compose.yaml" \
+            --file "$temporary/bootstrap-compose.yaml" up -d --wait
+          matrix_hostname=$(/nix/var/nix/profiles/lucidity/bin/jq -r '.matrix.service_hostname' /etc/lucidity/deployment.json)
+          /nix/var/nix/profiles/lucidity/bin/jq -n --arg username "$username" --rawfile password "$admin_password_file" \
+            '{username:$username,password:($password | rtrimstr("\n")),initial_device_display_name:"Lucidity test bootstrap"}' \
+            > "$temporary/register-initial.json"
+          status=$(/nix/var/nix/profiles/lucidity/bin/curl --silent --show-error \
+            --output "$temporary/register-challenge.json" --write-out '%{http_code}' \
+            --header 'Content-Type: application/json' --data-binary @"$temporary/register-initial.json" \
+            "https://$matrix_hostname/_matrix/client/v3/register")
+          [[ $status == 401 ]] || {
+            echo "Matrix registration did not return the expected authentication challenge" >&2; exit 1;
+          }
+          session=$(/nix/var/nix/profiles/lucidity/bin/jq -er \
+            '.session | select(type == "string" and length > 0)' "$temporary/register-challenge.json")
+          /nix/var/nix/profiles/lucidity/bin/jq --arg session "$session" --rawfile token "$registration_token_file" \
+            '. + {auth:{type:"m.login.registration_token",token:($token | rtrimstr("\n")),session:$session}}' \
+            "$temporary/register-initial.json" > "$temporary/register.json"
+          /nix/var/nix/profiles/lucidity/bin/curl --fail --silent --show-error --output /dev/null \
+            --header 'Content-Type: application/json' --data-binary @"$temporary/register.json" \
+            "https://$matrix_hostname/_matrix/client/v3/register"
+          docker compose --env-file "$runtime" --file "$workdir/compose.yaml" up -d --force-recreate --wait
+          environment=$(/nix/var/nix/profiles/lucidity/bin/jq -er \
+            '.environment | select(. == "production" or . == "test")' /etc/lucidity/deployment.json)
+          IFS= read -r operator_token <"''${BAO_TOKEN_PATH:?}"
+          BAO_TOKEN="$operator_token" /nix/var/nix/profiles/lucidity/bin/bao kv metadata delete \
+            -mount=secret "lucidity/$environment/matrix-bootstrap"
+          unset operator_token
+          echo "Registered the first Matrix account, disabled registration, and revoked the OpenBao bootstrap material"
         '';
         "etc/lucidity/backup.d/50-worker-workloads.sh" = ''
           #!/usr/bin/env bash

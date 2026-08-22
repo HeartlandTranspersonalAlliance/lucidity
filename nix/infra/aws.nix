@@ -67,6 +67,23 @@ in {
   variable = {
     aws_region = stringVariable "AWS region for the deployment." "us-east-2";
     environment = stringVariable "Environment tag." "production";
+    project_name = stringVariable "Stable project name used in resource identities and Project tags." "lucidity";
+    deployment_stage = {
+      description = "Optional isolated rollout stage: foundation, compute, edge, or quarantine.";
+      type = "string";
+      default = null;
+      nullable = true;
+      validation = {
+        condition = tf "var.deployment_stage == null || contains([\"foundation\", \"compute\", \"edge\", \"quarantine\"], var.deployment_stage)";
+        error_message = "Deployment stage must be foundation, compute, edge, quarantine, or null.";
+      };
+    };
+    deployment_contract = {
+      description = "Root-only, non-secret runtime deployment contract written by cloud-init.";
+      type = "any";
+      default = null;
+      nullable = true;
+    };
     vpc_name = stringVariable "Stable project and VPC name." "lucidity";
     vpc_cidr = stringVariable "Production VPC CIDR." "10.20.0.0/16";
     availability_zone_count = numberVariable "Number of VPC Availability Zones." 3;
@@ -83,6 +100,7 @@ in {
     enable_account_security_baseline = boolVariable "Enable regional account security, audit, and posture controls." false;
     enable_account_cost_budget = boolVariable "Create the monitoring-only annual account budget." false;
     enable_openbao = boolVariable "Create OpenBao KMS auto-unseal resources." false;
+    enable_shared_release_resources = boolVariable "Manage shared ECR, publishing OIDC, AMI validation, and snapshot KMS resources." true;
     account_annual_cost_limit_usd = numberVariable "Annual monitoring-only account budget." 1100;
     account_cost_budget_warning_percentage = numberVariable "Actual-spend early warning percentage." 80;
     account_cost_budget_notification_email = stringVariable "Budget notification email." null;
@@ -115,6 +133,23 @@ in {
     github_repository_id = stringVariable "Immutable GitHub repository ID." "1333819830";
     github_publish_branch = stringVariable "GitHub publishing branch." "main";
     github_oidc_provider_arn = stringVariable "Existing GitHub OIDC provider ARN." null;
+    shared_ecr_repository_arns = {
+      description = "Existing shared ECR repository ARNs keyed by controller and worker.";
+      type = "map(string)";
+      default = {};
+    };
+    shared_ecr_repository_names = {
+      description = "Existing shared ECR repository names keyed by controller and worker.";
+      type = "map(string)";
+      default = {};
+    };
+    shared_ecr_repository_urls = {
+      description = "Existing shared ECR repository URLs keyed by controller and worker.";
+      type = "map(string)";
+      default = {};
+    };
+    shared_snapshot_kms_key_arn = stringVariable "Existing shared AMI snapshot KMS key ARN." null;
+    state_bucket_name = stringVariable "Dedicated remote-state bucket name used by environment OIDC roles." null;
     repository_prefix = stringVariable "ECR repository prefix." "lucidity/bootc";
     root_volume_kms_key_arn = stringVariable "Optional explicit root volume KMS key." null;
     tags = {
@@ -189,29 +224,64 @@ in {
   };
 
   locals = {
-    repository_names = {
-      controller = (tf "var.repository_prefix") + "/controller";
-      worker = (tf "var.repository_prefix") + "/worker";
-    };
-    ec2_node_subnet_ids = tf "var.enable_ec2_instances ? { for role in [\"controller\", \"worker\"] : role => module.network[0].public_subnet_ids[sort(keys(module.network[0].public_subnet_ids))[var.ec2_node_availability_zone_indices[role]]] } : {}";
+    stage_foundation = tf "var.deployment_stage != null";
+    stage_compute = tf "contains([\"compute\", \"edge\", \"quarantine\"], coalesce(var.deployment_stage, \"foundation\"))";
+    stage_edge = tf "var.deployment_stage == \"edge\"";
+    stage_quarantine = tf "var.deployment_stage == \"quarantine\"";
+    effective_enable_network = tf "var.deployment_stage == null ? var.enable_network : true";
+    effective_enable_runtime_secrets = tf "var.deployment_stage == null ? var.enable_runtime_secrets : true";
+    effective_enable_instance_management = tf "var.deployment_stage == null ? var.enable_instance_management : true";
+    effective_enable_openbao = tf "var.deployment_stage == null ? var.enable_openbao : true";
+    effective_enable_ec2_launch_templates = tf "var.deployment_stage == null ? var.enable_ec2_launch_templates : local.stage_compute";
+    effective_enable_ec2_instances = tf "var.deployment_stage == null ? var.enable_ec2_instances : local.stage_compute";
+    effective_enable_cloudflare_dns = tf "var.deployment_stage == null ? var.enable_cloudflare_dns : local.stage_edge";
+    effective_enable_node_backups = tf "var.deployment_stage == null ? var.enable_node_backups : contains([\"edge\", \"quarantine\"], coalesce(var.deployment_stage, \"foundation\"))";
+    effective_enable_public_web_ingress = tf "var.deployment_stage == null ? var.enable_cloudflare_dns : local.stage_edge";
+    ecr_repository_arns = tf "var.enable_shared_release_resources ? module.registry[0].repository_arns : var.shared_ecr_repository_arns";
+    ecr_repository_names = tf "var.enable_shared_release_resources ? module.registry[0].repository_names : var.shared_ecr_repository_names";
+    ecr_repository_urls = tf "var.enable_shared_release_resources ? module.registry[0].repository_urls : var.shared_ecr_repository_urls";
+    snapshot_kms_key_arn = tf "var.enable_shared_release_resources ? module.ami_import_validation[0].snapshot_kms_key_arn : var.shared_snapshot_kms_key_arn";
+    oidc_provider_arn = tf "var.enable_shared_release_resources ? module.github_oidc[0].oidc_provider_arn : var.github_oidc_provider_arn";
+    ec2_node_subnet_ids = tf "local.effective_enable_ec2_instances ? { for role in [\"controller\", \"worker\"] : role => module.network[0].public_subnet_ids[sort(keys(module.network[0].public_subnet_ids))[var.ec2_node_availability_zone_indices[role]]] } : {}";
   };
 
   resource = {
+    terraform_data.deployment_guard = {
+      input = tf "{ environment = var.environment, stage = var.deployment_stage, release = try(var.deployment_contract.release, null) }";
+      lifecycle.precondition = [
+        {
+          condition = tf "var.environment != \"test\" || (!var.enable_account_security_baseline && !var.enable_account_cost_budget)";
+          error_message = "The isolated test state must not manage account-wide security baseline or budget resources.";
+        }
+        {
+          condition = tf "var.deployment_stage == null || (var.deployment_contract != null && try(var.deployment_contract.environment, null) == var.environment && try(var.deployment_contract.region, null) == var.aws_region)";
+          error_message = "A staged deployment requires a matching deployment contract and AWS region.";
+        }
+        {
+          condition = tf "var.enable_shared_release_resources || (length(var.shared_ecr_repository_arns) == 2 && var.shared_snapshot_kms_key_arn != null && var.github_oidc_provider_arn != null)";
+          error_message = "An isolated stack must reference both shared ECR repositories, the shared snapshot KMS key, and the existing GitHub OIDC provider.";
+        }
+        {
+          condition = tf "var.environment != \"test\" || var.state_bucket_name != null";
+          error_message = "The isolated test stack requires its dedicated remote-state bucket name.";
+        }
+      ];
+    };
     aws_kms_key.openbao_unseal = {
-      count = tf "var.enable_openbao ? 1 : 0";
-      description = "Lucidity OpenBao auto-unseal key";
+      count = tf "local.effective_enable_openbao ? 1 : 0";
+      description = tf "format(\"%s %s OpenBao auto-unseal key\", var.project_name, var.environment)";
       enable_key_rotation = true;
       deletion_window_in_days = 30;
-      tags = tf "merge({ Name = \"lucidity-production-openbao-unseal\" }, var.tags)";
+      tags = tf "merge({ Name = format(\"%s-%s-openbao-unseal\", var.project_name, var.environment) }, var.tags)";
     };
     aws_kms_alias.openbao_unseal = {
-      count = tf "var.enable_openbao ? 1 : 0";
-      name = "alias/lucidity-production-openbao-unseal";
+      count = tf "local.effective_enable_openbao ? 1 : 0";
+      name = tf "format(\"alias/%s-%s-openbao-unseal\", var.project_name, var.environment)";
       target_key_id = tf "aws_kms_key.openbao_unseal[0].key_id";
     };
     aws_iam_policy.openbao_unseal = {
-      count = tf "var.enable_openbao ? 1 : 0";
-      name = "lucidity-production-openbao-unseal";
+      count = tf "local.effective_enable_openbao ? 1 : 0";
+      name = tf "format(\"%s-%s-openbao-unseal\", var.project_name, var.environment)";
       description = "Encrypt, decrypt, and describe only the Lucidity OpenBao auto-unseal key";
       policy = tf "jsonencode({ Version = \"2012-10-17\", Statement = [{ Sid = \"UseOpenBaoUnsealKey\", Effect = \"Allow\", Action = [\"kms:Encrypt\", \"kms:Decrypt\", \"kms:DescribeKey\"], Resource = aws_kms_key.openbao_unseal[0].arn }] })";
       tags = tf "var.tags";
@@ -223,7 +293,7 @@ in {
       count = tf "var.enable_account_security_baseline ? 1 : 0";
       source = "${moduleRoot}/account-security-baseline";
       environment = tf "var.environment";
-      project_name = tf "var.vpc_name";
+      project_name = tf "var.project_name";
       tags = tf "var.tags";
     };
     account_cost_budget = {
@@ -233,17 +303,18 @@ in {
       environment = tf "var.environment";
       annual_limit_usd = tf "var.account_annual_cost_limit_usd";
       notification_email = tf "var.account_cost_budget_notification_email";
-      project_name = tf "var.vpc_name";
+      project_name = tf "var.project_name";
       tags = tf "var.tags";
     };
     network = {
-      count = tf "var.enable_network ? 1 : 0";
+      count = tf "local.effective_enable_network ? 1 : 0";
       source = "${moduleRoot}/network";
       application_outbound_tcp_ports = tf "var.application_outbound_tcp_ports";
       availability_zone_count = tf "var.availability_zone_count";
       allowed_web_cidrs = tf "var.allowed_web_cidrs";
       controller_outbound_tcp_ports = tf "var.controller_outbound_tcp_ports";
       enable_nat_gateways = tf "var.enable_nat_gateways";
+      enable_web_ingress = tf "local.effective_enable_public_web_ingress";
       environment = tf "var.environment";
       flow_log_retention_days = tf "var.flow_log_retention_days";
       flow_log_traffic_type = tf "var.flow_log_traffic_type";
@@ -253,14 +324,15 @@ in {
       vpc_name = tf "var.vpc_name";
     };
     runtime_secrets = {
-      count = tf "var.enable_runtime_secrets ? 1 : 0";
+      count = tf "local.effective_enable_runtime_secrets ? 1 : 0";
       source = "${moduleRoot}/runtime-secrets";
       environment = tf "var.environment";
-      project_name = tf "var.vpc_name";
+      project_name = tf "var.project_name";
       recovery_window_in_days = tf "var.secret_recovery_window_in_days";
       tags = tf "var.tags";
     };
     registry = {
+      count = tf "var.enable_shared_release_resources ? 1 : 0";
       source = "${moduleRoot}/ecr";
       repository_names = {
         controller = (tf "var.repository_prefix") + "/controller";
@@ -268,28 +340,39 @@ in {
       };
     };
     instance_management = {
-      count = tf "var.enable_instance_management ? 1 : 0";
+      count = tf "local.effective_enable_instance_management ? 1 : 0";
       source = "${moduleRoot}/instance-management";
-      application_backup_bucket_arn = tf "var.application_backup_bucket_arn";
-      application_backup_bucket_kms_key_arn = tf "var.application_backup_bucket_kms_key_arn";
+      application_backup_bucket_arn = tf "var.environment == \"test\" ? module.restic_bucket[0].bucket_arn : var.application_backup_bucket_arn";
+      application_backup_bucket_kms_key_arn = tf "var.environment == \"test\" ? module.restic_bucket[0].kms_key_arn : var.application_backup_bucket_kms_key_arn";
       application_backup_secret_arns = tf "var.application_backup_secret_arns";
       application_backup_secret_kms_key_arn = tf "var.application_backup_secret_kms_key_arn";
-      controller_policies = tf "merge(var.enable_runtime_secrets ? { runtime_secrets = module.runtime_secrets[0].controller_policy_arn } : {}, var.enable_openbao ? { openbao_unseal = aws_iam_policy.openbao_unseal[0].arn } : {})";
-      ecr_repository_arns = tf "module.registry.repository_arns";
+      controller_policies = tf "merge(local.effective_enable_runtime_secrets ? { runtime_secrets = module.runtime_secrets[0].controller_policy_arn } : {}, local.effective_enable_openbao ? { openbao_unseal = aws_iam_policy.openbao_unseal[0].arn } : {})";
+      worker_policies = tf "local.effective_enable_runtime_secrets ? { runtime_secrets = module.runtime_secrets[0].worker_policy_arn } : {}";
+      ecr_repository_arns = tf "local.ecr_repository_arns";
       environment = tf "var.environment";
-      project_name = tf "var.vpc_name";
+      project_name = tf "var.project_name";
+      tags = tf "var.tags";
+    };
+    restic_bucket = {
+      count = tf "var.environment == \"test\" ? 1 : 0";
+      source = "${moduleRoot}/restic-bucket";
+      aws_region = tf "var.aws_region";
+      environment = tf "var.environment";
+      project_name = tf "var.project_name";
       tags = tf "var.tags";
     };
     github_oidc = {
+      count = tf "var.enable_shared_release_resources ? 1 : 0";
       source = "${moduleRoot}/github-oidc";
       github_repository = tf "var.github_repository";
       github_repository_owner_id = tf "var.github_repository_owner_id";
       github_repository_id = tf "var.github_repository_id";
       github_branch = tf "var.github_publish_branch";
       oidc_provider_arn = tf "var.github_oidc_provider_arn";
-      repository_arns = tf "toset(values(module.registry.repository_arns))";
+      repository_arns = tf "toset(values(local.ecr_repository_arns))";
     };
     ami_import_validation = {
+      count = tf "var.enable_shared_release_resources ? 1 : 0";
       source = "${moduleRoot}/ami-import-validation";
       aws_region = tf "var.aws_region";
       enable_launch_validation = tf "var.enable_ami_launch_validation";
@@ -303,9 +386,9 @@ in {
       launch_validation_role_arns = tf "var.enable_instance_management ? toset(values(module.instance_management[0].role_arns)) : toset([])";
       launch_validation_security_group_ids = tf "var.enable_network ? toset([module.network[0].security_group_ids.application, module.network[0].security_group_ids.controller]) : toset([])";
       launch_validation_subnet_ids = tf "var.enable_network ? toset(values(module.network[0].public_subnet_ids)) : toset([])";
-      oidc_provider_arn = tf "module.github_oidc.oidc_provider_arn";
-      project_name = tf "var.vpc_name";
-      source_repository_arns = tf "toset([module.registry.repository_arns.controller, module.registry.repository_arns.worker])";
+      oidc_provider_arn = tf "local.oidc_provider_arn";
+      project_name = tf "var.project_name";
+      source_repository_arns = tf "toset(values(local.ecr_repository_arns))";
       tags = tf "var.tags";
     };
     deployment_validation = {
@@ -313,21 +396,39 @@ in {
       aws_region = tf "var.aws_region";
       environment = tf "var.environment";
       github_branch = tf "var.github_publish_branch";
+      github_environment = tf "var.environment == \"test\" ? \"test\" : null";
       github_repository = tf "var.github_repository";
       github_repository_owner_id = tf "var.github_repository_owner_id";
       github_repository_id = tf "var.github_repository_id";
-      oidc_provider_arn = tf "module.github_oidc.oidc_provider_arn";
-      project_name = tf "var.vpc_name";
+      oidc_provider_arn = tf "local.oidc_provider_arn";
+      project_name = tf "var.project_name";
+      tags = tf "var.tags";
+    };
+    infrastructure_access = {
+      count = tf "var.environment == \"test\" ? 1 : 0";
+      source = "${moduleRoot}/infrastructure-access";
+      aws_region = tf "var.aws_region";
+      environment = tf "var.environment";
+      github_branch = tf "var.github_publish_branch";
+      github_environment = "test";
+      github_repository = tf "var.github_repository";
+      github_repository_owner_id = tf "var.github_repository_owner_id";
+      github_repository_id = tf "var.github_repository_id";
+      oidc_provider_arn = tf "local.oidc_provider_arn";
+      project_name = tf "var.project_name";
+      state_bucket_name = tf "var.state_bucket_name";
+      state_key = tf "var.deployment_contract.state.key";
       tags = tf "var.tags";
     };
     ec2_launch_templates = {
-      count = tf "var.enable_ec2_launch_templates ? 1 : 0";
+      count = tf "local.effective_enable_ec2_launch_templates ? 1 : 0";
       source = "${moduleRoot}/ec2-launch-templates";
       ami_ids = {
         controller = tf "var.controller_ami_id";
         worker = tf "var.worker_ami_id";
       };
       controller_runtime_secret_name = tf "module.runtime_secrets[0].secret_name";
+      deployment_contract = tf "var.deployment_contract";
       environment = tf "var.environment";
       instance_profile_names = {
         controller = tf "module.instance_management[0].instance_profile_names.controller";
@@ -338,8 +439,9 @@ in {
         worker = tf "var.worker_instance_type";
       };
       node_names = tf "var.ec2_node_names";
-      project_name = tf "var.vpc_name";
-      root_volume_kms_key_arn = tf "module.ami_import_validation.snapshot_kms_key_arn";
+      project_name = tf "var.project_name";
+      root_volume_kms_key_arn = tf "local.snapshot_kms_key_arn";
+      runtime_secret_names = tf "module.runtime_secrets[0].secret_names";
       root_volume_sizes = {
         controller = tf "var.controller_root_volume_size_gib";
         worker = tf "var.worker_root_volume_size_gib";
@@ -348,19 +450,19 @@ in {
       tags = tf "var.tags";
     };
     ec2_nodes = {
-      count = tf "var.enable_ec2_instances ? 1 : 0";
+      count = tf "local.effective_enable_ec2_instances ? 1 : 0";
       source = "${moduleRoot}/ec2-nodes";
       enable_termination_protection = tf "var.enable_ec2_termination_protection";
       environment = tf "var.environment";
       launch_template_ids = tf "module.ec2_launch_templates[0].launch_template_ids";
       launch_template_versions = tf "module.ec2_launch_templates[0].launch_template_latest_versions";
       node_names = tf "var.ec2_node_names";
-      project_name = tf "var.vpc_name";
+      project_name = tf "var.project_name";
       subnet_ids = tf "local.ec2_node_subnet_ids";
       tags = tf "var.tags";
     };
     cloudflare_dns = {
-      count = tf "var.enable_cloudflare_dns ? 1 : 0";
+      count = tf "local.effective_enable_cloudflare_dns ? 1 : 0";
       source = "${moduleRoot}/cloudflare-dns";
       origin_ipv4 = tf "module.ec2_nodes[0].public_ips";
       records = tf "var.cloudflare_dns_records";
@@ -368,24 +470,36 @@ in {
       zone_name = tf "var.cloudflare_zone_name";
     };
     node_backups = {
-      count = tf "var.enable_node_backups ? 1 : 0";
+      count = tf "local.effective_enable_node_backups ? 1 : 0";
       source = "${moduleRoot}/node-backups";
       environment = tf "var.environment";
       instance_arns = tf "module.ec2_nodes[0].instance_arns";
       instance_role_arns = tf "module.instance_management[0].role_arns";
-      kms_key_arn = tf "module.ami_import_validation.snapshot_kms_key_arn";
-      project_name = tf "var.vpc_name";
+      kms_key_arn = tf "local.snapshot_kms_key_arn";
+      project_name = tf "var.project_name";
       retention_days = tf "var.node_backup_retention_days";
       tags = tf "var.tags";
     };
   };
 
   output = {
+    deployment_environment = {
+      value = tf "var.environment";
+    };
+    deployment_release = {
+      value = tf "var.deployment_contract.release";
+    };
+    deployment_stage = {
+      value = tf "var.deployment_stage";
+    };
+    public_web_ingress_enabled = {
+      value = tf "local.effective_enable_public_web_ingress";
+    };
     account_security_baseline = {
       value = tf "var.enable_account_security_baseline ? module.account_security_baseline[0].summary : null";
     };
     application_backup_access = {
-      value = tf "var.enable_instance_management ? module.instance_management[0].application_backup_access : null";
+      value = tf "local.effective_enable_instance_management ? module.instance_management[0].application_backup_access : null";
     };
     account_cost_budget_arn = {
       value = tf "var.enable_account_cost_budget ? module.account_cost_budget[0].arn : null";
@@ -400,7 +514,7 @@ in {
       value = tf "var.enable_ami_launch_validation";
     };
     ami_snapshot_kms_key_arn = {
-      value = tf "module.ami_import_validation.snapshot_kms_key_arn";
+      value = tf "local.snapshot_kms_key_arn";
     };
     ami_test_instance_profile_name = {
       value = tf "var.enable_ami_launch_validation && var.enable_instance_management ? module.instance_management[0].instance_profile_names.worker : null";
@@ -424,79 +538,85 @@ in {
       value = tf "var.account_annual_cost_limit_usd";
     };
     availability_zones = {
-      value = tf "var.enable_network ? module.network[0].availability_zones : []";
+      value = tf "local.effective_enable_network ? module.network[0].availability_zones : []";
     };
     cloudflare_dns_records = {
-      value = tf "var.enable_cloudflare_dns ? module.cloudflare_dns[0].records : {}";
+      value = tf "local.effective_enable_cloudflare_dns ? module.cloudflare_dns[0].records : {}";
     };
     controller_instance_profile_name = {
-      value = tf "var.enable_instance_management ? module.instance_management[0].instance_profile_names.controller : null";
+      value = tf "local.effective_enable_instance_management ? module.instance_management[0].instance_profile_names.controller : null";
     };
     controller_instance_type = {
       value = tf "var.controller_instance_type";
     };
     controller_runtime_role_arn = {
-      value = tf "var.enable_instance_management ? module.instance_management[0].role_arns.controller : null";
+      value = tf "local.effective_enable_instance_management ? module.instance_management[0].role_arns.controller : null";
     };
     controller_runtime_secret_arn = {
-      value = tf "var.enable_runtime_secrets ? module.runtime_secrets[0].secret_arn : null";
+      value = tf "local.effective_enable_runtime_secrets ? module.runtime_secrets[0].secret_arn : null";
     };
     controller_runtime_secret_name = {
-      value = tf "var.enable_runtime_secrets ? module.runtime_secrets[0].secret_name : null";
+      value = tf "local.effective_enable_runtime_secrets ? module.runtime_secrets[0].secret_name : null";
     };
     controller_runtime_secret_reference_pattern = {
-      value = tf "var.enable_runtime_secrets ? module.runtime_secrets[0].dynamic_reference_pattern : null";
+      value = tf "local.effective_enable_runtime_secrets ? module.runtime_secrets[0].dynamic_reference_pattern : null";
+    };
+    runtime_secret_arns = {
+      value = tf "local.effective_enable_runtime_secrets ? module.runtime_secrets[0].secret_arns : {}";
+    };
+    runtime_secret_names = {
+      value = tf "local.effective_enable_runtime_secrets ? module.runtime_secrets[0].secret_names : {}";
     };
     deployment_architecture = {
       value = tf "var.deployment_architecture";
     };
     ecr_repository_arns = {
-      value = tf "module.registry.repository_arns";
+      value = tf "local.ecr_repository_arns";
     };
     ecr_repository_names = {
-      value = tf "module.registry.repository_names";
+      value = tf "local.ecr_repository_names";
     };
     ecr_repository_urls = {
-      value = tf "module.registry.repository_urls";
+      value = tf "local.ecr_repository_urls";
     };
     ec2_availability_zones = {
-      value = tf "var.enable_ec2_instances ? module.ec2_nodes[0].availability_zones : {}";
+      value = tf "local.effective_enable_ec2_instances ? module.ec2_nodes[0].availability_zones : {}";
     };
     ec2_detailed_monitoring_enabled = {
-      value = tf "var.enable_ec2_launch_templates ? module.ec2_launch_templates[0].detailed_monitoring_enabled : {}";
+      value = tf "local.effective_enable_ec2_launch_templates ? module.ec2_launch_templates[0].detailed_monitoring_enabled : {}";
     };
     ec2_elastic_ip_allocation_ids = {
-      value = tf "var.enable_ec2_instances ? module.ec2_nodes[0].elastic_ip_allocation_ids : {}";
+      value = tf "local.effective_enable_ec2_instances ? module.ec2_nodes[0].elastic_ip_allocation_ids : {}";
     };
     ec2_instance_ids = {
-      value = tf "var.enable_ec2_instances ? module.ec2_nodes[0].instance_ids : {}";
+      value = tf "local.effective_enable_ec2_instances ? module.ec2_nodes[0].instance_ids : {}";
     };
     ec2_instance_settings = {
-      value = tf "var.enable_ec2_instances ? module.ec2_nodes[0].instance_settings : {}";
+      value = tf "local.effective_enable_ec2_instances ? module.ec2_nodes[0].instance_settings : {}";
     };
     ec2_launch_template_ids = {
-      value = tf "var.enable_ec2_launch_templates ? module.ec2_launch_templates[0].launch_template_ids : {}";
+      value = tf "local.effective_enable_ec2_launch_templates ? module.ec2_launch_templates[0].launch_template_ids : {}";
     };
     ec2_launch_template_latest_versions = {
-      value = tf "var.enable_ec2_launch_templates ? module.ec2_launch_templates[0].launch_template_latest_versions : {}";
+      value = tf "local.effective_enable_ec2_launch_templates ? module.ec2_launch_templates[0].launch_template_latest_versions : {}";
     };
     ec2_private_ips = {
-      value = tf "var.enable_ec2_instances ? module.ec2_nodes[0].private_ips : {}";
+      value = tf "local.effective_enable_ec2_instances ? module.ec2_nodes[0].private_ips : {}";
     };
     ec2_public_ips = {
-      value = tf "var.enable_ec2_instances ? module.ec2_nodes[0].public_ips : {}";
+      value = tf "local.effective_enable_ec2_instances ? module.ec2_nodes[0].public_ips : {}";
     };
     ec2_root_volume_settings = {
-      value = tf "var.enable_ec2_launch_templates ? module.ec2_launch_templates[0].root_volume_settings : {}";
+      value = tf "local.effective_enable_ec2_launch_templates ? module.ec2_launch_templates[0].root_volume_settings : {}";
     };
     github_ami_audit_role_arn = {
-      value = tf "module.ami_import_validation.github_audit_role_arn";
+      value = tf "var.enable_shared_release_resources ? module.ami_import_validation[0].github_audit_role_arn : null";
     };
     github_ami_validation_role_arn = {
-      value = tf "module.ami_import_validation.github_role_arn";
+      value = tf "var.enable_shared_release_resources ? module.ami_import_validation[0].github_role_arn : null";
     };
     github_ami_validation_subject = {
-      value = tf "module.ami_import_validation.github_subject";
+      value = tf "var.enable_shared_release_resources ? module.ami_import_validation[0].github_subject : null";
     };
     github_deployment_validation_role_arn = {
       value = tf "module.deployment_validation.github_role_arn";
@@ -505,86 +625,92 @@ in {
       value = tf "module.deployment_validation.github_subject";
     };
     github_oidc_provider_arn = {
-      value = tf "module.github_oidc.oidc_provider_arn";
+      value = tf "local.oidc_provider_arn";
     };
     github_oidc_subject = {
-      value = tf "module.github_oidc.trusted_subject";
+      value = tf "var.enable_shared_release_resources ? module.github_oidc[0].trusted_subject : null";
     };
     github_publish_role_arn = {
-      value = tf "module.github_oidc.publish_role_arn";
+      value = tf "var.enable_shared_release_resources ? module.github_oidc[0].publish_role_arn : null";
+    };
+    github_infra_plan_role_arn = {
+      value = tf "var.environment == \"test\" ? module.infrastructure_access[0].plan_role_arn : null";
+    };
+    github_infra_apply_role_arn = {
+      value = tf "var.environment == \"test\" ? module.infrastructure_access[0].apply_role_arn : null";
     };
     internet_gateway_id = {
-      value = tf "var.enable_network ? module.network[0].internet_gateway_id : null";
+      value = tf "local.effective_enable_network ? module.network[0].internet_gateway_id : null";
     };
     nat_gateway_ids = {
-      value = tf "var.enable_network ? module.network[0].nat_gateway_ids : {}";
+      value = tf "local.effective_enable_network ? module.network[0].nat_gateway_ids : {}";
     };
     nat_gateway_public_ips = {
-      value = tf "var.enable_network ? module.network[0].nat_gateway_public_ips : {}";
+      value = tf "local.effective_enable_network ? module.network[0].nat_gateway_public_ips : {}";
     };
     node_backup_plan_id = {
-      value = tf "var.enable_node_backups ? module.node_backups[0].plan_id : null";
+      value = tf "local.effective_enable_node_backups ? module.node_backups[0].plan_id : null";
     };
     node_backup_retention_days = {
-      value = tf "var.enable_node_backups ? module.node_backups[0].retention_days : null";
+      value = tf "local.effective_enable_node_backups ? module.node_backups[0].retention_days : null";
     };
     node_backup_service_role_arn = {
-      value = tf "var.enable_node_backups ? module.node_backups[0].service_role_arn : null";
+      value = tf "local.effective_enable_node_backups ? module.node_backups[0].service_role_arn : null";
     };
     node_backup_settings = {
-      value = tf "var.enable_node_backups ? module.node_backups[0].settings : null";
+      value = tf "local.effective_enable_node_backups ? module.node_backups[0].settings : null";
     };
     node_backup_vault_arn = {
-      value = tf "var.enable_node_backups ? module.node_backups[0].vault_arn : null";
+      value = tf "local.effective_enable_node_backups ? module.node_backups[0].vault_arn : null";
     };
     node_restore_service_role_arn = {
-      value = tf "var.enable_node_backups ? module.node_backups[0].restore_role_arn : null";
+      value = tf "local.effective_enable_node_backups ? module.node_backups[0].restore_role_arn : null";
     };
     openbao_unseal_kms_key_arn = {
-      value = tf "var.enable_openbao ? aws_kms_key.openbao_unseal[0].arn : null";
+      value = tf "local.effective_enable_openbao ? aws_kms_key.openbao_unseal[0].arn : null";
     };
     private_subnet_ids = {
-      value = tf "var.enable_network ? module.network[0].private_subnet_ids : {}";
+      value = tf "local.effective_enable_network ? module.network[0].private_subnet_ids : {}";
     };
     public_subnet_ids = {
-      value = tf "var.enable_network ? module.network[0].public_subnet_ids : {}";
+      value = tf "local.effective_enable_network ? module.network[0].public_subnet_ids : {}";
     };
     runtime_secrets_kms_key_id = {
-      value = tf "var.enable_runtime_secrets ? module.runtime_secrets[0].kms_key_id : null";
+      value = tf "local.effective_enable_runtime_secrets ? module.runtime_secrets[0].kms_key_id : null";
     };
     security_group_ids = {
-      value = tf "var.enable_network ? module.network[0].security_group_ids : {}";
+      value = tf "local.effective_enable_network ? module.network[0].security_group_ids : {}";
     };
     selected_ami_ids = {
-      value = tf "var.enable_ec2_launch_templates ? module.ec2_launch_templates[0].selected_ami_ids : {}";
+      value = tf "local.effective_enable_ec2_launch_templates ? module.ec2_launch_templates[0].selected_ami_ids : {}";
     };
     ses_pricing_plan = {
       value = "NONE";
       description = "Enforced and verified by lucidity infra apply through the SES v2 account-pricing API.";
     };
     vpc_cidr = {
-      value = tf "var.enable_network ? module.network[0].vpc_cidr : null";
+      value = tf "local.effective_enable_network ? module.network[0].vpc_cidr : null";
     };
     vpc_flow_log_group_name = {
-      value = tf "var.enable_network ? module.network[0].flow_log_group_name : null";
+      value = tf "local.effective_enable_network ? module.network[0].flow_log_group_name : null";
     };
     vpc_flow_log_id = {
-      value = tf "var.enable_network ? module.network[0].flow_log_id : null";
+      value = tf "local.effective_enable_network ? module.network[0].flow_log_id : null";
     };
     vpc_flow_log_settings = {
-      value = tf "var.enable_network ? module.network[0].flow_log_settings : null";
+      value = tf "local.effective_enable_network ? module.network[0].flow_log_settings : null";
     };
     vpc_id = {
-      value = tf "var.enable_network ? module.network[0].vpc_id : null";
+      value = tf "local.effective_enable_network ? module.network[0].vpc_id : null";
     };
     worker_instance_profile_name = {
-      value = tf "var.enable_instance_management ? module.instance_management[0].instance_profile_names.worker : null";
+      value = tf "local.effective_enable_instance_management ? module.instance_management[0].instance_profile_names.worker : null";
     };
     worker_instance_type = {
       value = tf "var.worker_instance_type";
     };
     worker_runtime_role_arn = {
-      value = tf "var.enable_instance_management ? module.instance_management[0].role_arns.worker : null";
+      value = tf "local.effective_enable_instance_management ? module.instance_management[0].role_arns.worker : null";
     };
   };
 }

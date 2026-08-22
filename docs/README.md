@@ -19,6 +19,7 @@ design context, customization, operations, and reference material.
 - [Controller and worker recovery](node-recovery.md)
 - [Production observability](node-monitoring.md)
 - [Worker workloads: Continuwuity and OOYE](guides/worker-workloads.md)
+- [Isolated test launch](guides/test-launch.md)
 - [Determinate Nix operations](determinate-nix.md)
 
 ## Security

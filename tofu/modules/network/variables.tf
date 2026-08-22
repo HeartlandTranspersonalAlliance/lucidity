@@ -46,6 +46,12 @@ variable "enable_nat_gateways" {
   default     = false
 }
 
+variable "enable_web_ingress" {
+  description = "Create public HTTP and HTTPS ingress rules. Disable for quarantine."
+  type        = bool
+  default     = true
+}
+
 variable "allowed_web_cidrs" {
   description = "IPv4 CIDR blocks allowed to reach public HTTP and HTTPS listeners."
   type        = set(string)

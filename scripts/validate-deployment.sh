@@ -23,7 +23,7 @@ max_attempts=${DEPLOYMENT_SSM_MAX_ATTEMPTS:-120}
 [[ ${require_release_identity} == true || ${require_release_identity} == false ]] || { echo "DEPLOYMENT_REQUIRE_RELEASE_IDENTITY must be true or false" >&2; exit 2; }
 [[ ${worker_overlay_ip} =~ ^100\.96\.0\.[0-9]{1,3}$ ]] || { echo "DEPLOYMENT_WORKER_OVERLAY_IP is invalid" >&2; exit 2; }
 if [[ ${require_https} == true ]]; then
-    [[ -n ${controller_url} && -n ${worker_url} ]] || { echo "both production HTTPS URLs are required" >&2; exit 2; }
+    [[ -n ${controller_url} && -n ${worker_url} ]] || { echo "both deployment HTTPS URLs are required" >&2; exit 2; }
 fi
 declare -A expected_ami_ids expected_image_digests
 expected_ami_ids[controller]=${DEPLOYMENT_CONTROLLER_AMI_ID:-}
@@ -90,10 +90,11 @@ discover_node() {
     [[ $(jq -r '.Volumes[0].State' <<< "${volume}") == in-use ]] || { echo "${role} root EBS volume is not attached" >&2; return 1; }
 }
 
-validate_no_vpc_ssh() {
+validate_no_public_service_ports() {
     local -a group_ids=()
     local -a role_groups=()
     local role group_id response exposed
+    local forbidden_ports='[22,2586,3000,6693,8008,8200,9090,9093,9100,9115,12345,3100]'
     for role in controller worker; do
         IFS=',' read -r -a role_groups <<<"${security_group_ids[${role}]}"
         for group_id in "${role_groups[@]}"; do
@@ -101,17 +102,16 @@ validate_no_vpc_ssh() {
         done
     done
     response=$("${aws_cli}" ec2 describe-security-groups --region "${region}" --group-ids "${group_ids[@]}" --output json)
-    exposed=$(jq -r '[
+    exposed=$(jq -r --argjson ports "${forbidden_ports}" '[
         .SecurityGroups[] as $group
         | $group.IpPermissions[]?
-        | select(
-            .IpProtocol == "-1" or
-            (.IpProtocol == "tcp" and (.FromPort // 0) <= 22 and (.ToPort // 65535) >= 22)
-          )
-        | $group.GroupId
+        | select((.IpRanges | length) > 0 or (.Ipv6Ranges | length) > 0)
+        | $ports[] as $port
+        | select(.IpProtocol == "-1" or (.IpProtocol == "tcp" and (.FromPort // 0) <= $port and (.ToPort // 65535) >= $port))
+        | ($group.GroupId + ":" + ($port | tostring))
       ] | unique | join(",")' <<<"${response}")
     [[ -z ${exposed} ]] || {
-        echo "TCP/22 must not be reachable through VPC security groups: ${exposed}" >&2
+        echo "administrative and raw service ports must not be publicly reachable through VPC security groups: ${exposed}" >&2
         return 1
     }
 }
@@ -267,8 +267,8 @@ systemctl is-active --quiet coolify-worker-authorized-keys.service
 discover_node controller
 discover_node worker
 [[ ${vpc_ids[controller]} == "${vpc_ids[worker]}" ]] || { echo "controller and worker are not in the same VPC" >&2; exit 1; }
-validate_no_vpc_ssh
-echo "Discovered one hardened running controller and worker with encrypted root storage and no VPC SSH ingress"
+validate_no_public_service_ports
+echo "Discovered one hardened running controller and worker with encrypted root storage and no public administrative or raw service ports"
 
 for role in controller worker; do
     wait_for_ssm "${instance_ids[${role}]}" "${role}"

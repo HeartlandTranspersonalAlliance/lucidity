@@ -35,7 +35,23 @@
         "/var/usrlocal"
       ];
       files = {
-        "etc/lucidity/secretspec.toml" = builtins.readFile ../../../../secretspec.toml;
+        "etc/lucidity/secretspec.toml.in" =
+          builtins.replaceStrings
+          [
+            "aws-production"
+            "openbao-production"
+            "lucidity/production"
+            "alias/lucidity-production"
+            "tag.Environment=production"
+          ]
+          [
+            "aws-runtime"
+            "openbao-runtime"
+            "lucidity/@ENVIRONMENT@"
+            "alias/lucidity-@ENVIRONMENT@"
+            "tag.Environment=@ENVIRONMENT@"
+          ]
+          (builtins.readFile ../../../../secretspec.toml);
         "etc/lucidity/backup-target.env.example" = ''
           # Copy to /etc/lucidity/backup-target.env and select exactly one backend.
           # Keep credentials in SecretSpec, never in this file.

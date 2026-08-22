@@ -1,5 +1,5 @@
 variable "aws_region" {
-  description = "AWS region containing the production nodes."
+  description = "AWS region containing the deployment nodes."
   type        = string
 }
 
@@ -19,7 +19,7 @@ variable "environment" {
 }
 
 variable "github_repository" {
-  description = "GitHub repository allowed to run production deployment validation."
+  description = "GitHub repository allowed to run deployment validation."
   type        = string
 
   validation {
@@ -52,6 +52,13 @@ variable "github_branch" {
   description = "GitHub branch allowed to assume the deployment-validation role."
   type        = string
   default     = "main"
+}
+
+variable "github_environment" {
+  description = "Optional protected GitHub environment required in the OIDC subject."
+  type        = string
+  default     = null
+  nullable    = true
 }
 
 variable "oidc_provider_arn" {

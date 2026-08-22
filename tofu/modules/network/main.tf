@@ -178,10 +178,10 @@ resource "aws_security_group" "database" {
 }
 
 resource "aws_vpc_security_group_ingress_rule" "web" {
-  for_each = {
+  for_each = var.enable_web_ingress ? {
     for rule in setproduct(var.allowed_web_cidrs, [80, 443]) :
     "${rule[0]}:${rule[1]}" => rule
-  }
+  } : {}
 
   cidr_ipv4         = each.value[0]
   description       = each.value[1] == 80 ? "Public HTTP" : "Public HTTPS"

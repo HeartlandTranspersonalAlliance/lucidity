@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "environment": "test",
+  "region": "us-east-2",
+  "release": "v0.4.0",
+  "state": {
+    "key": "lucidity/test/terraform.tfstate"
+  },
+  "dns": {
+    "coolify": "coolify.test.heartlandta.org",
+    "apps": "apps.test.heartlandta.org",
+    "apps_wildcard": "*.apps.test.heartlandta.org",
+    "apex": "test.heartlandta.org",
+    "matrix": "matrix.test.heartlandta.org",
+    "ntfy": "ntfy.test.heartlandta.org",
+    "mesh": "mesh.test.heartlandta.org"
+  },
+  "matrix": {
+    "server_name": "test.heartlandta.org",
+    "service_hostname": "matrix.test.heartlandta.org",
+    "registration_secret_path": "secret/lucidity/test/matrix-bootstrap"
+  },
+  "runtime": {
+    "controller_secret_id": "lucidity/test/controller-runtime",
+    "openbao_kms_alias": "alias/lucidity-test-openbao-unseal",
+    "mesh_hostname": "mesh.test.heartlandta.org",
+    "vpc_cidr": "10.21.0.0/16",
+    "ntfy_url": "https://ntfy.test.heartlandta.org",
+    "ooye_secret_path": "secret/lucidity/test/worker-ooye",
+    "blackbox_targets": [
+      "https://coolify.test.heartlandta.org",
+      "https://apps.test.heartlandta.org",
+      "https://test.heartlandta.org/.well-known/matrix/client",
+      "https://matrix.test.heartlandta.org/_matrix/client/versions",
+      "https://ntfy.test.heartlandta.org"
+    ]
+  },
+  "workloads": {
+    "continuwuity": {
+      "repository": "docker.io/jadedblueeyes/continuwuity",
+      "version": "v26.7.3",
+      "platform": "linux/amd64",
+      "digest": "sha256:55397612f3e78150f8bfce2413c6912b3046e05cd30c895644fd5df4eb4f96db"
+    }
+  },
+  "features": {
+    "coolify": true,
+    "continuwuity": true,
+    "ooye": true,
+    "openbao": true,
+    "observability": true,
+    "backups": true
+  },
+  "review_after": "2026-09-05",
+  "data_policy": "synthetic-only"
+}

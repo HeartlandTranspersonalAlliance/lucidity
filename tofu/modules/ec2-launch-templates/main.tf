@@ -12,18 +12,48 @@ locals {
     for environment_name, json_key in local.controller_runtime_secret_keys :
     "${environment_name}={{resolve:secretsmanager:${var.controller_runtime_secret_name}:SecretString:${json_key}}}"
   ])
-  controller_user_data = join("\n", [
-    "#cloud-config",
-    yamlencode({
-      write_files = [{
-        path        = "/etc/coolify-controller/runtime-secrets.env"
-        owner       = "root:root"
-        permissions = "0600"
-        content     = local.controller_runtime_reference_content
-      }]
-    }),
-    "",
-  ])
+  deployment_contract_content = jsonencode(var.deployment_contract)
+  deployment_contract_file = {
+    path        = "/etc/lucidity/deployment.json"
+    owner       = "root:root"
+    permissions = "0600"
+    content     = local.deployment_contract_content
+  }
+  controller_runtime_reference_file = {
+    path        = "/etc/coolify-controller/runtime-secrets.env"
+    owner       = "root:root"
+    permissions = "0600"
+    content     = local.controller_runtime_reference_content
+  }
+  role_runtime_reference_content = {
+    controller = join("\n", [
+      "NTFY_ALERTMANAGER_TOKEN={{resolve:secretsmanager:${var.runtime_secret_names.monitoring}:SecretString:ntfy_alertmanager_token}}",
+      "RESTIC_PASSWORD={{resolve:secretsmanager:${var.runtime_secret_names.restic_controller}:SecretString:password}}",
+    ])
+    worker = join("\n", [
+      "RESTIC_PASSWORD={{resolve:secretsmanager:${var.runtime_secret_names.restic_worker}:SecretString:password}}",
+    ])
+  }
+  role_runtime_reference_file = {
+    for role in ["controller", "worker"] : role => {
+      path        = "/etc/lucidity/runtime-references.env"
+      owner       = "root:root"
+      permissions = "0600"
+      content     = local.role_runtime_reference_content[role]
+    }
+  }
+  user_data = {
+    for role in ["controller", "worker"] : role => join("\n", [
+      "#cloud-config",
+      yamlencode({
+        write_files = concat(
+          [local.deployment_contract_file, local.role_runtime_reference_file[role]],
+          role == "controller" ? [local.controller_runtime_reference_file] : [],
+        )
+      }),
+      "",
+    ])
+  }
   roles = {
     controller = {
       security_group_ids = [
@@ -99,7 +129,7 @@ resource "aws_launch_template" "node" {
     enabled = false
   }
 
-  user_data = each.key == "controller" ? base64encode(local.controller_user_data) : null
+  user_data = base64encode(local.user_data[each.key])
 
   tag_specifications {
     resource_type = "instance"

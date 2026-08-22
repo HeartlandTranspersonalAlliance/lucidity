@@ -52,12 +52,7 @@
             tls_key_file = "/var/lib/openbao/tls/server.key"
           }
 
-          listener "tcp" {
-            address = "100.96.0.1:8200"
-            tls_disable = false
-            tls_cert_file = "/var/lib/openbao/tls/server.crt"
-            tls_key_file = "/var/lib/openbao/tls/server.key"
-          }
+          @OVERLAY_LISTENER@
 
           plugin "kms" "awskms" {
             command = "@AWS_KMS_PLUGIN@"
@@ -66,7 +61,7 @@
 
           seal "awskms" {
             region = "us-east-2"
-            kms_key_id = "alias/lucidity-production-openbao-unseal"
+            kms_key_id = "@OPENBAO_KMS_ALIAS@"
           }
         '';
       };

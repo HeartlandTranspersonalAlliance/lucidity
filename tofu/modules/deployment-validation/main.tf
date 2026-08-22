@@ -5,8 +5,12 @@ data "aws_partition" "current" {}
 locals {
   account_id              = data.aws_caller_identity.current.account_id
   github_repository_parts = split("/", var.github_repository)
-  github_subject          = "repo:${local.github_repository_parts[0]}@${var.github_repository_owner_id}/${local.github_repository_parts[1]}@${var.github_repository_id}:ref:refs/heads/${var.github_branch}"
-  resource_prefix         = "${var.project_name}-${var.environment}"
+  github_subject = var.github_environment == null ? (
+    "repo:${local.github_repository_parts[0]}@${var.github_repository_owner_id}/${local.github_repository_parts[1]}@${var.github_repository_id}:ref:refs/heads/${var.github_branch}"
+    ) : (
+    "repo:${local.github_repository_parts[0]}@${var.github_repository_owner_id}/${local.github_repository_parts[1]}@${var.github_repository_id}:environment:${var.github_environment}"
+  )
+  resource_prefix = "${var.project_name}-${var.environment}"
   common_tags = merge(
     {
       Environment = var.environment
@@ -44,7 +48,7 @@ data "aws_iam_policy_document" "github_assume_role" {
 resource "aws_iam_role" "github" {
   name                 = "${local.resource_prefix}-github-deployment-validation"
   assume_role_policy   = data.aws_iam_policy_document.github_assume_role.json
-  description          = "GitHub Actions role for ${var.project_name} production deployment enrollment and validation"
+  description          = "GitHub Actions role for ${var.project_name} ${var.environment} deployment enrollment and validation"
   max_session_duration = 3600
 
   tags = local.common_tags
@@ -52,10 +56,11 @@ resource "aws_iam_role" "github" {
 
 data "aws_iam_policy_document" "github" {
   statement {
-    sid    = "DiscoverProductionNodes"
+    sid    = "DiscoverDeploymentNodes"
     effect = "Allow"
     actions = [
       "ec2:DescribeInstances",
+      "ec2:DescribeSecurityGroups",
       "ec2:DescribeVolumes",
       "ssm:DescribeInstanceInformation",
       "ssm:GetCommandInvocation",
@@ -71,7 +76,7 @@ data "aws_iam_policy_document" "github" {
   }
 
   statement {
-    sid       = "RunOnTaggedProductionNodes"
+    sid       = "RunOnTaggedDeploymentNodes"
     effect    = "Allow"
     actions   = ["ssm:SendCommand"]
     resources = ["arn:${data.aws_partition.current.partition}:ec2:${var.aws_region}:${local.account_id}:instance/*"]
@@ -97,7 +102,7 @@ data "aws_iam_policy_document" "github" {
 }
 
 resource "aws_iam_role_policy" "github" {
-  name   = "validate-tagged-production-deployment"
+  name   = "validate-tagged-${var.environment}-deployment"
   role   = aws_iam_role.github.id
   policy = data.aws_iam_policy_document.github.json
 }
