@@ -380,7 +380,8 @@
       "usr/lib/systemd/system/lucidity-render-deployment.service" = ''
         [Unit]
         Description=Validate and render the non-secret Lucidity deployment contract
-        After=cloud-final.service
+        Requires=cloud-config.service
+        After=cloud-config.service
         ConditionPathExists=/etc/lucidity/deployment.json
 
         [Service]

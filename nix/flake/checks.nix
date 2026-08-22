@@ -145,6 +145,9 @@
       grep -Fq 'address = "127.0.0.1:8200"' ${rolePackages.bootc-context-controller}/rootfs/etc/openbao/openbao.hcl.in
       grep -Fq '@OVERLAY_LISTENER@' ${rolePackages.bootc-context-controller}/rootfs/etc/openbao/openbao.hcl.in
       test -x ${rolePackages.bootc-context-controller}/rootfs/usr/libexec/lucidity/render-deployment-contract
+      grep -Fq 'Requires=cloud-config.service' ${rolePackages.bootc-context-controller}/rootfs/usr/lib/systemd/system/lucidity-render-deployment.service
+      grep -Fq 'After=cloud-config.service' ${rolePackages.bootc-context-controller}/rootfs/usr/lib/systemd/system/lucidity-render-deployment.service
+      ! grep -Fq 'After=cloud-final.service' ${rolePackages.bootc-context-controller}/rootfs/usr/lib/systemd/system/lucidity-render-deployment.service
       test -x ${rolePackages.bootc-context-controller}/rootfs/usr/libexec/lucidity/register-openbao-aws-auth
       test -x ${rolePackages.bootc-context-controller}/rootfs/usr/libexec/lucidity/enable-openbao-overlay
       test -f ${rolePackages.bootc-context-controller}/rootfs/usr/lib/lucidity/openbao-auth-plugin-path
