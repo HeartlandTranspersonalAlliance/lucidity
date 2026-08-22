@@ -48,6 +48,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - name: Prepare the authoritative CI plan
+        id: workflow-plan
+        env:
+          LIFECYCLE_SCOPE: ${{ inputs.lifecycle_scope || 'none' }}
+          LIFECYCLE_CACHE: ${{ inputs.lifecycle_cache || 'warm' }}
+        run: bash scripts/ci-workflow-prepare.sh "${{ github.event_name }}"
       - name: Install locked Nix
         uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
         with:
@@ -56,7 +62,7 @@ jobs:
         if: env.NIX_CACHE_WRITE == 'true'
         env:
           CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
-        run: nix run .#ci-require-env -- CACHIX_AUTH_TOKEN
+        run: bash scripts/ci-require-env.sh CACHIX_AUTH_TOKEN
       - name: Configure the public Lucidity Nix cache
         uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71
         with:
@@ -64,12 +70,6 @@ jobs:
           authToken: ${{ env.NIX_CACHE_WRITE == 'true' && secrets.CACHIX_AUTH_TOKEN || '' }}
           skipPush: ${{ env.NIX_CACHE_WRITE != 'true' }}
           pushFilter: lucidity-(controller|worker)-bootc-context
-      - name: Prepare the authoritative CI plan
-        id: workflow-plan
-        env:
-          LIFECYCLE_SCOPE: ${{ inputs.lifecycle_scope || 'none' }}
-          LIFECYCLE_CACHE: ${{ inputs.lifecycle_cache || 'warm' }}
-        run: nix run .#ci-workflow-prepare -- "${{ github.event_name }}"
       - name: Evaluate and build the authoritative hermetic check graph
         run: nix run .#ci-hermetic-check
 
@@ -93,7 +93,7 @@ jobs:
         if: env.NIX_CACHE_WRITE == 'true' && fromJSON(needs.prepare.outputs.plan).cache_mode != 'isolated'
         env:
           CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
-        run: nix run .#ci-require-env -- CACHIX_AUTH_TOKEN
+        run: bash scripts/ci-require-env.sh CACHIX_AUTH_TOKEN
       - name: Configure the public Lucidity Nix cache
         if: fromJSON(needs.prepare.outputs.plan).cache_mode != 'isolated'
         uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71
@@ -146,7 +146,7 @@ jobs:
         if: env.NIX_CACHE_WRITE == 'true' && fromJSON(needs.prepare.outputs.plan).cache_mode != 'isolated'
         env:
           CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
-        run: nix run .#ci-require-env -- CACHIX_AUTH_TOKEN
+        run: bash scripts/ci-require-env.sh CACHIX_AUTH_TOKEN
       - name: Configure the public Lucidity Nix cache
         if: fromJSON(needs.prepare.outputs.plan).cache_mode != 'isolated'
         uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71
@@ -187,19 +187,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Install locked Nix
-        uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
-      - name: Configure the public Lucidity Nix cache
-        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71
-        with:
-          name: lucidity
-          authToken: ""
-          skipPush: true
-          pushFilter: lucidity-(controller|worker)-bootc-context
       - name: Enforce the authoritative CI plan
         env:
           WORKFLOW_PLAN: ${{ needs.prepare.outputs.plan }}
           PREPARE_RESULT: ${{ needs.prepare.result }}
           CONTROLLER_RESULT: ${{ needs.lifecycle-controller.result }}
           WORKER_RESULT: ${{ needs.lifecycle-worker.result }}
-        run: nix run .#ci-workflow-gate
+        run: bash scripts/ci-workflow-gate.sh

@@ -38,9 +38,12 @@ the same time without blocking publication of an unrelated revision.
 
 ## Trusted lifecycle checks
 
-Pull requests, merge groups, and main pushes run the hermetic graph. Selected
-pull requests also run the separate advisory AMI compatibility and
-controller-worker boot-connect workflows. Full bootc switch, update, and
+Pull requests, merge groups, and main pushes run the hermetic graph. The
+advisory integration classifier reads the pull request file list through the
+GitHub API without a full-history checkout. Controller-only and worker-only
+changes build and boot one QCOW2; shared, mixed, and unknown changes build the
+pair and prove controller-worker connectivity. Documentation, OpenTofu, and
+infrastructure-only changes skip guest work. Full bootc switch, update, and
 rollback guests are not automatic merge gates.
 
 The **Validate locked flake** manual dispatch accepts `lifecycle_scope=none`,
@@ -54,10 +57,13 @@ and deployment transitions without pulling the full Coolify application.
 Full controller bootstrap remains an explicit local qualification test.
 
 The `Nix prepare` job publishes a small versioned plan containing the event,
-manual scope, cache mode, and role targets. Downstream job conditions and the
-stable `required` gate consume that plan. The gate fails unless preparation
-succeeds, each manually planned lifecycle succeeds, and every unplanned
-lifecycle reports `skipped`.
+manual scope, cache mode, and role targets. The plan and environment guards run
+as repository Bash before Nix is installed, while Nix packages and tests the
+same scripts. Downstream job conditions and the stable `required` gate consume
+that plan. The final gate also runs directly with Bash and `jq`, avoiding a
+second Nix and Cachix bootstrap. It fails unless preparation succeeds, each
+manually planned lifecycle succeeds, and every unplanned lifecycle reports
+`skipped`.
 
 Manual validation also accepts `lifecycle_cache=isolated`. That mode bypasses
 the Lucidity Cachix and role-scoped GHCR cache for each selected lifecycle job,

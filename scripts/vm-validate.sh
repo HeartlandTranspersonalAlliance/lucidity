@@ -27,6 +27,7 @@ coolify_identity=${vm_dir}/coolify
 container_engine=${CONTAINER_ENGINE:-podman}
 wait_attempts=${VM_WAIT_ATTEMPTS:-120}
 controller_wait_attempts=${VM_CONTROLLER_WAIT_ATTEMPTS:-450}
+expected_image=${VM_EXPECTED_IMAGE:-}
 
 command -v "${container_engine}" >/dev/null 2>&1 || { echo "${container_engine} is required" >&2; exit 1; }
 command -v ssh >/dev/null 2>&1 || { echo "ssh is required" >&2; exit 1; }
@@ -187,7 +188,8 @@ report_worker_storage_failure() {
 }
 
 assert_common_host() {
-    "${admin_ssh[@]}" bash -Eeuo pipefail -s <<'REMOTE'
+    "${admin_ssh[@]}" bash -Eeuo pipefail -s -- "${expected_image}" <<'REMOTE'
+expected_image=$1
 systemctl is-active --quiet docker.service
 systemctl is-active --quiet sshd.service
 systemctl is-active --quiet lucidity-nix-selinux.service
@@ -203,7 +205,11 @@ mountpoint --quiet /nix
 semodule -l | awk '$1 == "nix" { found = 1 } END { exit !found }'
 docker info --format '{{json .ServerVersion}}' >/dev/null
 docker compose version >/dev/null
-bootc status >/dev/null
+if [[ -n ${expected_image} ]]; then
+    bootc status --booted --format json | grep -Fq "${expected_image}"
+else
+    bootc status --booted >/dev/null
+fi
 nix_bin=/nix/var/nix/profiles/default/bin/nix
 "${nix_bin}" --version
 [[ $("${nix_bin}" eval --raw --expr 'toString (1 + 1)') == 2 ]]

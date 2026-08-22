@@ -390,7 +390,7 @@
         rg -Fq -- '--argjson schema_version 3' nix/pkgs/lucidity.sh
         ! grep -Fq '@lucidityNixpkgs' ${lucidity}/bin/lucidity
         rg -Fq 'run: nix run .#ci-hermetic-check' .github/workflows/validate.yml
-        ! rg -q 'checks\.x86_64-linux|make |\./scripts/' .github/workflows/validate.yml
+        ! rg -q 'checks\.x86_64-linux|make ' .github/workflows/validate.yml
         rg -Fq 'run: nix run .#audit-ami-resources' .github/workflows/audit-ami-resources.yml
         ! rg -q 'run: \./scripts/' .github/workflows/audit-ami-resources.yml
         rg -Fq 'run: nix run .#validate-deployment' .github/workflows/validate-deployment.yml
@@ -460,9 +460,9 @@
         rg -Fq 'run: nix run .#ci -- benchmark verify-target' .github/workflows/ami-switch-benchmark.yml
         ! rg -q '^  workflow_call:' .github/workflows
         ! rg -Fq 'inputs.source_sha' .github/workflows/publish.yml
-        rg -Fq 'run: nix run .#ci-workflow-prepare' .github/workflows/validate.yml
+        rg -Fq 'run: bash scripts/ci-workflow-prepare.sh' .github/workflows/validate.yml
         rg -Fq 'run: nix run .#ci-hermetic-check' .github/workflows/validate.yml
-        rg -Fq 'run: nix run .#ci-workflow-gate' .github/workflows/validate.yml
+        rg -Fq 'run: bash scripts/ci-workflow-gate.sh' .github/workflows/validate.yml
         rg -Fq 'ci workflow plan EVENT [none|controller|worker|both] [warm|isolated]' nix/pkgs/lucidity.sh
         ! rg -q '^        run: \|' .github/workflows/validate.yml
         ! rg -q '^  release:' .github/workflows/validate.yml
@@ -477,12 +477,14 @@
         rg -Fq 'LIFECYCLE_SCOPE: ''${{ inputs.lifecycle_scope || ' .github/workflows/validate.yml
         rg -Fq 'default: none' .github/workflows/validate.yml
         ! rg -Fq 'schedule:' .github/workflows/validate.yml
-        rg -Fq 'authToken: ""' .github/workflows/validate.yml
+        test "$(rg -F 'Install locked Nix' .github/workflows/validate.yml | wc -l)" -eq 3
         rg -Fq 'needs: [prepare, lifecycle-controller, lifecycle-worker]' .github/workflows/validate.yml
         rg -Fq 'WORKFLOW_PLAN: ''${{ needs.prepare.outputs.plan }}' .github/workflows/validate.yml
         rg -Fq 'schema_version: 3' scripts/ci-workflow-prepare.sh
         ! rg -Fq 'git diff' scripts/ci-workflow-prepare.sh
         ! test -e ci/lifecycle-targets.json
+        rg -Fq 'run: bash scripts/ci-integration-classify.sh' .github/workflows/integration.yml
+        rg -Fq 'needs.classify.outputs.scope' .github/workflows/integration.yml
         rg -Fq 'CONTROLLER_EXPECTED_IMAGE: ''${{ env.CONTROLLER_IMAGE }}' .github/workflows/integration.yml
         rg -Fq 'WORKER_EXPECTED_IMAGE: ''${{ env.IMAGE }}' .github/workflows/integration.yml
         rg -Fq 'types: [opened, synchronize, reopened, ready_for_review]' .github/workflows/integration.yml
@@ -508,7 +510,8 @@
           rg -Fq "env.NIX_CACHE_WRITE != 'true'" "$workflow"
           rg -Fq 'pushFilter: lucidity-(controller|worker)-bootc-context' "$workflow"
           rg -Fq 'CACHIX_AUTH_TOKEN is required for trusted cache-writing events' "$workflow" ||
-            rg -Fq 'nix run .#ci-require-env -- CACHIX_AUTH_TOKEN' "$workflow"
+            rg -Fq 'nix run .#ci-require-env -- CACHIX_AUTH_TOKEN' "$workflow" ||
+            rg -Fq 'bash scripts/ci-require-env.sh CACHIX_AUTH_TOKEN' "$workflow"
 
           mapfile -t installers < <(rg -n -F 'DeterminateSystems/determinate-nix-action@' "$workflow" | cut -d: -f1)
           mapfile -t caches < <(rg -n -F "$cache_action" "$workflow" | cut -d: -f1)
@@ -517,8 +520,8 @@
             test "''${caches[$index]}" -gt "''${installers[$index]}"
           done
         done
-        test "$(rg -F "$cache_action" .github/workflows | wc -l)" -eq 16
-        test "$(rg -F 'pushFilter: lucidity-(controller|worker)-bootc-context' .github/workflows | wc -l)" -eq 16
+        test "$(rg -F "$cache_action" .github/workflows | wc -l)" -eq 15
+        test "$(rg -F 'pushFilter: lucidity-(controller|worker)-bootc-context' .github/workflows | wc -l)" -eq 15
         test "$(rg -F 'kvm: true' .github/workflows | wc -l)" -eq 16
         ! rg -q '99-kvm4all|udevadm.*kvm' .github/workflows
         ! rg -q 'pathsToPush:.*(qcow2|raw|ami|bootc-context)' .github/workflows
@@ -598,7 +601,7 @@
       general_source_count=$(find ${runtimeToolsSource}/scripts -maxdepth 1 -type f -name '*.sh' ! -name 'ci-*.sh' | wc -l)
       packaged_count=$(find ${lucidity.runtimeScripts}/libexec/lucidity -maxdepth 1 -type f -name '*.sh' | wc -l)
       test "$general_source_count" -eq "$packaged_count"
-      test "$source_count" -eq "$((general_source_count + 5))"
+      test "$source_count" -eq "$((general_source_count + 6))"
       while IFS= read -r source_script; do
         test -x "${lucidity.runtimeScripts}/libexec/lucidity/$(basename "$source_script")"
       done < <(find ${runtimeToolsSource}/scripts -maxdepth 1 -type f -name '*.sh' ! -name 'ci-*.sh' -print)
@@ -607,6 +610,7 @@
         ${lib.getExe ciWorkflow.gate} \
         ${lib.getExe ciWorkflow.hermeticCheck} \
         ${lib.getExe ciWorkflow.requireEnv} \
+        ${lib.getExe ciWorkflow.classify} \
         ${lib.getExe ciWorkflow.actionPolicy}; do
         test -x "$ci_program"
       done
@@ -1041,6 +1045,7 @@
         ../../tests/ci-workflow.sh
       ];
       nativeBuildInputs = [
+        ciWorkflow.classify
         pkgs.jq
         lucidity
         ciWorkflow.gate
