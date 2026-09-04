@@ -124,7 +124,7 @@ jobs:
           pushFilter: lucidity-(controller|worker)-bootc-context
 
       - name: Configure short-lived ECR publisher credentials
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
         with:
           allowed-account-ids: 467590374785
           aws-region: ${{ env.AWS_REGION }}
@@ -245,7 +245,7 @@ jobs:
         run: nix run .#ci -- ami validate-inputs
 
       - name: Configure short-lived AMI validation credentials
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
         with:
           allowed-account-ids: 467590374785
           aws-region: ${{ env.AWS_REGION }}
@@ -394,7 +394,7 @@ jobs:
           pattern: release-*
 
       - name: Configure short-lived AMI metadata credentials
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
         with:
           allowed-account-ids: 467590374785
           aws-region: ${{ env.AWS_REGION }}
