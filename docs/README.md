@@ -29,6 +29,7 @@ design context, customization, operations, and reference material.
 
 ## Reference
 
+- [Native NetBird dashboard package](reference/netbird-dashboard.md)
 - [CI and caching](reference/ci-and-caching.md)
 - [Native configuration source audit](reference/generated-configuration-audit.md)
 - [Release process](reference/releases.md)
