@@ -39,3 +39,6 @@ image-output/
 .vscode/
 *.swp
 .DS_Store
+
+# Local devenv state (no credentials or provider material belongs here).
+.devenv/

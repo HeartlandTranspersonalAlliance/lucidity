@@ -72,6 +72,7 @@ configuration. Changes that delete resources require a separate opt-in.
 Start with the [documentation index](docs/README.md).
 
 - [Architecture and design philosophy](docs/concepts/architecture.md)
+- [Opt-in native NixOS foundation](docs/guides/native-nixos-foundation.md)
 - [Advanced customization](docs/guides/advanced-customization.md)
 - [Troubleshooting](docs/guides/troubleshooting.md)
 - [Backup and restore](docs/guides/backup-and-restore.md)
@@ -85,6 +86,7 @@ Start with the [documentation index](docs/README.md).
 ## Repository map
 
 ```text
+modules/       auto-discovered dendritic features and legacy bridge
 nix/den/       typed hosts, aspects, classes, and output policies
 nix/flake/     apps, checks, formatting, and project composition
 nix/infra/     Terranix-generated AWS and state configurations

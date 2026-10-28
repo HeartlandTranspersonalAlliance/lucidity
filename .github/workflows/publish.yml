@@ -9,6 +9,7 @@ on:
       - ci/**
       - flake.lock
       - flake.nix
+      - modules/**
       - nix/**
   workflow_dispatch:
 

@@ -7,6 +7,7 @@ on:
       - "deployments/**"
       - "flake.lock"
       - "flake.nix"
+      - "modules/**"
       - "nix/infra/**"
       - "nix/pkgs/lucidity.nix"
       - "nix/pkgs/lucidity.sh"

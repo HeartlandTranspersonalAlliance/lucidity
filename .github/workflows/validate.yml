@@ -70,6 +70,13 @@ jobs:
           authToken: ${{ env.NIX_CACHE_WRITE == 'true' && secrets.CACHIX_AUTH_TOKEN || '' }}
           skipPush: ${{ env.NIX_CACHE_WRITE != 'true' }}
           pushFilter: lucidity-(controller|worker)-bootc-context
+      - name: Smoke-test the named devenv shell without provider access
+        timeout-minutes: 30
+        run: |
+          env -u SECRETSPEC_SECRETS nix develop --impure .#devenv \
+            --extra-substituters https://devenv.cachix.org \
+            --extra-trusted-public-keys 'devenv.cachix.org-1:w1cLUi8dv3hnoSPGAuibQv+f9TZLr6cv/Hm9XgU50cw=' \
+            --command secretspec --version
       - name: Evaluate and build the authoritative hermetic check graph
         run: nix run .#ci-hermetic-check
 
