@@ -145,7 +145,12 @@ def main(argv=None):
             paths = {name: os.environ[env] for name, env in SECRET_NAMES.items()}
             path = render_config(meta["baseConfig"], paths, meta["runtimeDirectory"])
             command = [meta["server"], "--config", path]
-            os.execve(command[0], command, safe_environment(os.environ))
+            env = safe_environment(os.environ)
+            # disableGeoliteUpdate only disables refresh, not initial download.
+            # This fixed nonsecret upstream switch also disables bootstrap fetch.
+            # It is never inherited and cannot be overridden by caller NB_*.
+            env["NB_DISABLE_GEOLOCATION"] = "true"
+            os.execve(command[0], command, env)
     except (SafeError, OSError, ValueError, KeyError, TypeError):
         print("netbird runtime: configuration or credentials rejected", file=sys.stderr)
         return 1

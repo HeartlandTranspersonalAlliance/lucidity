@@ -232,6 +232,7 @@ class RuntimeTests(unittest.TestCase):
         meta = self.metadata()
         env = {runtime.SECRET_NAMES[name]: path for name, path in self.secret_paths.items()}
         env.update({"HOME": "/private", "PATH": "/safe/bin", "NB_PROXY_TOKEN": "synthetic-token",
+                    "NB_DISABLE_GEOLOCATION": "false",
                     "SECRETSPEC_PROVIDER": "attacker", "AWS_SECRET_ACCESS_KEY": "synthetic-aws",
                     "CREDENTIALS_DIRECTORY": "/run/credentials/unit"})
         output, errors = io.StringIO(), io.StringIO()
@@ -240,7 +241,8 @@ class RuntimeTests(unittest.TestCase):
         executable, argv, final_env = execute.call_args.args
         self.assertEqual(executable, "/synthetic/bin/netbird-server")
         self.assertEqual(argv, [executable, "--config", str(self.runtime_dir / "config.json")])
-        self.assertEqual(final_env, {"HOME": "/private", "PATH": "/safe/bin"})
+        self.assertEqual(final_env, {"HOME": "/private", "PATH": "/safe/bin",
+                                     "NB_DISABLE_GEOLOCATION": "true"})
         for secret in self.values.values():
             self.assertNotIn(secret, str(argv))
             self.assertNotIn(secret, str(final_env))
@@ -305,7 +307,8 @@ class RuntimeTests(unittest.TestCase):
         probe.write_text("#!" + sys.executable + "\n" +
                          "import json, os, sys\n" +
                          "assert len(sys.argv) == 3 and sys.argv[1] == '--config'\n" +
-                         "assert not any(k.startswith(('NB_', 'NETBIRD_', 'SECRETSPEC_', 'AWS_', 'BAO_', 'VAULT_')) for k in os.environ)\n" +
+                         "assert not any(k.startswith(('NETBIRD_', 'SECRETSPEC_', 'AWS_', 'BAO_', 'VAULT_')) for k in os.environ)\n" +
+                         "assert {k: v for k, v in os.environ.items() if k.startswith('NB_')} == {'NB_DISABLE_GEOLOCATION': 'true'}\n" +
                          "assert 'CREDENTIALS_DIRECTORY' not in os.environ\n" +
                          "assert 'XDG_STATE_HOME' not in os.environ\n" +
                          "with open(sys.argv[2]) as f: config = json.load(f)['server']\n" +
@@ -329,7 +332,8 @@ class RuntimeTests(unittest.TestCase):
             '[defaults.providers]\nsystemd-credential = "env://"\n')
         environment = dict(os.environ, HOME=str(self.root), XDG_CONFIG_HOME=str(self.root / ".config"),
                            CREDENTIALS_DIRECTORY=str(credentials),
-                           NB_PROXY_TOKEN="SYNTHETIC-INJECTED-TOKEN", SECRETSPEC_PROVIDER="attacker",
+                           NB_PROXY_TOKEN="SYNTHETIC-INJECTED-TOKEN", NB_DISABLE_GEOLOCATION="false",
+                           SECRETSPEC_PROVIDER="attacker",
                            SECRETSPEC_PROFILE="attacker", SECRETSPEC_SCOPE="attacker",
                            AWS_SECRET_ACCESS_KEY="SYNTHETIC-INJECTED-AWS", BAO_TOKEN="SYNTHETIC-INJECTED-BAO")
         result = subprocess.run([sys.executable, "-I", str(SOURCE), "launch", str(metadata)],

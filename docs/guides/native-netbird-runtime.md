@@ -42,7 +42,9 @@ The genuine pinned `lassulus/wrappers` adapter starts the Python boundary.
 - Inherited `SECRETSPEC_*` routing and provider credentials are discarded before
   SecretSpec. Fresh private HOME/XDG configuration directories prevent global
   provider aliases from overriding the dedicated builtin provider. The final server environment is another clean allowlist, removing
-  every `NB_*` variable, including `NB_PROXY_TOKEN`.
+  every inherited `NB_*` variable, including `NB_PROXY_TOKEN`. Only afterward,
+  it sets the fixed nonsecret `NB_DISABLE_GEOLOCATION=true`; inherited values
+  cannot override this switch.
 - Python reads private files, not secret argv. The renderer emits JSON (valid
   YAML), with no environment interpolation, using atomic replacement and mode
   `0600` inside the `0700` runtime directory. Errors do not print values.
@@ -82,7 +84,10 @@ The unprivileged system user has no capabilities, TUN access or `NET_ADMIN`.
 Systemd hardening restricts filesystem/device access. State persists under
 `/var/lib/lucidity-netbird-server` across generations and restarts; generated
 configuration lives under `/run/lucidity-netbird-server`. Anonymous metrics and
-Geolite updates are disabled. Log level is fixed at **warn** because upstream
+Geolite updates are disabled. Geolocation itself is also disabled with the fixed
+upstream environment switch: `disableGeoliteUpdate` alone still downloads the
+initial databases and cannot provide network-independent startup. Location-based
+features are therefore unavailable in this private foundation. Log level is fixed at **warn** because upstream
 info-level configuration dumps reveal a relay-secret prefix; missing store keys
 are rejected before upstream's warning-level generation fallback.
 
