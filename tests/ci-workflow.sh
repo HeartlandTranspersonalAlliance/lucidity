@@ -21,6 +21,7 @@ classify_files controller nix/den/aspects/controller/default.nix
 classify_files worker nix/den/aspects/worker/default.nix
 classify_files pair nix/den/aspects/controller/default.nix nix/den/aspects/worker/default.nix
 classify_files pair nix/den/classes/bootc/default.nix
+classify_files pair modules/features/example.nix
 classify_files pair unknown/new-input.txt
 [[ $("${classify}" workflow_dispatch) == pair ]]
 
