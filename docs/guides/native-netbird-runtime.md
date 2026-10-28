@@ -58,12 +58,18 @@ and builds never resolve runtime providers.
 ## Network and process boundaries
 
 HTTP/gRPC/relay binds `127.0.0.1:8081`; health binds `127.0.0.1:9000`.
+The native combined package carries a narrow v0.81.5 patch: preserve the full
+configured management listen address (upstream discards its host) and disable
+the unused legacy gRPC listener on port 33073. Standalone management retains
+its unset-address default. The VM inventories every native TCP/UDP listener
+and verifies the actual loopback sockets, independently of firewall rules.
 Upstream `/health` actively dials the public origin over WSS: without the later
 TLS ingress it returns HTTP 503 (`unhealthy`, `certificate_valid=false`). This
 is expected here, not proof of a failed local startup. `/api/instance` verifies
 local API readiness; the VM asserts the explicitly degraded health response.
 Metrics is wildcard-bound upstream, so its default **9190** is protected by a
-separate nftables `inet` input hook that drops non-loopback traffic. STUN is also
+separate nftables `inet` input hook that drops non-loopback traffic to HTTP,
+health, and metrics, adding defense in depth for the loopback-only listeners. STUN is also
 wildcard-bound; its explicit, nonempty port list defaults to `[3478]` and is
 blocked off-loopback unless `server.exposeStun = true`. Empty STUN lists are
 rejected because upstream restores its default port. All ports must be distinct
@@ -87,7 +93,9 @@ configuration lives under `/run/lucidity-netbird-server`. Anonymous metrics and
 Geolite updates are disabled. Geolocation itself is also disabled with the fixed
 upstream environment switch: `disableGeoliteUpdate` alone still downloads the
 initial databases and cannot provide network-independent startup. Location-based
-features are therefore unavailable in this private foundation. Log level is fixed at **warn** because upstream
+features are therefore unavailable in this private foundation. Upstream still
+attempts a nonfatal version check; the isolated VM blocks that outbound request
+rather than permitting external network access. Log level is fixed at **warn** because upstream
 info-level configuration dumps reveal a relay-secret prefix; missing store keys
 are rejected before upstream's warning-level generation fallback.
 
@@ -98,7 +106,7 @@ permissions, clean process boundaries, and real SecretSpec 0.18 with only
 synthetic local files and a non-daemon probe. Flake evaluation checks both leaves
 and disabled/enabled footprints. `checks.x86_64-linux.netbird-runtime-vm` runs
 actual service startup, health, `/api/instance`, restart state, and IPv4/IPv6
-metrics/STUN guards under an intentionally permissive firewall in isolated,
+HTTP/health/metrics/STUN guards under an intentionally permissive firewall in isolated,
 egress-blocked VMs. It is part of the required hermetic CI graph; it is not run
 on the development host.
 

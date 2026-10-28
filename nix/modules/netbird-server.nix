@@ -121,7 +121,7 @@ in {
       content = ''
         chain private-listeners {
           type filter hook input priority -10; policy accept;
-          iifname != "lo" tcp dport ${toString cfg.metricsPort} counter drop
+          iifname != "lo" tcp dport { ${lib.concatMapStringsSep ", " toString [cfg.httpPort cfg.healthPort cfg.metricsPort]} } counter drop
           ${lib.optionalString (!cfg.exposeStun) ''iifname != "lo" udp dport { ${lib.concatMapStringsSep ", " toString cfg.stunPorts} } counter drop''}
         }
       '';

@@ -40,6 +40,8 @@ in {
     (update old)
     // {
       pname = "netbird-server";
+      # v0.81.5 discards the configured host and opens legacy :33073 otherwise.
+      patches = (old.patches or []) ++ [./netbird-combined-listen-address.patch];
       subPackages = ["combined"];
       env =
         (old.env or {})

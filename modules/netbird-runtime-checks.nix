@@ -65,7 +65,7 @@ in {
     assert enabled.networking.firewall.allowedTCPPorts == baseline.networking.firewall.allowedTCPPorts;
     assert enabled.networking.firewall.allowedUDPPorts == baseline.networking.firewall.allowedUDPPorts;
     assert exposed.networking.firewall.allowedUDPPorts == [3478];
-    assert lib.hasInfix "iifname != \"lo\" tcp dport 9190 counter drop" enabled.networking.nftables.tables.lucidity-netbird.content;
+    assert lib.hasInfix "iifname != \"lo\" tcp dport { 8081, 9000, 9190 } counter drop" enabled.networking.nftables.tables.lucidity-netbird.content;
     assert !(lib.hasInfix "udp dport" exposed.networking.nftables.tables.lucidity-netbird.content);
     assert builtins.attrNames enabled.systemd.services == builtins.attrNames (nftBaseline.systemd.services // {lucidity-netbird-server = {};});
     assert !enabled.virtualisation.podman.enable;

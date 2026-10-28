@@ -1,0 +1,109 @@
+--- a/management/internals/server/server.go
++++ b/management/internals/server/server.go
+@@ -67,6 +67,7 @@
+ 	mgmtSingleAccModeDomain     string
+ 	mgmtMetricsPort             int
+ 	mgmtPort                    int
++	mgmtListenAddress           string
+ 	disableLegacyManagementPort bool
+ 	letsEncryptListenAddress    string
+ 	autoResolveDomains          bool
+@@ -95,10 +96,12 @@
+ 
+ // Config holds the configuration parameters for creating a new server
+ type Config struct {
+-	NbConfig                    *nbconfig.Config
+-	DNSDomain                   string
+-	MgmtSingleAccModeDomain     string
+-	MgmtPort                    int
++	NbConfig                *nbconfig.Config
++	DNSDomain               string
++	MgmtSingleAccModeDomain string
++	MgmtPort                int
++	// MgmtListenAddress preserves an explicit host; empty retains the standalone default.
++	MgmtListenAddress           string
+ 	MgmtMetricsPort             int
+ 	DisableLegacyManagementPort bool
+ 	DisableMetrics              bool
+@@ -122,6 +125,7 @@
+ 		disableGeoliteUpdate:        cfg.DisableGeoliteUpdate,
+ 		userDeleteFromIDPEnabled:    cfg.UserDeleteFromIDPEnabled,
+ 		mgmtPort:                    cfg.MgmtPort,
++		mgmtListenAddress:           cfg.MgmtListenAddress,
+ 		disableLegacyManagementPort: cfg.DisableLegacyManagementPort,
+ 		letsEncryptListenAddress:    cfg.LetsEncryptListenAddress,
+ 		mgmtMetricsPort:             cfg.MgmtMetricsPort,
+@@ -214,15 +218,27 @@
+ 		log.WithContext(srvCtx).Infof("running gRPC backward compatibility server: %s", compatListener.Addr().String())
+ 	}
+ 
++	listenAddress := s.mgmtListenAddress
++	if listenAddress == "" {
++		listenAddress = fmt.Sprintf(":%d", s.mgmtPort)
++	}
++
+ 	rootHandler := s.handlerFunc(srvCtx, s.GRPCServer(), s.APIHandler(), s.IDPHandler(), s.Metrics().GetMeter())
+ 	switch {
+ 	case s.certManager != nil:
+ 		if s.mgmtPort == 443 {
+ 			// CertManager, HTTP and gRPC API all on the same port
+ 			rootHandler = s.certManager.HTTPHandler(rootHandler)
+-			s.listener = s.certManager.Listener()
++			if s.mgmtListenAddress == "" {
++				s.listener = s.certManager.Listener()
++			} else {
++				s.listener, err = tls.Listen("tcp", listenAddress, s.certManager.TLSConfig())
++				if err != nil {
++					return fmt.Errorf("failed creating TLS listener on port %d: %v", s.mgmtPort, err)
++				}
++			}
+ 		} else {
+-			s.listener, err = tls.Listen("tcp", fmt.Sprintf(":%d", s.mgmtPort), s.certManager.TLSConfig())
++			s.listener, err = tls.Listen("tcp", listenAddress, s.certManager.TLSConfig())
+ 			if err != nil {
+ 				return fmt.Errorf("failed creating TLS listener on port %d: %v", s.mgmtPort, err)
+ 			}
+@@ -231,12 +247,12 @@
+ 			}
+ 		}
+ 	case s.tlsConfig != nil:
+-		s.listener, err = tls.Listen("tcp", fmt.Sprintf(":%d", s.mgmtPort), s.tlsConfig)
++		s.listener, err = tls.Listen("tcp", listenAddress, s.tlsConfig)
+ 		if err != nil {
+ 			return fmt.Errorf("failed creating TLS listener on port %d: %v", s.mgmtPort, err)
+ 		}
+ 	default:
+-		s.listener, err = net.Listen("tcp", fmt.Sprintf(":%d", s.mgmtPort))
++		s.listener, err = net.Listen("tcp", listenAddress)
+ 		if err != nil {
+ 			return fmt.Errorf("failed creating TCP listener on port %d: %v", s.mgmtPort, err)
+ 		}
+--- a/combined/cmd/root.go
++++ b/combined/cmd/root.go
+@@ -540,15 +540,17 @@
+ 
+ 	mgmtSrv := newServer(
+ 		&mgmtServer.Config{
+-			NbConfig:                mgmtConfig,
+-			DNSDomain:               "",
+-			MgmtSingleAccModeDomain: mgmtServer.DefaultSelfHostedDomain,
+-			AutoResolveDomains:      true,
+-			MgmtPort:                mgmtPort,
+-			MgmtMetricsPort:         cfg.Server.MetricsPort,
+-			TLSConfig:               tlsConfig,
+-			DisableMetrics:          mgmt.DisableAnonymousMetrics,
+-			DisableGeoliteUpdate:    mgmt.DisableGeoliteUpdate,
++			NbConfig:                    mgmtConfig,
++			DNSDomain:                   "",
++			MgmtSingleAccModeDomain:     mgmtServer.DefaultSelfHostedDomain,
++			AutoResolveDomains:          true,
++			MgmtPort:                    mgmtPort,
++			MgmtListenAddress:           cfg.Server.ListenAddress,
++			DisableLegacyManagementPort: true,
++			MgmtMetricsPort:             cfg.Server.MetricsPort,
++			TLSConfig:                   tlsConfig,
++			DisableMetrics:              mgmt.DisableAnonymousMetrics,
++			DisableGeoliteUpdate:        mgmt.DisableGeoliteUpdate,
+ 			// Always enable user deletion from IDP in combined server (embedded IdP is always enabled)
+ 			UserDeleteFromIDPEnabled: true,
+ 		},

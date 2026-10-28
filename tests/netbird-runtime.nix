@@ -62,7 +62,7 @@
         allowedUDPPorts = [3478];
       };
     };
-    environment.systemPackages = [pkgs.curl pkgs.python3 pkgs.nftables];
+    environment.systemPackages = [pkgs.curl pkgs.python3 pkgs.nftables pkgs.iproute2];
     system.stateVersion = "26.05";
   };
 in
@@ -165,12 +165,27 @@ in
       instance = json.loads(server.succeed("curl --noproxy '*' -fsS http://127.0.0.1:8081/api/instance"))
       assert instance["setup_required"] is True
 
+      # Inspect actual native sockets, not merely firewall reachability. This
+      # catches upstream host-discard regressions and unexpected legacy ports.
+      sockets = server.succeed("ss -H -lntup")
+      print(sockets)
+      native = [line.split() for line in sockets.splitlines() if 'netbird-server' in line]
+      assert native, "native listener inventory must not be empty"
+      tcp = [fields[4] for fields in native if fields[0] == "tcp"]
+      udp = [fields[4] for fields in native if fields[0] == "udp"]
+      assert "127.0.0.1:8081" in tcp and "127.0.0.1:9000" in tcp
+      assert all(address == "127.0.0.1:8081" for address in tcp if address.endswith(":8081"))
+      assert all(address == "127.0.0.1:9000" for address in tcp if address.endswith(":9000"))
+      assert {address.rsplit(":", 1)[1] for address in tcp} == {"8081", "9000", "9190"}
+      assert {address.rsplit(":", 1)[1] for address in udp} == {"3478"}
+      server.fail("ss -H -lnt 'sport = :33073' | grep .")
+
       # Confirm both IP families actually reach the trusted interface before
       # attributing rejected probes to the dedicated guard.
       for address in ("192.168.77.1", "[fd77::1]"):
           client.wait_until_succeeds(f"curl --noproxy '*' --max-time 3 -fsS http://{address}:9999/")
           for port, path in ((8081, "/api/instance"), (9000, "/health"), (9190, "/metrics")):
-              client.fail(f"curl --noproxy '*' --max-time 3 -fsS http://{address}:{port}{path}")
+              client.fail(f"curl --noproxy '*' --max-time 3 -sS -o /dev/null http://{address}:{port}{path}")
       for address in ("127.0.0.1", "[::1]"):
           server.succeed(f"curl --noproxy '*' --max-time 3 -fsS http://{address}:9190/metrics > /dev/null")
       for address in ("127.0.0.1", "::1"):
