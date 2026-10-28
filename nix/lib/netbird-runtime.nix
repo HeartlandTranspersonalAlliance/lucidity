@@ -6,21 +6,7 @@
   package,
   baseConfig,
 }: let
-  manifest = (pkgs.formats.toml {}).generate "netbird-runtime-secretspec.toml" {
-    project = {
-      name = "lucidity-netbird-server";
-      revision = "1";
-    };
-    profiles.default = builtins.listToAttrs (map (name: {
-      inherit name;
-      value = {
-        description = "Dedicated NetBird runtime credential";
-        required = true;
-        as_path = true;
-      };
-    }) ["NETBIRD_AUTH_SECRET" "NETBIRD_STORE_KEY" "NETBIRD_COOKIE_KEY"]);
-    scopes.default.secrets = ["NETBIRD_AUTH_SECRET" "NETBIRD_STORE_KEY" "NETBIRD_COOKIE_KEY"];
-  };
+  manifest = import ./netbird-secretspec.nix {inherit pkgs;};
   helper = pkgs.writeText "netbird-runtime.py" (builtins.readFile ../runtime/netbird-runtime.py);
   metadata = pkgs.writeText "netbird-runtime-metadata.json" (builtins.toJSON {
     inherit baseConfig manifest helper;

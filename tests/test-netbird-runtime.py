@@ -296,6 +296,10 @@ class RuntimeTests(unittest.TestCase):
         manifest.write_text('[project]\nname = "netbird-runtime-test"\nrevision = "1.0"\n'
                             '[profiles.default]\n' + declarations + '\n[scopes.default]\nsecrets = '
                             + json.dumps(list(runtime.SECRET_NAMES.values())) + '\n')
+        # Nix checks exercise the exact production generator, not just this
+        # standalone fallback fixture (which previously hid revision drift).
+        if os.environ.get("NETBIRD_TEST_MANIFEST"):
+            manifest = Path(os.environ["NETBIRD_TEST_MANIFEST"])
         self.runtime_dir.mkdir(mode=0o700)
         probe = self.root / "probe"
         probe.write_text("#!" + sys.executable + "\n" +

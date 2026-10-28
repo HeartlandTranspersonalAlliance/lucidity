@@ -76,6 +76,7 @@ in {
     checks.netbird-runtime-renderer = pkgs.runCommand "lucidity-netbird-runtime-renderer" {nativeBuildInputs = [pkgs.python3 pkgs.secretspec pkgs.yq-go];} ''
       export NETBIRD_TEST_SECRETSPEC=${pkgs.secretspec}/bin/secretspec
       export NETBIRD_TEST_YQ=${pkgs.yq-go}/bin/yq
+      export NETBIRD_TEST_MANIFEST=${import ../nix/lib/netbird-secretspec.nix {inherit pkgs;}}
       export HOME="$TMPDIR/home"
       mkdir -p "$HOME"
       cp -r ${../tests} tests
