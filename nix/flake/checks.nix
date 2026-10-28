@@ -416,7 +416,35 @@
       done
       touch "$out"
     '';
-    repositoryCheck =
+    inputUrlsMatch = import ../lib/input-urls-match.nix;
+    expectedInputUrls = {
+      nixpkgs = "https://flakehub.com/f/DeterminateSystems/nixpkgs-weekly/0";
+      home-manager = "https://flakehub.com/f/nix-community/home-manager/0";
+      determinate = "https://flakehub.com/f/DeterminateSystems/determinate/3";
+    };
+    inputUrlPolicyCheck = let
+      dotted = (import ../../tests/fixtures/input-url-policy/dotted.nix).inputs;
+      nested = (import ../../tests/fixtures/input-url-policy/nested.nix).inputs;
+      rejectsEachChangedUrl = declarations:
+        builtins.all (name:
+          !(inputUrlsMatch expectedInputUrls (declarations
+            // {
+              ${name} = {url = "https://example.invalid/unapproved-input";};
+            }))) (builtins.attrNames expectedInputUrls);
+    in
+      assert inputUrlsMatch expectedInputUrls dotted;
+      assert inputUrlsMatch expectedInputUrls nested;
+      assert rejectsEachChangedUrl dotted;
+      assert rejectsEachChangedUrl nested;
+      assert !(inputUrlsMatch expectedInputUrls (nested // {other-nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";}));
+      assert !(inputUrlsMatch expectedInputUrls (nested // {other.inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";}));
+      assert !(inputUrlsMatch expectedInputUrls (builtins.removeAttrs nested ["determinate"]));
+        pkgs.runCommand "lucidity-input-url-policy-check" {} ''
+          touch "$out"
+        '';
+    # Import only declarations: outputs remain lazy and no inputs are fetched.
+    repositoryCheck = assert inputUrlsMatch expectedInputUrls (import ../../flake.nix).inputs;
+    assert inputUrlsMatch {inherit (expectedInputUrls) nixpkgs;} (import ../smoke/flake.nix).inputs;
       pkgs.runCommand "lucidity-repository-policy-check" {
         nativeBuildInputs = [pkgs.jq pkgs.ripgrep];
       } ''
@@ -480,11 +508,6 @@
         rg -Fqx '.env' .gitignore
         rg -Fqx '.env.*' .gitignore
         rg -Fqx '!.env.example' .gitignore
-        ! rg -n 'github:NixOS/nixpkgs' flake.nix nix/smoke/flake.nix
-        rg -Fq 'nixpkgs.url = "https://flakehub.com/f/DeterminateSystems/nixpkgs-weekly/0";' flake.nix
-        rg -Fq 'inputs.nixpkgs.url = "https://flakehub.com/f/DeterminateSystems/nixpkgs-weekly/0";' nix/smoke/flake.nix
-        rg -Fq 'home-manager.url = "https://flakehub.com/f/nix-community/home-manager/0";' flake.nix
-        rg -Fq 'determinate.url = "https://flakehub.com/f/DeterminateSystems/determinate/3";' flake.nix
         rg -Fq 'inputs.determinate.homeManagerModules.default' nix/flake/project.nix
         root_nixpkgs=$(jq -r '.nodes.root.inputs.nixpkgs' flake.lock)
         test "$(jq -r --arg node "$root_nixpkgs" '.nodes[$node].original.url' flake.lock)" = \
@@ -1176,6 +1199,7 @@
       infrastructureCheck
       secretspecCheck
       repositoryCheck
+      inputUrlPolicyCheck
       runtimeToolsCheck
       lifecycleScopeCheck
       cacheUnitCheck
@@ -1221,6 +1245,7 @@
       policy = policyCheck;
       monitoring-config = monitoringConfigCheck;
       repository = repositoryCheck;
+      input-url-policy = inputUrlPolicyCheck;
       runtime-tools = runtimeToolsCheck;
       release-unit = releaseUnitCheck;
       secretspec = secretspecCheck;
