@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Offline runtime security tests. All values are disposable synthetic fixtures."""
 import base64
 import contextlib
