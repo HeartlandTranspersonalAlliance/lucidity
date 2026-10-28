@@ -78,3 +78,5 @@ control, embedded-IdP owner bootstrap, TOTP, persistence and authorization
 regressions. Do not infer these properties from a successful help/version smoke
 check. In particular, never pass a shared broad `NB_*` credential environment to
 the combined server; upstream logs some unmasked variable names.
+
+For the opt-in private combined service boundary, see [native NetBird runtime](native-netbird-runtime.md).
